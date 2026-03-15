@@ -80,6 +80,11 @@ bool CACHE::dppred_bypass(const PACKET& fill_mshr)
   if (phist[vpn_hash][pc_hash] <= pconf_thd)
     return false;
 
+  // Push physical frame into the shared queue for cbPred (FIFO)
+  if (pfq.size() >= pfq_cap)
+    pfq.pop_front();
+  pfq.push_back(fill_mshr.data >> LOG2_PAGE_SIZE);
+
   // Remember the bypassed (VPN, translation) for re-insertion on re-access (FIFO)
   if (shadow_table.size() >= st_size)
     shadow_table.pop_front();
@@ -89,9 +94,25 @@ bool CACHE::dppred_bypass(const PACKET& fill_mshr)
   return true;
 }
 
-// Updates phist when a valid translation entry is evicted from the STLB.
-// Increments the confidence counter if the entry was never accessed since
-// insertion; resets it to zero otherwise.
+// Returns true when cbPred predicts this cache block is dead
+// (its page was previously bypassed by dpPred and its block counter is high).
+bool CACHE::cbpred_bypass(const PACKET& fill_mshr)
+{
+  const auto pfn        = fill_mshr.address >> LOG2_PAGE_SIZE;
+  const auto block_hash = fold_xor(fill_mshr.address >> OFFSET_BITS, BHT_BITS);
+  const bool in_pfq     = std::find(pfq.begin(), pfq.end(), pfn) != pfq.end();
+
+  if (!in_pfq || bhist[block_hash] <= bconf_thd)
+    return false;
+
+  sim_stats.back().llc_bypasses++;
+  return true;
+}
+
+// Updates the history table when a valid entry is displaced: phist for a
+// translation entry evicted from the STLB, bhist for a cache block evicted
+// from the LLC.  Increments the confidence counter if the entry was never
+// accessed since insertion; resets it to zero otherwise.
 void CACHE::update_eviction_counters(const BLOCK& victim)
 {
   auto increment_or_reset = [&victim](uint64_t& counter) {
@@ -102,6 +123,8 @@ void CACHE::update_eviction_counters(const BLOCK& victim)
     const auto vpn_hash = fold_xor(victim.address >> OFFSET_BITS, VPN_BITS);
     const auto pc_hash  = fold_xor(victim.ip,                     PC_BITS);
     increment_or_reset(phist[vpn_hash][pc_hash]);
+  } else if (cbpred && NAME == "LLC" && victim.dp) {
+    increment_or_reset(bhist[fold_xor(victim.address >> OFFSET_BITS, BHT_BITS)]);
   }
 }
 
@@ -121,7 +144,8 @@ bool CACHE::handle_fill(const PACKET& fill_mshr)
   // On bypass, set way back to set_end to use the existing bypass code path.
   if (way != set_end && way->valid) {
     const bool bypassed =
-      (dppred && NAME == "cpu0_STLB" && dppred_bypass(fill_mshr));
+      (dppred && NAME == "cpu0_STLB" && dppred_bypass(fill_mshr)) ||
+      (cbpred && NAME == "LLC"       && cbpred_bypass(fill_mshr));
 
     if (bypassed)
       way = set_end;
@@ -176,6 +200,7 @@ bool CACHE::handle_fill(const PACKET& fill_mshr)
       way->prefetch = fill_mshr.prefetch_from_this;
       way->dirty = (fill_mshr.type == WRITE);
       way->accessed = false;
+      way->dp = cbpred && NAME == "LLC" && std::find(pfq.begin(), pfq.end(), fill_mshr.address >> LOG2_PAGE_SIZE) != pfq.end();
       way->address = fill_mshr.address;
       way->v_address = fill_mshr.v_address;
       way->data = fill_mshr.data;
@@ -250,7 +275,9 @@ bool CACHE::try_hit(const PACKET& handle_pkt)
       ret->return_data(copy);
 
     way->dirty = (handle_pkt.type == WRITE);
-    if (NAME == "cpu0_STLB" || NAME == "LLC")
+    if (NAME == "cpu0_STLB")
+      way->accessed = true;
+    else if (NAME == "LLC" && way->dp)
       way->accessed = true;
 
     // update prefetch stats and reset prefetch bit
@@ -618,6 +645,7 @@ void CACHE::end_phase(unsigned finished_cpu)
   roi_stats.back().total_miss_latency = sim_stats.back().total_miss_latency;
 
   roi_stats.back().llt_bypasses = sim_stats.back().llt_bypasses;
+  roi_stats.back().llc_bypasses = sim_stats.back().llc_bypasses;
 }
 
 bool CACHE::should_activate_prefetcher(const PACKET& pkt) const { return ((1 << pkt.type) & pref_activate_mask) && !pkt.prefetch_from_this; }
