@@ -82,9 +82,11 @@ bool CACHE::handle_fill(const PACKET& fill_mshr)
       way->valid = true;
       way->prefetch = fill_mshr.prefetch_from_this;
       way->dirty = (fill_mshr.type == WRITE);
+      way->accessed = false;
       way->address = fill_mshr.address;
       way->v_address = fill_mshr.v_address;
       way->data = fill_mshr.data;
+      way->ip = fill_mshr.ip;
 
       metadata_thru =
           impl_prefetcher_cache_fill(pkt_address, get_set_index(fill_mshr.address), way_idx, fill_mshr.type == PREFETCH, evicting_address, metadata_thru);
@@ -155,6 +157,8 @@ bool CACHE::try_hit(const PACKET& handle_pkt)
       ret->return_data(copy);
 
     way->dirty = (handle_pkt.type == WRITE);
+    if (NAME == "cpu0_STLB" || NAME == "LLC")
+      way->accessed = true;
 
     // update prefetch stats and reset prefetch bit
     if (way->prefetch && !handle_pkt.prefetch_from_this) {

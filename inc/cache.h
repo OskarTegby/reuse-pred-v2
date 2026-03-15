@@ -81,10 +81,14 @@ class CACHE : public champsim::operable, public MemoryRequestConsumer, public Me
     bool valid = false;
     bool prefetch = false;
     bool dirty = false;
+    bool accessed = false; // set on hit; read and cleared on eviction
+    bool dp = false;       // dead-page bit: set on LLC fill when the block's PFN is in the PFQ;
+                           // gates accessed tracking and bHIST updates (cbPred only)
 
     uint64_t address = 0;
     uint64_t v_address = 0;
     uint64_t data = 0;
+    uint64_t ip = 0; // PC that caused the miss that filled this block
 
     uint32_t pf_metadata = 0;
   };
