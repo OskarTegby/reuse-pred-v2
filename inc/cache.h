@@ -118,6 +118,10 @@ class CACHE : public champsim::operable, public MemoryRequestConsumer, public Me
   std::map<uint64_t, std::map<uint64_t, uint64_t>> phist; // [vpn_hash][pc_hash] → confidence
   std::deque<std::pair<uint64_t, uint64_t>> shadow_table; // recently bypassed (VPN, translation data)
   std::map<uint64_t, uint64_t> bhist;                      // [block_hash] → confidence
+  inline static uint64_t last_ip = 0; // Sniper approximation: mirrors Sniper's file-scope global lastPC, shared across
+                                       // all TLB instances. Updated only by the L1 ITLB (cpu0_ITLB), which is the only
+                                       // cache that receives instruction fetch packets (isIfetch=true in Sniper). The
+                                       // STLB reads this value without writing it, exactly as in Sniper.
 
   static constexpr unsigned  VPN_BITS    = 4;
   static constexpr unsigned  PC_BITS     = 6;
