@@ -23,6 +23,7 @@
 #include <deque>
 #include <functional>
 #include <list>
+#include <map>
 #include <string>
 #include <vector>
 
@@ -44,6 +45,8 @@ struct cache_stats {
   std::array<std::array<uint64_t, NUM_CPUS>, NUM_TYPES> misses = {};
 
   uint64_t total_miss_latency = 0;
+
+  uint64_t llt_bypasses = 0;
 };
 
 struct cache_queue_stats {
@@ -97,6 +100,25 @@ class CACHE : public champsim::operable, public MemoryRequestConsumer, public Me
   std::pair<set_type::iterator, set_type::iterator> get_set_span(uint64_t address);
   std::pair<set_type::const_iterator, set_type::const_iterator> get_set_span(uint64_t address) const;
   std::size_t get_set_index(uint64_t address) const;
+
+  // ── dpPred-cbPred predictor ──────────────────────────────────────────────
+
+  // Per-instance state
+  bool dppred = false;
+  uint64_t pconf_thd = 6; // phist confidence threshold
+  uint64_t st_size = 2;   // shadow table capacity
+
+  std::map<uint64_t, std::map<uint64_t, uint64_t>> phist; // [vpn_hash][pc_hash] → confidence
+  std::deque<std::pair<uint64_t, uint64_t>> shadow_table; // recently bypassed (VPN, translation data)
+
+  static constexpr unsigned  VPN_BITS    = 4;
+  static constexpr unsigned  PC_BITS     = 6;
+  static constexpr uint64_t  MAX_COUNTER = 16;
+
+  uint64_t fold_xor(uint64_t val, unsigned bits) const;
+  bool dppred_shadow_lookup(const PACKET& handle_pkt);     // true → shadow hit: history reset, data served, entry re-inserted into STLB, PTW skipped
+  bool dppred_bypass(const PACKET& fill_mshr);             // true → skip STLB fill
+  void update_eviction_counters(const BLOCK& victim);      // update phist for a translation entry evicted from the STLB
 
 public:
   struct NonTranslatingQueues : public champsim::operable {

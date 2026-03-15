@@ -17,6 +17,7 @@
 #include "cache.h"
 
 #include <algorithm>
+#include <cstdlib>
 #include <iomanip>
 #include <iterator>
 #include <numeric>
@@ -25,6 +26,84 @@
 #include "champsim_constants.h"
 #include "instruction.h"
 #include "util.h"
+
+// ──────────────────────────────────────────────
+// dpPred-cbPred helpers
+// ──────────────────────────────────────────────
+
+uint64_t CACHE::fold_xor(uint64_t val, unsigned bits) const
+{
+  uint64_t result = 0;
+  const uint64_t mask = (1ULL << bits) - 1;
+  for (int i = 0; i < 32 / static_cast<int>(bits); ++i, val >>= bits)
+    result ^= (val & mask);
+  return result;
+}
+
+// On a shadow table hit: reset the VPN's history row, serve the stored
+// translation to all requesters, and re-insert the entry into the STLB via
+// a synthetic handle_fill call (PTW is skipped entirely).
+// dppred_bypass will see a cleared phist counter and allow the insertion.
+bool CACHE::dppred_shadow_lookup(const PACKET& handle_pkt)
+{
+  const auto vpn = handle_pkt.address >> OFFSET_BITS;
+  auto it = std::find_if(shadow_table.begin(), shadow_table.end(), [vpn](const auto& e) { return e.first == vpn; });
+  if (it == shadow_table.end())
+    return false;
+
+  phist[fold_xor(vpn, VPN_BITS)].clear();
+  const auto stored_data = it->second;
+  shadow_table.erase(it);
+
+  // Serve the translation to all waiting requesters.
+  auto copy{handle_pkt};
+  copy.data = stored_data;
+  for (auto ret : copy.to_return)
+    ret->return_data(copy);
+
+  // Re-insert into the STLB. Clear to_return so handle_fill does not
+  // double-serve the data it already dispatched above.
+  PACKET fill_pkt = handle_pkt;
+  fill_pkt.data = stored_data;
+  fill_pkt.to_return = {};
+  handle_fill(fill_pkt);
+
+  return true;
+}
+
+// Returns true and records the bypass when dpPred predicts this VPN is dead.
+// Only called when the set is full (otherwise there is nothing to bypass).
+bool CACHE::dppred_bypass(const PACKET& fill_mshr)
+{
+  const auto vpn_hash = fold_xor(fill_mshr.address >> OFFSET_BITS, VPN_BITS);
+  const auto pc_hash  = fold_xor(fill_mshr.ip,                     PC_BITS);
+  if (phist[vpn_hash][pc_hash] <= pconf_thd)
+    return false;
+
+  // Remember the bypassed (VPN, translation) for re-insertion on re-access (FIFO)
+  if (shadow_table.size() >= st_size)
+    shadow_table.pop_front();
+  shadow_table.push_back({fill_mshr.address >> OFFSET_BITS, fill_mshr.data});
+
+  sim_stats.back().llt_bypasses++;
+  return true;
+}
+
+// Updates phist when a valid translation entry is evicted from the STLB.
+// Increments the confidence counter if the entry was never accessed since
+// insertion; resets it to zero otherwise.
+void CACHE::update_eviction_counters(const BLOCK& victim)
+{
+  auto increment_or_reset = [&victim](uint64_t& counter) {
+    counter = victim.accessed ? 0 : std::min(counter + 1, MAX_COUNTER);
+  };
+
+  if (dppred && NAME == "cpu0_STLB") {
+    const auto vpn_hash = fold_xor(victim.address >> OFFSET_BITS, VPN_BITS);
+    const auto pc_hash  = fold_xor(victim.ip,                     PC_BITS);
+    increment_or_reset(phist[vpn_hash][pc_hash]);
+  }
+}
 
 bool CACHE::handle_fill(const PACKET& fill_mshr)
 {
@@ -36,6 +115,20 @@ bool CACHE::handle_fill(const PACKET& fill_mshr)
   if (way == set_end)
     way = std::next(set_begin, impl_find_victim(fill_mshr.cpu, fill_mshr.instr_id, get_set_index(fill_mshr.address), &*set_begin, fill_mshr.ip,
                                                 fill_mshr.address, fill_mshr.type));
+
+  // Predictor bypass: only fires when a valid entry would be displaced
+  // (way->valid distinguishes eviction from filling a free slot).
+  // On bypass, set way back to set_end to use the existing bypass code path.
+  if (way != set_end && way->valid) {
+    const bool bypassed =
+      (dppred && NAME == "cpu0_STLB" && dppred_bypass(fill_mshr));
+
+    if (bypassed)
+      way = set_end;
+    else
+      update_eviction_counters(*way);
+  }
+
   assert(set_begin <= way);
   assert(way <= set_end);
   const auto way_idx = static_cast<std::size_t>(std::distance(set_begin, way)); // cast protected by earlier assertion
@@ -215,6 +308,11 @@ bool CACHE::handle_miss(const PACKET& handle_pkt)
       mshr_entry->to_return = std::move(to_return);
     }
   } else {
+    // dpPred shadow table: if this VPN was previously bypassed, serve the
+    // stored translation and re-insert it into the STLB (PTW skipped).
+    if (dppred && NAME == "cpu0_STLB" && dppred_shadow_lookup(handle_pkt))
+      return true;
+
     if (mshr_full)  // not enough MSHR resource
       return false; // TODO should we allow prefetches anyway if they will not be filled to this level?
 
@@ -518,6 +616,8 @@ void CACHE::end_phase(unsigned finished_cpu)
   roi_stats.back().pf_fill = sim_stats.back().pf_fill;
 
   roi_stats.back().total_miss_latency = sim_stats.back().total_miss_latency;
+
+  roi_stats.back().llt_bypasses = sim_stats.back().llt_bypasses;
 }
 
 bool CACHE::should_activate_prefetcher(const PACKET& pkt) const { return ((1 << pkt.type) & pref_activate_mask) && !pkt.prefetch_from_this; }
