@@ -128,6 +128,33 @@ void CACHE::update_eviction_counters(const BLOCK& victim)
   }
 }
 
+// Reads environment variables to enable dpPred/cbPred and tune their
+// thresholds and table sizes. Called once from the CACHE constructor.
+// Variables (all optional; defaults match the header initializers):
+//   DPPRED=1           enable dead-page predictor on the STLB
+//   CBPRED=1           enable dead-block predictor on the LLC
+//   PCONF_THD=<n>      dpPred confidence threshold (default 6)
+//   BCONF_THD=<n>      cbPred confidence threshold (default 6)
+//   ST_SIZE=<n>        shadow-table capacity (default 2)
+//   PFQ_CAP=<n>        shared PFQ capacity (default 8)
+void CACHE::load_predictor_settings()
+{
+  auto getenv_uint64 = [](const char* var, uint64_t fallback) -> uint64_t {
+    const char* val = std::getenv(var);
+    return val ? static_cast<uint64_t>(std::stoull(val)) : fallback;
+  };
+
+  if (const char* v = std::getenv("DPPRED"); v && std::stoull(v))
+    dppred = true;
+  if (const char* v = std::getenv("CBPRED"); v && std::stoull(v))
+    cbpred = true;
+
+  pconf_thd = getenv_uint64("PCONF_THD", pconf_thd);
+  bconf_thd = getenv_uint64("BCONF_THD", bconf_thd);
+  st_size   = getenv_uint64("ST_SIZE",   st_size);
+  pfq_cap   = getenv_uint64("PFQ_CAP",   pfq_cap);
+}
+
 bool CACHE::handle_fill(const PACKET& fill_mshr)
 {
   cpu = fill_mshr.cpu;

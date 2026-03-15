@@ -125,6 +125,7 @@ class CACHE : public champsim::operable, public MemoryRequestConsumer, public Me
   static constexpr uint64_t  MAX_COUNTER = 16;
 
   uint64_t fold_xor(uint64_t val, unsigned bits) const;
+  void load_predictor_settings();                          // reads env vars to configure dpPred/cbPred at construction
   bool dppred_shadow_lookup(const PACKET& handle_pkt);     // true → shadow hit: history reset, data served, entry re-inserted into STLB, PTW skipped
   bool dppred_bypass(const PACKET& fill_mshr);             // true → skip STLB fill
   bool cbpred_bypass(const PACKET& fill_mshr);             // true → skip LLC fill
@@ -254,6 +255,7 @@ public:
         OFFSET_BITS(offset_bits), MAX_TAG(max_tag), MAX_FILL(max_fill), prefetch_as_load(pref_load), match_offset_bits(wq_full_addr), virtual_prefetch(va_pref),
         pref_activate_mask(pref_mask), queues(queue_set), repl_type(repl), pref_type(pref)
   {
+    load_predictor_settings();
   }
 };
 
