@@ -168,16 +168,23 @@ bool CACHE::handle_fill(const PACKET& fill_mshr)
 
   // Predictor bypass: only fires when a valid entry would be displaced
   // (way->valid distinguishes eviction from filling a free slot).
-  // On bypass, set way back to set_end to use the existing bypass code path.
+  // On predictor bypass we do not redirect through the existing bypass code
+  // path (way = set_end) because that path calls impl_update_replacement_state
+  // with way_idx = NUM_WAY, which is out of bounds for LRU and semantically
+  // wrong for any policy (no way was actually used). Instead we track the
+  // bypass in a flag and handle it directly below.
+  bool predictor_bypassed = false;
   if (way != set_end && way->valid) {
     const bool bypassed =
       (dppred && NAME == "cpu0_STLB" && dppred_bypass(fill_mshr)) ||
       (cbpred && NAME == "LLC"       && cbpred_bypass(fill_mshr));
 
-    if (bypassed)
+    if (bypassed) {
+      predictor_bypassed = true;
       way = set_end;
-    else
+    } else {
       update_eviction_counters(*way);
+    }
   }
 
   assert(set_begin <= way);
@@ -240,8 +247,7 @@ bool CACHE::handle_fill(const PACKET& fill_mshr)
 
       way->pf_metadata = metadata_thru;
     }
-  } else {
-    // Bypass
+  } else if (!predictor_bypassed) {
     assert(fill_mshr.type != WRITE);
 
     metadata_thru = impl_prefetcher_cache_fill(pkt_address, get_set_index(fill_mshr.address), way_idx, fill_mshr.type == PREFETCH, 0, metadata_thru);
