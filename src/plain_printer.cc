@@ -85,6 +85,11 @@ void champsim::plain_printer::print(CACHE::stats_type stats)
     stream << "USELESS: " << std::setw(10) << stats.pf_useless << std::endl;
 
     stream << stats.name << " AVERAGE MISS LATENCY: " << std::ceil(stats.total_miss_latency) / std::ceil(TOTAL_MISS) << " cycles" << std::endl;
+
+    if (stats.name == "cpu0_STLB")
+      stream << stats.name << " BYPASSES: " << std::setw(10) << stats.llt_bypasses << std::endl;
+    if (stats.name == "LLC")
+      stream << stats.name << " BYPASSES: " << std::setw(10) << stats.llc_bypasses << std::endl;
     // stream << " AVERAGE MISS LATENCY: " << (stats.total_miss_latency)/TOTAL_MISS << " cycles " << stats.total_miss_latency << "/" << TOTAL_MISS<< std::endl;
   }
 }
