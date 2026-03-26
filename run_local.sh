@@ -76,7 +76,7 @@ else
   MODE_TAG=""
 fi
 
-DATE=$(date +%Y%m%d)
+DATE=$(date +%Y%m%d_%H%M)
 BASE_LABEL="${token}_${DATE}${MODE_TAG}_local"
 
 # ── Build config list ─────────────────────────────────────────────────────────

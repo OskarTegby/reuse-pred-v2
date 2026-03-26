@@ -114,6 +114,19 @@ int main(int argc, char** argv)
   std::cout << "Simulation Instructions: " << phases[1].length << std::endl;
   std::cout << "Number of CPUs: " << std::size(gen_environment.cpu_view()) << std::endl;
   std::cout << "Page size: " << PAGE_SIZE << std::endl;
+  std::cout << "Trace: " << trace_names.front() << std::endl;
+  std::cout << std::endl;
+
+  auto getenv_str = [](const char* var, const char* fallback) -> const char* {
+    const char* v = std::getenv(var); return v ? v : fallback;
+  };
+  std::cout << "Predictor settings:" << std::endl;
+  std::cout << "  DPPRED    = " << getenv_str("DPPRED",    "0") << std::endl;
+  std::cout << "  CBPRED    = " << getenv_str("CBPRED",    "0") << std::endl;
+  std::cout << "  PCONF_THD = " << getenv_str("PCONF_THD", "6 (default)") << std::endl;
+  std::cout << "  BCONF_THD = " << getenv_str("BCONF_THD", "6 (default)") << std::endl;
+  std::cout << "  ST_SIZE   = " << getenv_str("ST_SIZE",   "2 (default)") << std::endl;
+  std::cout << "  PFQ_CAP   = " << getenv_str("PFQ_CAP",  "8 (default)") << std::endl;
   std::cout << std::endl;
 
   auto phase_stats = champsim::main(gen_environment, phases, knob_cloudsuite, trace_names);
