@@ -17,6 +17,7 @@
 #include "cache.h"
 
 #include <algorithm>
+#include <cassert>
 #include <climits>
 #include <cstdlib>
 #include <iomanip>
@@ -120,28 +121,58 @@ bool CACHE::cbpred_bypass(const PACKET& fill_mshr)
 //   DoA        : hit_count == 0  (never referenced after insertion)
 //   Mostly-dead: hit_count > 0 AND dead_tail > residence / 2
 //   Mostly-alive: otherwise
+//
+// Invariants asserted here (violations indicate a simulator bug):
+//   (A) last_hit_cycle >= insert_cycle      (last hit cannot predate insertion)
+//   (B) current_cycle  >= insert_cycle      (time is monotonically increasing)
+//   (C) current_cycle  >= last_hit_cycle    (same)
+//   (D) dead_tail      <= residence         (arithmetic consequence of A-C;
+//                                            also guards against unsigned underflow)
+//
+// Suspicious-but-legal conditions (counted, not asserted):
+//   Zero residence     – inserted and evicted in the same cycle
+//   Saturated hit_count– hit_count == UINT16_MAX means we stopped counting;
+//                        last_hit_cycle may not reflect the true last hit,
+//                        so the dead-tail calculation can be an overestimate
 void CACHE::record_eviction_liveness(const BLOCK& victim)
 {
   if (NAME != "cpu0_STLB" && NAME != "LLC")
     return;
 
+  // ── Invariant checks (A)-(C) ──────────────────────────────────────────────
+  assert(victim.last_hit_cycle >= victim.insert_cycle); // (A)
+  assert(current_cycle >= victim.insert_cycle);         // (B)
+  assert(current_cycle >= victim.last_hit_cycle);       // (C)
+
+  const uint64_t residence = current_cycle - victim.insert_cycle;
+  const uint64_t dead_tail = current_cycle - victim.last_hit_cycle;
+
+  assert(dead_tail <= residence); // (D): unsigned underflow guard
+
   auto& s = sim_stats.back();
   s.evict_total++;
 
-  // Hit-count histogram (bin 8 = "8 or more")
+  // ── Suspicious-condition counters ─────────────────────────────────────────
+  if (residence == 0)
+    s.evict_zero_residence++;
+
+  if (victim.hit_count == UINT16_MAX)
+    s.evict_saturated_hitcount++;
+
+  // ── Hit-count histogram (bin HIT_HIST_BINS-1 == "that many or more") ──────
   const std::size_t bin = std::min(static_cast<std::size_t>(victim.hit_count),
                                    cache_stats::HIT_HIST_BINS - 1);
   s.evict_hit_hist[bin]++;
 
+  // ── Liveness classification ───────────────────────────────────────────────
   if (victim.hit_count == 0) {
     s.evict_doa++;
     return;
   }
 
-  const uint64_t residence  = current_cycle - victim.insert_cycle;
-  const uint64_t dead_tail  = current_cycle - victim.last_hit_cycle;
-  // Avoid division: mostly-dead iff 2*dead_tail > residence
-  if (residence > 0 && 2 * dead_tail > residence)
+  // Use dead_tail > residence/2 rather than 2*dead_tail > residence to avoid
+  // any possibility of uint64_t overflow on extraordinarily long-lived blocks.
+  if (dead_tail > residence / 2)
     s.evict_mostly_dead++;
   else
     s.evict_mostly_alive++;

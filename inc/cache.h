@@ -54,10 +54,19 @@ struct cache_stats {
   //   DoA        – hit_count == 0 (never referenced after insertion)
   //   Mostly-dead  – hit_count > 0 but dead_tail > residence/2
   //   Mostly-alive – dead_tail ≤ residence/2
-  uint64_t evict_total       = 0;
-  uint64_t evict_doa         = 0;
-  uint64_t evict_mostly_dead = 0;
-  uint64_t evict_mostly_alive= 0;
+  uint64_t evict_total        = 0;
+  uint64_t evict_doa          = 0;
+  uint64_t evict_mostly_dead  = 0;
+  uint64_t evict_mostly_alive = 0;
+
+  // Suspicious-condition counters (not errors, but worth investigating if nonzero).
+  //   zero_residence     – block installed and evicted in the same cycle;
+  //                        dead_tail is always 0 here so classification is still
+  //                        valid, but the measurement carries no useful timing info.
+  //   saturated_hitcount – hit_count reached UINT16_MAX; last_hit_cycle may be
+  //                        earlier than the true last hit, overstating the dead tail.
+  uint64_t evict_zero_residence    = 0;
+  uint64_t evict_saturated_hitcount= 0;
 
   // Hit-count distribution at eviction.
   // Bin i = evicted with exactly i hits; bin HIT_HIST_BINS-1 = that many or more.
