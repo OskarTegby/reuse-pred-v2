@@ -130,10 +130,7 @@ bool CACHE::cbpred_bypass(const PACKET& fill_mshr)
 //                                            also guards against unsigned underflow)
 //
 // Suspicious-but-legal conditions (counted, not asserted):
-//   Zero residence     – inserted and evicted in the same cycle
-//   Saturated hit_count– hit_count == UINT16_MAX means we stopped counting;
-//                        last_hit_cycle may not reflect the true last hit,
-//                        so the dead-tail calculation can be an overestimate
+//   Zero residence – inserted and evicted in the same cycle
 void CACHE::record_eviction_liveness(const BLOCK& victim)
 {
   if (NAME != "cpu0_STLB" && NAME != "LLC")
@@ -155,9 +152,6 @@ void CACHE::record_eviction_liveness(const BLOCK& victim)
   // ── Suspicious-condition counters ─────────────────────────────────────────
   if (residence == 0)
     s.evict_zero_residence++;
-
-  if (victim.hit_count == UINT16_MAX)
-    s.evict_saturated_hitcount++;
 
   // ── Hit-count histogram (bin HIT_HIST_BINS-1 == "that many or more") ──────
   const std::size_t bin = std::min(static_cast<std::size_t>(victim.hit_count),
@@ -185,7 +179,7 @@ void CACHE::record_eviction_liveness(const BLOCK& victim)
 void CACHE::update_eviction_counters(const BLOCK& victim)
 {
   auto increment_or_reset = [&victim](uint64_t& counter) {
-    counter = victim.accessed ? 0 : std::min(counter + 1, MAX_COUNTER);
+    counter = victim.accessed ? 0 : counter + 1;
   };
 
   if (dppred && NAME == "cpu0_STLB") {
@@ -387,10 +381,8 @@ bool CACHE::try_hit(const PACKET& handle_pkt)
       way->accessed = true;
 
     // Liveness tracking: update for all LLC and STLB blocks (not just dp).
-    // hit_count saturates at UINT16_MAX; last_hit_cycle always current.
     if (NAME == "cpu0_STLB" || NAME == "LLC") {
-      if (way->hit_count < UINT16_MAX)
-        way->hit_count++;
+      way->hit_count++;
       way->last_hit_cycle = current_cycle;
     }
 

@@ -113,11 +113,6 @@ void champsim::plain_printer::print(CACHE::stats_type stats)
         stream << s.name << " LIVENESS WARNING: " << s.evict_zero_residence
                << " eviction(s) with zero residence (installed and evicted same cycle)"
                << std::endl;
-      if (s.evict_saturated_hitcount > 0)
-        stream << s.name << " LIVENESS WARNING: " << s.evict_saturated_hitcount
-               << " eviction(s) with saturated hit_count (>= " << UINT16_MAX
-               << "); dead-tail may be overstated for those entries"
-               << std::endl;
 
       // ── Consistency checks ────────────────────────────────────────────────
       // (1) The three liveness classes are mutually exclusive and exhaustive.

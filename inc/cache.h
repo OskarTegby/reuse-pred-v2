@@ -60,13 +60,10 @@ struct cache_stats {
   uint64_t evict_mostly_alive = 0;
 
   // Suspicious-condition counters (not errors, but worth investigating if nonzero).
-  //   zero_residence     – block installed and evicted in the same cycle;
-  //                        dead_tail is always 0 here so classification is still
-  //                        valid, but the measurement carries no useful timing info.
-  //   saturated_hitcount – hit_count reached UINT16_MAX; last_hit_cycle may be
-  //                        earlier than the true last hit, overstating the dead tail.
-  uint64_t evict_zero_residence    = 0;
-  uint64_t evict_saturated_hitcount= 0;
+  //   zero_residence – block installed and evicted in the same cycle;
+  //                    dead_tail is always 0 here so classification is still
+  //                    valid, but the measurement carries no useful timing info.
+  uint64_t evict_zero_residence = 0;
 
   // Hit-count distribution at eviction.
   // Bin i = evicted with exactly i hits; bin HIT_HIST_BINS-1 = that many or more.
@@ -123,7 +120,7 @@ class CACHE : public champsim::operable, public MemoryRequestConsumer, public Me
     // ── Liveness tracking (LLC and STLB; all blocks, not just dp) ───────────
     uint64_t insert_cycle   = 0; // current_cycle at insertion
     uint64_t last_hit_cycle = 0; // current_cycle at most recent hit (== insert_cycle if never hit)
-    uint16_t hit_count      = 0; // demand hits while resident
+    uint32_t hit_count      = 0; // demand hits while resident (uint32_t: no artificial cap)
   };
   using set_type = std::vector<BLOCK>;
 
@@ -148,10 +145,13 @@ class CACHE : public champsim::operable, public MemoryRequestConsumer, public Me
   std::deque<std::pair<uint64_t, uint64_t>> shadow_table; // recently bypassed (VPN, translation data)
   std::map<uint64_t, uint64_t> bhist;                      // [block_hash] → confidence
 
-  static constexpr unsigned  VPN_BITS    = 4;
-  static constexpr unsigned  PC_BITS     = 6;
-  static constexpr unsigned  BHT_BITS    = 12;
-  static constexpr uint64_t  MAX_COUNTER = 16;
+  static constexpr unsigned  VPN_BITS = 4;
+  static constexpr unsigned  PC_BITS  = 6;
+  static constexpr unsigned  BHT_BITS = 12;
+  // No MAX_COUNTER cap: hardware would use a fixed-width saturating counter
+  // (e.g. 4 bits → 0-15), but in the simulator the counters live in std::map
+  // as uint64_t, so capping loses information without saving any memory.
+  // The bypass threshold (pconf_thd / bconf_thd) is the only meaningful limit.
 
   uint64_t fold_xor(uint64_t val, unsigned bits) const;
   void load_predictor_settings();                          // reads env vars to configure dpPred/cbPred at construction
