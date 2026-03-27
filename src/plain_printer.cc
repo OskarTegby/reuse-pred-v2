@@ -90,6 +90,24 @@ void champsim::plain_printer::print(CACHE::stats_type stats)
       stream << stats.name << " BYPASSES: " << std::setw(10) << stats.llt_bypasses << std::endl;
     if (stats.name == "LLC")
       stream << stats.name << " BYPASSES: " << std::setw(10) << stats.llc_bypasses << std::endl;
+
+    if (stats.name == "cpu0_STLB" || stats.name == "LLC") {
+      const auto& s = stats;
+      const double total = static_cast<double>(s.evict_total ? s.evict_total : 1);
+      stream << s.name << " LIVENESS EVICTIONS: " << s.evict_total
+             << "  DOA: "         << s.evict_doa          << " (" << std::fixed << std::setprecision(1) << 100.0 * s.evict_doa          / total << "%)"
+             << "  MOSTLY_DEAD: " << s.evict_mostly_dead  << " (" << 100.0 * s.evict_mostly_dead  / total << "%)"
+             << "  MOSTLY_ALIVE: "<< s.evict_mostly_alive << " (" << 100.0 * s.evict_mostly_alive / total << "%)"
+             << std::endl;
+      stream << s.name << " LIVENESS HIT_HIST:";
+      for (std::size_t i = 0; i < cache_stats::HIT_HIST_BINS; ++i) {
+        if (i + 1 < cache_stats::HIT_HIST_BINS)
+          stream << "  " << i << ":" << s.evict_hit_hist[i];
+        else
+          stream << "  " << i << "+:" << s.evict_hit_hist[i];
+      }
+      stream << std::endl;
+    }
     // stream << " AVERAGE MISS LATENCY: " << (stats.total_miss_latency)/TOTAL_MISS << " cycles " << stats.total_miss_latency << "/" << TOTAL_MISS<< std::endl;
   }
 }

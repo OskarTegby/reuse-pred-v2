@@ -17,6 +17,7 @@
 #include "cache.h"
 
 #include <algorithm>
+#include <climits>
 #include <cstdlib>
 #include <iomanip>
 #include <iterator>
@@ -109,6 +110,43 @@ bool CACHE::cbpred_bypass(const PACKET& fill_mshr)
   return true;
 }
 
+// Classifies the evicted block/page into DoA, mostly-dead, or mostly-alive
+// and records the result in the current stats bucket.  Also accumulates the
+// hit-count histogram.  Only active for the LLC and STLB; no-op otherwise.
+//
+// Definitions (all in simulation cycles):
+//   residence  = eviction_cycle − insert_cycle
+//   dead_tail  = eviction_cycle − last_hit_cycle
+//   DoA        : hit_count == 0  (never referenced after insertion)
+//   Mostly-dead: hit_count > 0 AND dead_tail > residence / 2
+//   Mostly-alive: otherwise
+void CACHE::record_eviction_liveness(const BLOCK& victim)
+{
+  if (NAME != "cpu0_STLB" && NAME != "LLC")
+    return;
+
+  auto& s = sim_stats.back();
+  s.evict_total++;
+
+  // Hit-count histogram (bin 8 = "8 or more")
+  const std::size_t bin = std::min(static_cast<std::size_t>(victim.hit_count),
+                                   cache_stats::HIT_HIST_BINS - 1);
+  s.evict_hit_hist[bin]++;
+
+  if (victim.hit_count == 0) {
+    s.evict_doa++;
+    return;
+  }
+
+  const uint64_t residence  = current_cycle - victim.insert_cycle;
+  const uint64_t dead_tail  = current_cycle - victim.last_hit_cycle;
+  // Avoid division: mostly-dead iff 2*dead_tail > residence
+  if (residence > 0 && 2 * dead_tail > residence)
+    s.evict_mostly_dead++;
+  else
+    s.evict_mostly_alive++;
+}
+
 // Updates the history table when a valid entry is displaced: phist for a
 // translation entry evicted from the STLB, bhist for a cache block evicted
 // from the LLC.  Increments the confidence counter if the entry was never
@@ -183,6 +221,7 @@ bool CACHE::handle_fill(const PACKET& fill_mshr)
       predictor_bypassed = true;
       way = set_end;
     } else {
+      record_eviction_liveness(*way);
       update_eviction_counters(*way);
     }
   }
@@ -235,6 +274,9 @@ bool CACHE::handle_fill(const PACKET& fill_mshr)
       way->dirty = (fill_mshr.type == WRITE);
       way->accessed = false;
       way->dp = cbpred && NAME == "LLC" && std::find(pfq.begin(), pfq.end(), fill_mshr.address >> LOG2_PAGE_SIZE) != pfq.end();
+      way->insert_cycle   = current_cycle;
+      way->last_hit_cycle = current_cycle;
+      way->hit_count      = 0;
       way->address = fill_mshr.address;
       way->v_address = fill_mshr.v_address;
       way->data = fill_mshr.data;
@@ -312,6 +354,14 @@ bool CACHE::try_hit(const PACKET& handle_pkt)
       way->accessed = true;
     else if (NAME == "LLC" && way->dp)
       way->accessed = true;
+
+    // Liveness tracking: update for all LLC and STLB blocks (not just dp).
+    // hit_count saturates at UINT16_MAX; last_hit_cycle always current.
+    if (NAME == "cpu0_STLB" || NAME == "LLC") {
+      if (way->hit_count < UINT16_MAX)
+        way->hit_count++;
+      way->last_hit_cycle = current_cycle;
+    }
 
     // update prefetch stats and reset prefetch bit
     if (way->prefetch && !handle_pkt.prefetch_from_this) {

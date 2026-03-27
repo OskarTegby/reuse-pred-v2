@@ -48,6 +48,21 @@ struct cache_stats {
 
   uint64_t llt_bypasses = 0;
   uint64_t llc_bypasses = 0;
+
+  // ── Block/page liveness stats (LLC and STLB only) ─────────────────────────
+  // Recorded at every valid eviction during the ROI.
+  //   DoA        – hit_count == 0 (never referenced after insertion)
+  //   Mostly-dead  – hit_count > 0 but dead_tail > residence/2
+  //   Mostly-alive – dead_tail ≤ residence/2
+  uint64_t evict_total       = 0;
+  uint64_t evict_doa         = 0;
+  uint64_t evict_mostly_dead = 0;
+  uint64_t evict_mostly_alive= 0;
+
+  // Hit-count distribution at eviction.
+  // Bin i = evicted with exactly i hits; bin HIT_HIST_BINS-1 = that many or more.
+  static constexpr std::size_t HIT_HIST_BINS = 9; // bins 0..7 + "8+"
+  std::array<uint64_t, HIT_HIST_BINS> evict_hit_hist = {};
 };
 
 struct cache_queue_stats {
@@ -95,6 +110,11 @@ class CACHE : public champsim::operable, public MemoryRequestConsumer, public Me
     uint64_t ip = 0; // PC that caused the miss that filled this block
 
     uint32_t pf_metadata = 0;
+
+    // ── Liveness tracking (LLC and STLB; all blocks, not just dp) ───────────
+    uint64_t insert_cycle   = 0; // current_cycle at insertion
+    uint64_t last_hit_cycle = 0; // current_cycle at most recent hit (== insert_cycle if never hit)
+    uint16_t hit_count      = 0; // demand hits while resident
   };
   using set_type = std::vector<BLOCK>;
 
@@ -130,6 +150,7 @@ class CACHE : public champsim::operable, public MemoryRequestConsumer, public Me
   bool dppred_bypass(const PACKET& fill_mshr);             // true → skip STLB fill
   bool cbpred_bypass(const PACKET& fill_mshr);             // true → skip LLC fill
   void update_eviction_counters(const BLOCK& victim);      // update the history table for this cache level
+  void record_eviction_liveness(const BLOCK& victim);      // classify evicted block into DoA/mostly-dead/mostly-alive
 
 public:
   struct NonTranslatingQueues : public champsim::operable {
