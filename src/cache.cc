@@ -79,7 +79,7 @@ bool CACHE::dppred_bypass(const PACKET& fill_mshr)
 {
   const auto vpn_hash = fold_xor(fill_mshr.address >> OFFSET_BITS, VPN_BITS);
   const auto pc_hash  = fold_xor(fill_mshr.ip,                     PC_BITS);
-  if (phist[vpn_hash][pc_hash].bypass_conf <= pconf_thd)
+  if (phist[vpn_hash][pc_hash].doa <= pconf_thd)
     return false;
 
   // Push physical frame into the shared queue for cbPred (FIFO)
@@ -104,7 +104,7 @@ bool CACHE::cbpred_bypass(const PACKET& fill_mshr)
   const auto block_hash = fold_xor(fill_mshr.address >> OFFSET_BITS, BHT_BITS);
   const bool in_pfq     = std::find(pfq.begin(), pfq.end(), pfn) != pfq.end();
 
-  if (!in_pfq || bhist[block_hash].bypass_conf <= bconf_thd)
+  if (!in_pfq || bhist[block_hash].doa <= bconf_thd)
     return false;
 
   sim_stats.back().llc_bypasses++;
@@ -172,24 +172,24 @@ void CACHE::record_eviction_liveness(const BLOCK& victim, liveness_class lv)
 
 // Updates phist (STLB) or bhist (LLC) when a valid entry is displaced.
 //
-// bypass_conf – incremented on DoA eviction, reset on any hit.
+// All history state is updated exclusively at eviction time — never earlier.
+// This ensures that hits during the current residence do not affect the
+// promotion or bypass decisions for the *next* miss of the same address.
 //
-// doa and mostly_dead have asymmetric reset rules:
-//   doa         – incremented on DoA; reset on mostly-dead (the entry had at
-//                 least one hit, so it was not dead on arrival) or mostly-alive.
-//   mostly_dead – incremented on mostly-dead; reset on mostly-alive.
-//                 Left unchanged on DoA: a DoA eviction is not a mostly-dead
-//                 eviction, but it does not disprove a prior mostly-dead pattern.
+// doa         – incremented on DoA; reset when the accessed bit is set at
+//               eviction (equivalently: reset on mostly-dead or mostly-alive,
+//               both of which imply at least one hit during residence).
+//               A saturated doa counter gates the bypass decision.
+// mostly_dead – incremented on mostly-dead; reset on mostly-alive.
+//               Left unchanged on DoA: a DoA eviction is not a mostly-dead
+//               eviction, but it does not disprove a prior mostly-dead pattern.
 //
-// Both updates are gated on the same predictor-enable conditions as before,
-// so when predictors are disabled neither counter changes and lru_mid falls
-// back to plain LRU behaviour.
+// Both updates are gated on the predictor-enable conditions, so when
+// predictors are disabled neither counter changes and lru_mid falls back
+// to plain LRU behaviour.
 void CACHE::update_eviction_counters(const BLOCK& victim, liveness_class lv)
 {
-  auto update = [&victim, lv](hist_entry& e) {
-    // bypass_conf: unchanged semantics — counts consecutive DoA evictions.
-    e.bypass_conf = victim.accessed ? 0 : e.bypass_conf + 1;
-
+  auto update = [lv](hist_entry& e) {
     switch (lv) {
       case liveness_class::doa:
         e.doa++;
@@ -198,7 +198,7 @@ void CACHE::update_eviction_counters(const BLOCK& victim, liveness_class lv)
         break;
       case liveness_class::mostly_dead:
         e.mostly_dead++;
-        e.doa = 0; // reset: at least one hit occurred, so not DoA
+        e.doa = 0; // accessed bit was set: entry had at least one hit
         break;
       case liveness_class::mostly_alive:
         e.doa         = 0;

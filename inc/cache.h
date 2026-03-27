@@ -134,11 +134,12 @@ class CACHE : public champsim::operable, public MemoryRequestConsumer, public Me
   // between record_eviction_liveness() and update_eviction_counters().
   enum class liveness_class { doa, mostly_dead, mostly_alive };
 
-  // History-table entry.  The three counters have independent update rules:
-  //   bypass_conf  – incremented on DoA eviction, reset on any hit;
-  //                  gates dppred_bypass / cbpred_bypass.
-  //   doa          – incremented on DoA eviction, reset on non-DoA eviction
-  //                  (mostly-dead or mostly-alive); unchanged on mostly-dead.
+  // History-table entry.  The two counters have independent update rules:
+  //   doa          – incremented on DoA eviction; reset when the accessed bit
+  //                  is set at eviction (i.e. on mostly-dead or mostly-alive
+  //                  eviction, both of which imply at least one hit).
+  //                  Gates dppred_bypass / cbpred_bypass: bypass when doa
+  //                  exceeds pconf_thd / bconf_thd.
   //   mostly_dead  – incremented on mostly-dead eviction, reset on mostly-alive
   //                  eviction; unchanged on DoA.
   // The two counters never both increment on the same eviction, but a DoA
@@ -146,7 +147,6 @@ class CACHE : public champsim::operable, public MemoryRequestConsumer, public Me
   // that the block was mostly-dead on a prior eviction).
   // needs_mid_insertion() returns true when either doa or mostly_dead is > 0.
   struct hist_entry {
-    uint64_t bypass_conf = 0;
     uint64_t doa         = 0;
     uint64_t mostly_dead = 0;
   };
