@@ -9,14 +9,15 @@
 //
 // Policy rules
 // ------------
-// For every fill or hit on the LLC or STLB, is_suspect_for_mid_insert() is
-// consulted.  It returns true when the block's/page's history entry has a
-// non-zero mostly_dead counter — meaning its most recent eviction was DoA or
-// mostly-dead (see update_eviction_counters in cache.cc).
+// For every fill or hit on the LLC or STLB, needs_mid_insertion() is
+// consulted.  It returns true when the block's/page's history entry shows a
+// non-zero doa or mostly_dead counter — meaning the most recent eviction of
+// that block/page was DoA or mostly-dead (see update_eviction_counters in
+// cache.cc).
 //
-//   Suspect block / fill:  set timestamp = current-set median  (not MRU)
-//   Suspect block / hit:   promote at most to median            (cap, never demote)
-//   Non-suspect (or non-LLC/STLB): normal LRU                  (timestamp = current_cycle)
+//   Mid-insertion fill:    timestamp = current-set median  (not MRU)
+//   Mid-insertion hit:     timestamp = current-set median  (refresh to midpoint, not MRU)
+//   Normal (or non-LLC/STLB): timestamp = current_cycle    (standard LRU)
 //
 // "Median" is computed as the (NUM_WAY/2)-th smallest last_used timestamp in
 // the set, evaluated at the time of the fill or hit.  This gives a stable
@@ -66,8 +67,8 @@ void CACHE::update_replacement_state(uint32_t triggering_cpu, uint32_t set, uint
 
   auto& way_cycle = ::last_used_cycles[this].at(set * NUM_WAY + way);
 
-  if ((NAME == "cpu0_STLB" || NAME == "LLC") && is_suspect_for_mid_insert(full_addr, ip)) {
-    // ── Suspect block: mid-point insertion / capped promotion ────────────────
+  if ((NAME == "cpu0_STLB" || NAME == "LLC") && needs_mid_insertion(full_addr, ip)) {
+    // ── Mid-point insertion / refresh ────────────────────────────────────────
     // Compute the (NUM_WAY/2)-th smallest timestamp in this set.  nth_element
     // is O(n) and n == NUM_WAY (≤ 16 in the default config), so this is cheap.
     const auto begin = std::next(::last_used_cycles[this].cbegin(), set * NUM_WAY);
@@ -76,14 +77,9 @@ void CACHE::update_replacement_state(uint32_t triggering_cpu, uint32_t set, uint
     std::nth_element(tmp.begin(), tmp.begin() + NUM_WAY / 2, tmp.end());
     const uint64_t mid = tmp[NUM_WAY / 2];
 
-    if (hit) {
-      // Promote towards MRU but stop at the median.  Never demote a block
-      // that is already above the median (way_cycle >= mid).
-      way_cycle = std::max(way_cycle, mid);
-    } else {
-      // Fill: insert exactly at the median position.
-      way_cycle = mid;
-    }
+    // Both fill and hit set the timestamp to the current median.
+    // A hit refreshes the block to the midpoint, not to MRU.
+    way_cycle = mid;
   } else {
     // ── Normal LRU: promote/insert at MRU ────────────────────────────────────
     way_cycle = current_cycle;

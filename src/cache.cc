@@ -172,10 +172,14 @@ void CACHE::record_eviction_liveness(const BLOCK& victim, liveness_class lv)
 
 // Updates phist (STLB) or bhist (LLC) when a valid entry is displaced.
 //
-// bypass_conf  – incremented if the entry was never accessed since insertion
-//               (DoA), reset to 0 if it was accessed.  Gates predictor bypass.
-// mostly_dead  – incremented if lv is DoA or mostly-dead, reset to 0 on
-//               mostly-alive.  Gates mid-insertion in lru_mid.
+// bypass_conf – incremented on DoA eviction, reset on any hit.
+//
+// doa and mostly_dead have asymmetric reset rules:
+//   doa         – incremented on DoA; reset on mostly-dead (the entry had at
+//                 least one hit, so it was not dead on arrival) or mostly-alive.
+//   mostly_dead – incremented on mostly-dead; reset on mostly-alive.
+//                 Left unchanged on DoA: a DoA eviction is not a mostly-dead
+//                 eviction, but it does not disprove a prior mostly-dead pattern.
 //
 // Both updates are gated on the same predictor-enable conditions as before,
 // so when predictors are disabled neither counter changes and lru_mid falls
@@ -183,11 +187,24 @@ void CACHE::record_eviction_liveness(const BLOCK& victim, liveness_class lv)
 void CACHE::update_eviction_counters(const BLOCK& victim, liveness_class lv)
 {
   auto update = [&victim, lv](hist_entry& e) {
+    // bypass_conf: unchanged semantics — counts consecutive DoA evictions.
     e.bypass_conf = victim.accessed ? 0 : e.bypass_conf + 1;
-    if (lv == liveness_class::mostly_alive)
-      e.mostly_dead = 0;
-    else
-      e.mostly_dead++;
+
+    switch (lv) {
+      case liveness_class::doa:
+        e.doa++;
+        // mostly_dead unchanged: DoA is not a mostly-dead eviction, but
+        // it does not invalidate a previously observed mostly-dead pattern.
+        break;
+      case liveness_class::mostly_dead:
+        e.mostly_dead++;
+        e.doa = 0; // reset: at least one hit occurred, so not DoA
+        break;
+      case liveness_class::mostly_alive:
+        e.doa         = 0;
+        e.mostly_dead = 0;
+        break;
+    }
   };
 
   if (dppred && NAME == "cpu0_STLB") {
@@ -199,11 +216,9 @@ void CACHE::update_eviction_counters(const BLOCK& victim, liveness_class lv)
   }
 }
 
-// Returns true when the block/page being filled has a non-zero mostly_dead
-// counter in its history table entry, indicating it should receive
-// mid-insertion treatment in lru_mid rather than a normal MRU promotion.
-// Only meaningful for LLC and STLB; always returns false for other caches.
-bool CACHE::is_suspect_for_mid_insert(uint64_t full_addr, uint64_t ip) const
+// Returns true when the entry's history shows its last eviction was DoA or
+// mostly-dead, meaning it should be inserted at the set midpoint in lru_mid.
+bool CACHE::needs_mid_insertion(uint64_t full_addr, uint64_t ip) const
 {
   if (NAME == "cpu0_STLB") {
     const auto vpn_hash = fold_xor(full_addr >> OFFSET_BITS, VPN_BITS);
@@ -212,12 +227,12 @@ bool CACHE::is_suspect_for_mid_insert(uint64_t full_addr, uint64_t ip) const
     if (outer == phist.end()) return false;
     const auto inner = outer->second.find(pc_hash);
     if (inner == outer->second.end()) return false;
-    return inner->second.mostly_dead > 0;
+    return inner->second.doa > 0 || inner->second.mostly_dead > 0;
   } else if (NAME == "LLC") {
     const auto block_hash = fold_xor(full_addr >> OFFSET_BITS, BHT_BITS);
     const auto it = bhist.find(block_hash);
     if (it == bhist.end()) return false;
-    return it->second.mostly_dead > 0;
+    return it->second.doa > 0 || it->second.mostly_dead > 0;
   }
   return false;
 }

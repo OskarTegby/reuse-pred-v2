@@ -134,14 +134,20 @@ class CACHE : public champsim::operable, public MemoryRequestConsumer, public Me
   // between record_eviction_liveness() and update_eviction_counters().
   enum class liveness_class { doa, mostly_dead, mostly_alive };
 
-  // History-table entry storing both the bypass-confidence counter and the
-  // consecutive mostly-dead eviction counter used by the insertion policy.
+  // History-table entry.  The three counters have independent update rules:
   //   bypass_conf  – incremented on DoA eviction, reset on any hit;
-  //                  gates dppred_bypass / cbpred_bypass
-  //   mostly_dead  – incremented on DoA-or-mostly-dead eviction, reset on
-  //                  mostly-alive eviction; gates mid-insertion in lru_mid
+  //                  gates dppred_bypass / cbpred_bypass.
+  //   doa          – incremented on DoA eviction, reset on non-DoA eviction
+  //                  (mostly-dead or mostly-alive); unchanged on mostly-dead.
+  //   mostly_dead  – incremented on mostly-dead eviction, reset on mostly-alive
+  //                  eviction; unchanged on DoA.
+  // The two counters never both increment on the same eviction, but a DoA
+  // eviction leaves mostly_dead untouched (it neither confirms nor disproves
+  // that the block was mostly-dead on a prior eviction).
+  // needs_mid_insertion() returns true when either doa or mostly_dead is > 0.
   struct hist_entry {
     uint64_t bypass_conf = 0;
+    uint64_t doa         = 0;
     uint64_t mostly_dead = 0;
   };
 
@@ -174,9 +180,9 @@ class CACHE : public champsim::operable, public MemoryRequestConsumer, public Me
   bool dppred_bypass(const PACKET& fill_mshr);                  // true → skip STLB fill
   bool cbpred_bypass(const PACKET& fill_mshr);                  // true → skip LLC fill
   liveness_class classify_liveness(const BLOCK& victim) const;  // compute liveness class + run invariant asserts
-  void update_eviction_counters(const BLOCK& victim, liveness_class lv); // update phist/bhist bypass_conf and mostly_dead
+  void update_eviction_counters(const BLOCK& victim, liveness_class lv); // update phist/bhist counters
   void record_eviction_liveness(const BLOCK& victim, liveness_class lv); // record liveness stats
-  bool is_suspect_for_mid_insert(uint64_t full_addr, uint64_t ip) const; // true → block should get mid-insertion treatment
+  bool needs_mid_insertion(uint64_t full_addr, uint64_t ip) const;        // true → insert/refresh at set midpoint
 
 public:
   struct NonTranslatingQueues : public champsim::operable {
