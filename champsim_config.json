@@ -122,7 +122,8 @@
         "latency": 8,
         "max_tag_check": 1,
         "max_fill": 1,
-        "prefetch_as_load": false
+        "prefetch_as_load": false,
+        "replacement": "lru_mid"
     },
 
 	"PTW": {
@@ -155,7 +156,7 @@
         "virtual_prefetch": false,
         "prefetch_activate": "LOAD,PREFETCH",
         "prefetcher": "no",
-        "replacement": "lru"
+        "replacement": "lru_mid"
     },
 
     "physical_memory": {

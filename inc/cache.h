@@ -130,6 +130,21 @@ class CACHE : public champsim::operable, public MemoryRequestConsumer, public Me
 
   // ── dpPred-cbPred predictor ──────────────────────────────────────────────
 
+  // Liveness classification produced by classify_liveness() and shared
+  // between record_eviction_liveness() and update_eviction_counters().
+  enum class liveness_class { doa, mostly_dead, mostly_alive };
+
+  // History-table entry storing both the bypass-confidence counter and the
+  // consecutive mostly-dead eviction counter used by the insertion policy.
+  //   bypass_conf  – incremented on DoA eviction, reset on any hit;
+  //                  gates dppred_bypass / cbpred_bypass
+  //   mostly_dead  – incremented on DoA-or-mostly-dead eviction, reset on
+  //                  mostly-alive eviction; gates mid-insertion in lru_mid
+  struct hist_entry {
+    uint64_t bypass_conf = 0;
+    uint64_t mostly_dead = 0;
+  };
+
   // Shared physical-frame queue: dpPred fills it; cbPred reads it.
   inline static std::deque<uint64_t> pfq{};
   inline static uint64_t pfq_cap = 8;
@@ -141,9 +156,9 @@ class CACHE : public champsim::operable, public MemoryRequestConsumer, public Me
   uint64_t bconf_thd = 6; // bhist confidence threshold
   uint64_t st_size = 2;   // shadow table capacity
 
-  std::map<uint64_t, std::map<uint64_t, uint64_t>> phist; // [vpn_hash][pc_hash] → confidence
-  std::deque<std::pair<uint64_t, uint64_t>> shadow_table; // recently bypassed (VPN, translation data)
-  std::map<uint64_t, uint64_t> bhist;                      // [block_hash] → confidence
+  std::map<uint64_t, std::map<uint64_t, hist_entry>> phist; // [vpn_hash][pc_hash] → entry
+  std::deque<std::pair<uint64_t, uint64_t>> shadow_table;   // recently bypassed (VPN, translation data)
+  std::map<uint64_t, hist_entry> bhist;                      // [block_hash] → entry
 
   static constexpr unsigned  VPN_BITS = 4;
   static constexpr unsigned  PC_BITS  = 6;
@@ -154,12 +169,14 @@ class CACHE : public champsim::operable, public MemoryRequestConsumer, public Me
   // The bypass threshold (pconf_thd / bconf_thd) is the only meaningful limit.
 
   uint64_t fold_xor(uint64_t val, unsigned bits) const;
-  void load_predictor_settings();                          // reads env vars to configure dpPred/cbPred at construction
-  bool dppred_shadow_lookup(const PACKET& handle_pkt);     // true → shadow hit: history reset, data served, entry re-inserted into STLB, PTW skipped
-  bool dppred_bypass(const PACKET& fill_mshr);             // true → skip STLB fill
-  bool cbpred_bypass(const PACKET& fill_mshr);             // true → skip LLC fill
-  void update_eviction_counters(const BLOCK& victim);      // update the history table for this cache level
-  void record_eviction_liveness(const BLOCK& victim);      // classify evicted block into DoA/mostly-dead/mostly-alive
+  void load_predictor_settings();                               // reads env vars to configure dpPred/cbPred at construction
+  bool dppred_shadow_lookup(const PACKET& handle_pkt);          // true → shadow hit: history reset, data served, entry re-inserted into STLB, PTW skipped
+  bool dppred_bypass(const PACKET& fill_mshr);                  // true → skip STLB fill
+  bool cbpred_bypass(const PACKET& fill_mshr);                  // true → skip LLC fill
+  liveness_class classify_liveness(const BLOCK& victim) const;  // compute liveness class + run invariant asserts
+  void update_eviction_counters(const BLOCK& victim, liveness_class lv); // update phist/bhist bypass_conf and mostly_dead
+  void record_eviction_liveness(const BLOCK& victim, liveness_class lv); // record liveness stats
+  bool is_suspect_for_mid_insert(uint64_t full_addr, uint64_t ip) const; // true → block should get mid-insertion treatment
 
 public:
   struct NonTranslatingQueues : public champsim::operable {

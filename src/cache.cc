@@ -79,7 +79,7 @@ bool CACHE::dppred_bypass(const PACKET& fill_mshr)
 {
   const auto vpn_hash = fold_xor(fill_mshr.address >> OFFSET_BITS, VPN_BITS);
   const auto pc_hash  = fold_xor(fill_mshr.ip,                     PC_BITS);
-  if (phist[vpn_hash][pc_hash] <= pconf_thd)
+  if (phist[vpn_hash][pc_hash].bypass_conf <= pconf_thd)
     return false;
 
   // Push physical frame into the shared queue for cbPred (FIFO)
@@ -104,39 +104,30 @@ bool CACHE::cbpred_bypass(const PACKET& fill_mshr)
   const auto block_hash = fold_xor(fill_mshr.address >> OFFSET_BITS, BHT_BITS);
   const bool in_pfq     = std::find(pfq.begin(), pfq.end(), pfn) != pfq.end();
 
-  if (!in_pfq || bhist[block_hash] <= bconf_thd)
+  if (!in_pfq || bhist[block_hash].bypass_conf <= bconf_thd)
     return false;
 
   sim_stats.back().llc_bypasses++;
   return true;
 }
 
-// Classifies the evicted block/page into DoA, mostly-dead, or mostly-alive
-// and records the result in the current stats bucket.  Also accumulates the
-// hit-count histogram.  Only active for the LLC and STLB; no-op otherwise.
+// ── Liveness classification ───────────────────────────────────────────────────
 //
 // Definitions (all in simulation cycles):
 //   residence  = eviction_cycle − insert_cycle
 //   dead_tail  = eviction_cycle − last_hit_cycle
 //   DoA        : hit_count == 0  (never referenced after insertion)
 //   Mostly-dead: hit_count > 0 AND dead_tail > residence / 2
-//   Mostly-alive: otherwise
+//   Mostly-alive: otherwise (dead_tail ≤ residence / 2)
 //
-// Invariants asserted here (violations indicate a simulator bug):
+// Invariants asserted (violations indicate a simulator bug):
 //   (A) last_hit_cycle >= insert_cycle      (last hit cannot predate insertion)
 //   (B) current_cycle  >= insert_cycle      (time is monotonically increasing)
 //   (C) current_cycle  >= last_hit_cycle    (same)
 //   (D) dead_tail      <= residence         (arithmetic consequence of A-C;
 //                                            also guards against unsigned underflow)
-//
-// Suspicious-but-legal conditions (counted, not asserted):
-//   Zero residence – inserted and evicted in the same cycle
-void CACHE::record_eviction_liveness(const BLOCK& victim)
+CACHE::liveness_class CACHE::classify_liveness(const BLOCK& victim) const
 {
-  if (NAME != "cpu0_STLB" && NAME != "LLC")
-    return;
-
-  // ── Invariant checks (A)-(C) ──────────────────────────────────────────────
   assert(victim.last_hit_cycle >= victim.insert_cycle); // (A)
   assert(current_cycle >= victim.insert_cycle);         // (B)
   assert(current_cycle >= victim.last_hit_cycle);       // (C)
@@ -146,49 +137,89 @@ void CACHE::record_eviction_liveness(const BLOCK& victim)
 
   assert(dead_tail <= residence); // (D): unsigned underflow guard
 
+  if (victim.hit_count == 0)
+    return liveness_class::doa;
+
+  // Use dead_tail > residence/2 rather than 2*dead_tail > residence to avoid
+  // any theoretical uint64_t overflow on extraordinarily long-lived blocks.
+  return (dead_tail > residence / 2) ? liveness_class::mostly_dead
+                                     : liveness_class::mostly_alive;
+}
+
+// Records liveness stats for the evicted block.  No-op for caches other than
+// the LLC and STLB.  Suspicious-condition (zero residence) is counted here.
+void CACHE::record_eviction_liveness(const BLOCK& victim, liveness_class lv)
+{
+  if (NAME != "cpu0_STLB" && NAME != "LLC")
+    return;
+
   auto& s = sim_stats.back();
   s.evict_total++;
 
-  // ── Suspicious-condition counters ─────────────────────────────────────────
-  if (residence == 0)
+  if (current_cycle == victim.insert_cycle)
     s.evict_zero_residence++;
 
-  // ── Hit-count histogram (bin HIT_HIST_BINS-1 == "that many or more") ──────
   const std::size_t bin = std::min(static_cast<std::size_t>(victim.hit_count),
                                    cache_stats::HIT_HIST_BINS - 1);
   s.evict_hit_hist[bin]++;
 
-  // ── Liveness classification ───────────────────────────────────────────────
-  if (victim.hit_count == 0) {
-    s.evict_doa++;
-    return;
+  switch (lv) {
+    case liveness_class::doa:          s.evict_doa++;          break;
+    case liveness_class::mostly_dead:  s.evict_mostly_dead++;  break;
+    case liveness_class::mostly_alive: s.evict_mostly_alive++; break;
   }
-
-  // Use dead_tail > residence/2 rather than 2*dead_tail > residence to avoid
-  // any possibility of uint64_t overflow on extraordinarily long-lived blocks.
-  if (dead_tail > residence / 2)
-    s.evict_mostly_dead++;
-  else
-    s.evict_mostly_alive++;
 }
 
-// Updates the history table when a valid entry is displaced: phist for a
-// translation entry evicted from the STLB, bhist for a cache block evicted
-// from the LLC.  Increments the confidence counter if the entry was never
-// accessed since insertion; resets it to zero otherwise.
-void CACHE::update_eviction_counters(const BLOCK& victim)
+// Updates phist (STLB) or bhist (LLC) when a valid entry is displaced.
+//
+// bypass_conf  – incremented if the entry was never accessed since insertion
+//               (DoA), reset to 0 if it was accessed.  Gates predictor bypass.
+// mostly_dead  – incremented if lv is DoA or mostly-dead, reset to 0 on
+//               mostly-alive.  Gates mid-insertion in lru_mid.
+//
+// Both updates are gated on the same predictor-enable conditions as before,
+// so when predictors are disabled neither counter changes and lru_mid falls
+// back to plain LRU behaviour.
+void CACHE::update_eviction_counters(const BLOCK& victim, liveness_class lv)
 {
-  auto increment_or_reset = [&victim](uint64_t& counter) {
-    counter = victim.accessed ? 0 : counter + 1;
+  auto update = [&victim, lv](hist_entry& e) {
+    e.bypass_conf = victim.accessed ? 0 : e.bypass_conf + 1;
+    if (lv == liveness_class::mostly_alive)
+      e.mostly_dead = 0;
+    else
+      e.mostly_dead++;
   };
 
   if (dppred && NAME == "cpu0_STLB") {
     const auto vpn_hash = fold_xor(victim.address >> OFFSET_BITS, VPN_BITS);
     const auto pc_hash  = fold_xor(victim.ip,                     PC_BITS);
-    increment_or_reset(phist[vpn_hash][pc_hash]);
+    update(phist[vpn_hash][pc_hash]);
   } else if (cbpred && NAME == "LLC" && victim.dp) {
-    increment_or_reset(bhist[fold_xor(victim.address >> OFFSET_BITS, BHT_BITS)]);
+    update(bhist[fold_xor(victim.address >> OFFSET_BITS, BHT_BITS)]);
   }
+}
+
+// Returns true when the block/page being filled has a non-zero mostly_dead
+// counter in its history table entry, indicating it should receive
+// mid-insertion treatment in lru_mid rather than a normal MRU promotion.
+// Only meaningful for LLC and STLB; always returns false for other caches.
+bool CACHE::is_suspect_for_mid_insert(uint64_t full_addr, uint64_t ip) const
+{
+  if (NAME == "cpu0_STLB") {
+    const auto vpn_hash = fold_xor(full_addr >> OFFSET_BITS, VPN_BITS);
+    const auto pc_hash  = fold_xor(ip, PC_BITS);
+    const auto outer    = phist.find(vpn_hash);
+    if (outer == phist.end()) return false;
+    const auto inner = outer->second.find(pc_hash);
+    if (inner == outer->second.end()) return false;
+    return inner->second.mostly_dead > 0;
+  } else if (NAME == "LLC") {
+    const auto block_hash = fold_xor(full_addr >> OFFSET_BITS, BHT_BITS);
+    const auto it = bhist.find(block_hash);
+    if (it == bhist.end()) return false;
+    return it->second.mostly_dead > 0;
+  }
+  return false;
 }
 
 // Reads environment variables to enable dpPred/cbPred and tune their
@@ -246,8 +277,15 @@ bool CACHE::handle_fill(const PACKET& fill_mshr)
       predictor_bypassed = true;
       way = set_end;
     } else {
-      record_eviction_liveness(*way);
-      update_eviction_counters(*way);
+      // Classify liveness once; share the result between stats recording and
+      // history-table updates so the two stay in sync.
+      // classify_liveness() runs the invariant asserts for all cache levels.
+      // For caches other than LLC/STLB, hit_count is never incremented so the
+      // result is always DoA, but record_eviction_liveness and
+      // update_eviction_counters are both no-ops for those levels anyway.
+      const auto lv = classify_liveness(*way);
+      record_eviction_liveness(*way, lv);
+      update_eviction_counters(*way, lv);
     }
   }
 
