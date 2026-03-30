@@ -379,8 +379,10 @@ bool CACHE::handle_fill(const PACKET& fill_mshr)
   }
 
   if (success) {
-    // COLLECT STATS
-    sim_stats.back().total_miss_latency += current_cycle - (fill_mshr.cycle_enqueued + 1);
+    // COLLECT STATS — skip for synthetic re-insertions (to_return is empty,
+    // meaning this fill was not the result of a real miss reaching the lower level).
+    if (!fill_mshr.to_return.empty())
+      sim_stats.back().total_miss_latency += current_cycle - (fill_mshr.cycle_enqueued + 1);
 
     auto copy{fill_mshr};
     copy.pf_metadata = metadata_thru;
