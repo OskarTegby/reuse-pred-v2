@@ -18,6 +18,7 @@ export DPPRED=${DPPRED:-0}
 export CBPRED=${CBPRED:-0}
 export PCONF_THD=${PCONF_THD:-0}
 export BCONF_THD=${BCONF_THD:-0}
+export MID_THD=${MID_THD:-1}
 
 BIN=./bin/champsim
 
@@ -62,6 +63,7 @@ dppred=${DPPRED}
 cbpred=${CBPRED}
 pconf_thd=${PCONF_THD}
 bconf_thd=${BCONF_THD}
+mid_thd=${MID_THD}
 warmup=${WARMUP}
 sim=${SIM}
 INFO

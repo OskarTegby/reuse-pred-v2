@@ -229,12 +229,12 @@ bool CACHE::needs_mid_insertion(uint64_t full_addr, uint64_t ip) const
     if (outer == phist.end()) return false;
     const auto inner = outer->second.find(pc_hash);
     if (inner == outer->second.end()) return false;
-    return inner->second.doa > 0 || inner->second.mostly_dead > 0;
+    return inner->second.doa >= mid_thd || inner->second.mostly_dead >= mid_thd;
   } else if (NAME == "LLC") {
     const auto block_hash = fold_xor(full_addr >> OFFSET_BITS, BHT_BITS);
     const auto it = bhist.find(block_hash);
     if (it == bhist.end()) return false;
-    return it->second.doa > 0 || it->second.mostly_dead > 0;
+    return it->second.doa >= mid_thd || it->second.mostly_dead >= mid_thd;
   }
   return false;
 }
@@ -246,6 +246,7 @@ bool CACHE::needs_mid_insertion(uint64_t full_addr, uint64_t ip) const
 //   CBPRED=1           enable dead-block predictor on the LLC
 //   PCONF_THD=<n>      dpPred confidence threshold (default 6)
 //   BCONF_THD=<n>      cbPred confidence threshold (default 6)
+//   MID_THD=<n>        min DoA-or-mostly-dead evictions before mid-insertion triggers (default 1)
 //   ST_SIZE=<n>        shadow-table capacity (default 2)
 //   PFQ_CAP=<n>        shared PFQ capacity (default 8)
 void CACHE::load_predictor_settings()
@@ -262,6 +263,7 @@ void CACHE::load_predictor_settings()
 
   pconf_thd = getenv_uint64("PCONF_THD", pconf_thd);
   bconf_thd = getenv_uint64("BCONF_THD", bconf_thd);
+  mid_thd   = getenv_uint64("MID_THD",   mid_thd);
   st_size   = getenv_uint64("ST_SIZE",   st_size);
   pfq_cap   = getenv_uint64("PFQ_CAP",   pfq_cap);
 }

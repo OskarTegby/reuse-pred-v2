@@ -145,7 +145,7 @@ class CACHE : public champsim::operable, public MemoryRequestConsumer, public Me
   // The two counters never both increment on the same eviction, but a DoA
   // eviction leaves mostly_dead untouched (it neither confirms nor disproves
   // that the block was mostly-dead on a prior eviction).
-  // needs_mid_insertion() returns true when either doa or mostly_dead is > 0.
+  // needs_mid_insertion() returns true when either doa or mostly_dead is >= mid_thd.
   struct hist_entry {
     uint64_t doa         = 0;
     uint64_t mostly_dead = 0;
@@ -160,6 +160,7 @@ class CACHE : public champsim::operable, public MemoryRequestConsumer, public Me
   bool cbpred = false;
   uint64_t pconf_thd = 6; // phist confidence threshold
   uint64_t bconf_thd = 6; // bhist confidence threshold
+  uint64_t mid_thd   = 1; // min DoA-or-mostly-dead evictions before mid-insertion triggers
   uint64_t st_size = 2;   // shadow table capacity
 
   std::map<uint64_t, std::map<uint64_t, hist_entry>> phist; // [vpn_hash][pc_hash] → entry
