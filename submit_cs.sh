@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 # submit_cs.sh - helper to submit the SGE job with preset WARMUP/SIM/TRACE_DIR per token
-# Usage: ./submit_cs.sh maz|qmm|dpc3|google [additional qsub args...]
+# Usage: ./submit_cs.sh test|maz|qmm|dpc3|google [additional qsub args...]
 #
 # Trace sets and their output separation:
+#   test   – 1 trace per workload, 1M warmup / 5M sim (smoke test across all sets)
 #   maz    – SPEC traces (local):          results/maz_<date>/
 #   qmm    – Qualcomm traces (local):      results/qmm_<date>/
 #   dpc3   – SPEC/DPC-3 traces (shared):   results/dpc3_<date>/
@@ -13,7 +14,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SHARED_TRACES=/home/users/shared/traces
 
 if [ $# -lt 1 ]; then
-  echo "Usage: $0 {maz|qmm|dpc3|google} [qsub args...]" >&2
+  echo "Usage: $0 {test|maz|qmm|dpc3|google} [qsub args...]" >&2
   exit 2
 fi
 
@@ -50,6 +51,12 @@ submit_one() {
 }
 
 case "${token,,}" in
+  test)
+    submit_one test_maz    1000000 5000000 "${SCRIPT_DIR}/trace-files/MAZUMDAR"  champsimtrace.xz 1
+    submit_one test_qmm    1000000 5000000 "${SCRIPT_DIR}/trace-files/QMM"       champsimtrace.xz 1
+    submit_one test_dpc3   1000000 5000000 "${SHARED_TRACES}/dpc3_traces"         champsimtrace.xz 1
+    submit_one test_google 1000000 5000000 "${SHARED_TRACES}/Google_Traces_v2"   champsim.gz      1
+    ;;
   maz|mazumdar)
     submit_one maz 100000000 1000000000 "${SCRIPT_DIR}/trace-files/MAZUMDAR" champsimtrace.xz 0
     ;;
@@ -63,7 +70,7 @@ case "${token,,}" in
     submit_one google 100000000 1000000000 "${SHARED_TRACES}/Google_Traces_v2" champsim.gz 0
     ;;
   *)
-    echo "Unknown token: $token — use maz, qmm, dpc3, or google" >&2
+    echo "Unknown token: $token — use test, maz, qmm, dpc3, or google" >&2
     exit 2
     ;;
 esac
