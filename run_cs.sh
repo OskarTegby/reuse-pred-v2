@@ -10,6 +10,7 @@
 WARMUP=${WARMUP:-500000}
 SIM=${SIM:-1000000}
 TRACE_DIR=${TRACE_DIR:-trace-files/MAZUMDAR}
+TRACE_EXT=${TRACE_EXT:-champsimtrace.xz}
 RUN_LABEL=${RUN_LABEL:-unlabelled}
 
 # Predictor parameters (read from env by ChampSim; defaults = baseline)
@@ -21,7 +22,7 @@ export BCONF_THD=${BCONF_THD:-0}
 BIN=./bin/champsim
 
 # Build sorted list of traces at runtime
-mapfile -t TRACES < <(ls -1 "${TRACE_DIR}"/*.champsimtrace.xz 2>/dev/null | sort)
+mapfile -t TRACES < <(find "${TRACE_DIR}" -name "*.${TRACE_EXT}" | sort)
 N=${#TRACES[@]}
 if [ "$N" -eq 0 ]; then
   echo "ERROR: No traces found in ${TRACE_DIR}" >&2
@@ -38,7 +39,7 @@ if [ "$IDX" -lt 0 ] || [ "$IDX" -ge "$N" ]; then
 fi
 
 TRACE_FILE="${TRACES[$IDX]}"
-TRACE_NAME=$(basename "$TRACE_FILE" .champsimtrace.xz)
+TRACE_NAME=$(basename "$TRACE_FILE" ".${TRACE_EXT}")
 RUN_DIR="results/${RUN_LABEL}/${TRACE_NAME}"
 mkdir -p "$RUN_DIR"
 
