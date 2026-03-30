@@ -809,6 +809,13 @@ void CACHE::end_phase(unsigned finished_cpu)
 
   roi_stats.back().llt_bypasses = sim_stats.back().llt_bypasses;
   roi_stats.back().llc_bypasses = sim_stats.back().llc_bypasses;
+
+  roi_stats.back().evict_total        = sim_stats.back().evict_total;
+  roi_stats.back().evict_doa          = sim_stats.back().evict_doa;
+  roi_stats.back().evict_mostly_dead  = sim_stats.back().evict_mostly_dead;
+  roi_stats.back().evict_mostly_alive = sim_stats.back().evict_mostly_alive;
+  roi_stats.back().evict_zero_residence = sim_stats.back().evict_zero_residence;
+  roi_stats.back().evict_hit_hist     = sim_stats.back().evict_hit_hist;
 }
 
 bool CACHE::should_activate_prefetcher(const PACKET& pkt) const { return ((1 << pkt.type) & pref_activate_mask) && !pkt.prefetch_from_this; }
