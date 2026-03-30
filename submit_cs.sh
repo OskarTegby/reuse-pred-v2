@@ -1,55 +1,76 @@
 #!/usr/bin/env bash
 # submit_cs.sh - helper to submit the SGE job with preset WARMUP/SIM/TRACE_DIR per token
-# Usage: ./submit_cs.sh maz|qmm [additional qsub args...]
+# Usage: ./submit_cs.sh test|maz|qmm|dpc3|google [additional qsub args...]
+#
+# Trace sets and their output separation:
+#   test   – 1 trace per workload, 1M warmup / 5M sim (smoke test across all sets)
+#   maz    – SPEC traces (local):          results/maz_<date>/
+#   qmm    – Qualcomm traces (local):      results/qmm_<date>/
+#   dpc3   – SPEC/DPC-3 traces (shared):   results/dpc3_<date>/
+#   google – Google traces (shared):       results/google_<date>/
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
+SHARED_TRACES=/home/users/shared/traces
+
 if [ $# -lt 1 ]; then
-  echo "Usage: $0 {maz|qmm} [qsub args...]" >&2
+  echo "Usage: $0 {test|maz|qmm|dpc3|google} [qsub args...]" >&2
   exit 2
 fi
 
 token="$1"; shift
+EXTRA_QSUB_ARGS=("$@")
+
+# submit_one LABEL WARMUP SIM TRACE_DIR TRACE_EXT MAX_TRACES
+# MAX_TRACES=0 means submit all traces.
+submit_one() {
+  local label="$1" warmup="$2" sim="$3" trace_dir="$4" trace_ext="$5" max_n="$6"
+
+  mapfile -t traces < <(find "${trace_dir}" -name "*.${trace_ext}" | sort)
+  local n=${#traces[@]}
+  if [ "$n" -eq 0 ]; then
+    echo "WARNING: No traces found in ${trace_dir} — skipping ${label}" >&2
+    return 1
+  fi
+  [ "$max_n" -gt 0 ] && [ "$n" -gt "$max_n" ] && n=$max_n
+
+  local run_label="${label}_$(date +%Y%m%d)"
+  local log_dir="${SCRIPT_DIR}/logs/${run_label}"
+  mkdir -p "$log_dir" "${SCRIPT_DIR}/results/${run_label}"
+
+  echo "Submitting : ${run_label} (${n} trace(s), warmup=${warmup}, sim=${sim})"
+  echo "  traces   : ${trace_dir}"
+  echo "  logs     : logs/${run_label}/"
+
+  qsub -t "1-${n}" \
+       -o "${log_dir}/" \
+       -e "${log_dir}/" \
+       -wd "$SCRIPT_DIR" \
+       -v WARMUP="$warmup",SIM="$sim",TRACE_DIR="$trace_dir",TRACE_EXT="$trace_ext",RUN_LABEL="$run_label" \
+       "${EXTRA_QSUB_ARGS[@]}" "${SCRIPT_DIR}/run_cs.sh"
+}
 
 case "${token,,}" in
+  test)
+    submit_one test_maz    1000000 5000000 "${SCRIPT_DIR}/trace-files/MAZUMDAR"  champsimtrace.xz 1
+    submit_one test_qmm    1000000 5000000 "${SCRIPT_DIR}/trace-files/QMM"       champsimtrace.xz 1
+    submit_one test_dpc3   1000000 5000000 "${SHARED_TRACES}/dpc3_traces"         champsimtrace.xz 1
+    submit_one test_google 1000000 5000000 "${SHARED_TRACES}/Google_Traces_v2"   champsim.gz      1
+    ;;
   maz|mazumdar)
-    WARMUP=100000000
-    SIM=1000000000
-    TRACE_DIR="${SCRIPT_DIR}/trace-files/MAZUMDAR"
+    submit_one maz 100000000 1000000000 "${SCRIPT_DIR}/trace-files/MAZUMDAR" champsimtrace.xz 0
     ;;
   qmm)
-    WARMUP=50000000
-    SIM=100000000
-    TRACE_DIR="${SCRIPT_DIR}/trace-files/QMM"
+    submit_one qmm 50000000 100000000 "${SCRIPT_DIR}/trace-files/QMM" champsimtrace.xz 0
+    ;;
+  dpc3)
+    submit_one dpc3 100000000 1000000000 "${SHARED_TRACES}/dpc3_traces" champsimtrace.xz 0
+    ;;
+  google)
+    submit_one google 100000000 1000000000 "${SHARED_TRACES}/Google_Traces_v2" champsim.gz 0
     ;;
   *)
-    echo "Unknown token: $token — use maz or qmm" >&2
+    echo "Unknown token: $token — use test, maz, qmm, dpc3, or google" >&2
     exit 2
     ;;
 esac
-
-# Count traces so we can set the array range correctly
-mapfile -t TRACES < <(ls -1 "${TRACE_DIR}"/*.champsimtrace.xz 2>/dev/null | sort)
-N=${#TRACES[@]}
-if [ "$N" -eq 0 ]; then
-  echo "ERROR: No traces found in ${TRACE_DIR}" >&2
-  exit 2
-fi
-echo "Found $N traces in ${TRACE_DIR}"
-
-# Label for this run: e.g. qmm_20260322
-RUN_LABEL="${token,,}_$(date +%Y%m%d)"
-
-# Ensure logs and results dirs exist before SGE tries to write to them
-LOG_DIR="${SCRIPT_DIR}/logs/${RUN_LABEL}"
-mkdir -p "$LOG_DIR" "${SCRIPT_DIR}/results/${RUN_LABEL}"
-
-echo "Run label : ${RUN_LABEL} — results will be in results/${RUN_LABEL}/<trace>/"
-echo "Logs      : logs/${RUN_LABEL}/"
-
-qsub -t "1-${N}" \
-     -o "${LOG_DIR}/" \
-     -e "${LOG_DIR}/" \
-     -wd "$SCRIPT_DIR" \
-     -v WARMUP="$WARMUP",SIM="$SIM",TRACE_DIR="$TRACE_DIR",RUN_LABEL="$RUN_LABEL" \
-     "$@" "${SCRIPT_DIR}/run_cs.sh"
