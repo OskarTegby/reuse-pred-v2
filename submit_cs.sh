@@ -4,10 +4,10 @@
 #
 # Trace sets and their output separation:
 #   test   – 1 trace per workload, 1M warmup / 5M sim (smoke test across all sets)
-#   maz    – SPEC traces (local):          results/maz_<date>/
-#   qmm    – Qualcomm traces (local):      results/qmm_<date>/
-#   dpc3   – SPEC/DPC-3 traces (shared):   results/dpc3_<date>/
-#   google – Google traces (shared):       results/google_<date>/
+#   maz    – SPEC traces (local):          results/maz_<date_HHMM>/
+#   qmm    – Qualcomm traces (local):      results/qmm_<date_HHMM>/
+#   dpc3   – SPEC/DPC-3 traces (shared):   results/dpc3_<date_HHMM>/
+#   google – Google traces (shared):       results/google_<date_HHMM>/
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
@@ -34,7 +34,7 @@ submit_one() {
   fi
   [ "$max_n" -gt 0 ] && [ "$n" -gt "$max_n" ] && n=$max_n
 
-  local run_label="${label}_$(date +%Y%m%d)"
+  local run_label="${label}_$(date +%Y%m%d_%H%M)"
   local log_dir="${SCRIPT_DIR}/logs/${run_label}"
   mkdir -p "$log_dir" "${SCRIPT_DIR}/results/${run_label}"
 
