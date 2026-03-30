@@ -79,7 +79,7 @@ bool CACHE::dppred_bypass(const PACKET& fill_mshr)
 {
   const auto vpn_hash = fold_xor(fill_mshr.address >> OFFSET_BITS, VPN_BITS);
   const auto pc_hash  = fold_xor(fill_mshr.ip,                     PC_BITS);
-  if (phist[vpn_hash][pc_hash].doa <= pconf_thd)
+  if (phist[vpn_hash][pc_hash].doa < pconf_thd)
     return false;
 
   // Push physical frame into the shared queue for cbPred (FIFO)
@@ -104,7 +104,7 @@ bool CACHE::cbpred_bypass(const PACKET& fill_mshr)
   const auto block_hash = fold_xor(fill_mshr.address >> OFFSET_BITS, BHT_BITS);
   const bool in_pfq     = std::find(pfq.begin(), pfq.end(), pfn) != pfq.end();
 
-  if (!in_pfq || bhist[block_hash].doa <= bconf_thd)
+  if (!in_pfq || bhist[block_hash].doa < bconf_thd)
     return false;
 
   sim_stats.back().llc_bypasses++;
@@ -379,8 +379,10 @@ bool CACHE::handle_fill(const PACKET& fill_mshr)
   }
 
   if (success) {
-    // COLLECT STATS
-    sim_stats.back().total_miss_latency += current_cycle - (fill_mshr.cycle_enqueued + 1);
+    // COLLECT STATS — skip for synthetic re-insertions (to_return is empty,
+    // meaning this fill was not the result of a real miss reaching the lower level).
+    if (!fill_mshr.to_return.empty())
+      sim_stats.back().total_miss_latency += current_cycle - (fill_mshr.cycle_enqueued + 1);
 
     auto copy{fill_mshr};
     copy.pf_metadata = metadata_thru;
@@ -809,6 +811,13 @@ void CACHE::end_phase(unsigned finished_cpu)
 
   roi_stats.back().llt_bypasses = sim_stats.back().llt_bypasses;
   roi_stats.back().llc_bypasses = sim_stats.back().llc_bypasses;
+
+  roi_stats.back().evict_total        = sim_stats.back().evict_total;
+  roi_stats.back().evict_doa          = sim_stats.back().evict_doa;
+  roi_stats.back().evict_mostly_dead  = sim_stats.back().evict_mostly_dead;
+  roi_stats.back().evict_mostly_alive = sim_stats.back().evict_mostly_alive;
+  roi_stats.back().evict_zero_residence = sim_stats.back().evict_zero_residence;
+  roi_stats.back().evict_hit_hist     = sim_stats.back().evict_hit_hist;
 }
 
 bool CACHE::should_activate_prefetcher(const PACKET& pkt) const { return ((1 << pkt.type) & pref_activate_mask) && !pkt.prefetch_from_this; }
