@@ -211,8 +211,10 @@ void CACHE::update_eviction_counters(const BLOCK& victim, liveness_class lv)
     const auto vpn_hash = fold_xor(victim.address >> OFFSET_BITS, VPN_BITS);
     const auto pc_hash  = fold_xor(victim.ip,                     PC_BITS);
     update(phist[vpn_hash][pc_hash]);
+    update(llt_pc_stats[victim.ip]);
   } else if (cbpred && NAME == "LLC" && victim.dp) {
     update(bhist[fold_xor(victim.address >> OFFSET_BITS, BHT_BITS)]);
+    update(llc_pc_stats[victim.ip]);
   }
 }
 

@@ -165,6 +165,8 @@ class CACHE : public champsim::operable, public MemoryRequestConsumer, public Me
   std::map<uint64_t, std::map<uint64_t, hist_entry>> phist; // [vpn_hash][pc_hash] → entry
   std::deque<std::pair<uint64_t, uint64_t>> shadow_table;   // recently bypassed (VPN, translation data)
   std::map<uint64_t, hist_entry> bhist;                      // [block_hash] → entry
+  std::map<uint64_t, hist_entry> llt_pc_stats;               // [ip] → per-PC LLT liveness stats (observation only)
+  std::map<uint64_t, hist_entry> llc_pc_stats;               // [ip] → per-PC LLC liveness stats (observation only)
 
   static constexpr unsigned  VPN_BITS = 4;
   static constexpr unsigned  PC_BITS  = 6;
