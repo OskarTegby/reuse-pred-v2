@@ -168,6 +168,20 @@ void CACHE::record_eviction_liveness(const BLOCK& victim, liveness_class lv)
     case liveness_class::mostly_dead:  s.evict_mostly_dead++;  break;
     case liveness_class::mostly_alive: s.evict_mostly_alive++; break;
   }
+
+  // For LLC DoA blocks: check whether the evicted block's PFN has a
+  // currently-resident STLB entry that is also DoA (hit_count == 0).
+  // This measures how often a dead cache block maps onto a dead page translation.
+  if (NAME == "LLC" && lv == liveness_class::doa && stlb_ptr != nullptr) {
+    const uint64_t pfn = victim.address >> LOG2_PAGE_SIZE;
+    const bool on_doa_stlb_page = std::any_of(
+        stlb_ptr->block.begin(), stlb_ptr->block.end(),
+        [pfn](const BLOCK& b) {
+          return b.valid && b.hit_count == 0 && (b.data >> LOG2_PAGE_SIZE) == pfn;
+        });
+    if (on_doa_stlb_page)
+      s.evict_doa_on_doa_stlb_page++;
+  }
 }
 
 // Accumulates per-PC liveness event counts.  No-op for caches other than
@@ -798,6 +812,8 @@ std::size_t CACHE::get_size(uint8_t queue_type, uint64_t)
 
 void CACHE::initialize()
 {
+  if (NAME == "cpu0_STLB")
+    stlb_ptr = this;
   impl_prefetcher_initialize();
   impl_initialize_replacement();
 }
@@ -835,6 +851,7 @@ void CACHE::end_phase(unsigned finished_cpu)
   roi_stats.back().evict_mostly_alive = sim_stats.back().evict_mostly_alive;
   roi_stats.back().evict_zero_residence = sim_stats.back().evict_zero_residence;
   roi_stats.back().evict_hit_hist     = sim_stats.back().evict_hit_hist;
+  roi_stats.back().evict_doa_on_doa_stlb_page = sim_stats.back().evict_doa_on_doa_stlb_page;
 
   roi_stats.back().llt_pc_stats = std::move(sim_stats.back().llt_pc_stats);
   roi_stats.back().llc_pc_stats = std::move(sim_stats.back().llc_pc_stats);

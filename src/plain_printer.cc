@@ -99,6 +99,14 @@ void champsim::plain_printer::print(CACHE::stats_type stats)
              << "  MOSTLY_DEAD: " << s.evict_mostly_dead  << " (" << 100.0 * s.evict_mostly_dead  / total << "%)"
              << "  MOSTLY_ALIVE: "<< s.evict_mostly_alive << " (" << 100.0 * s.evict_mostly_alive / total << "%)"
              << std::endl;
+      if (s.name == "LLC") {
+        const double doa_total = static_cast<double>(s.evict_doa ? s.evict_doa : 1);
+        stream << s.name << " LIVENESS DOA_ON_DOA_STLB_PAGE: "
+               << s.evict_doa_on_doa_stlb_page
+               << " (" << std::fixed << std::setprecision(1)
+               << 100.0 * s.evict_doa_on_doa_stlb_page / doa_total << "% of LLC DoA)"
+               << std::endl;
+      }
       stream << s.name << " LIVENESS HIT_HIST:";
       for (std::size_t i = 0; i < cache_stats::HIT_HIST_BINS; ++i) {
         if (i + 1 < cache_stats::HIT_HIST_BINS)

@@ -74,6 +74,10 @@ struct cache_stats {
   //                    valid, but the measurement carries no useful timing info.
   uint64_t evict_zero_residence = 0;
 
+  // LLC DoA blocks whose PFN has a currently-resident DoA STLB entry.
+  // Denominator is evict_doa.  Only meaningful for LLC.
+  uint64_t evict_doa_on_doa_stlb_page = 0;
+
   // Hit-count distribution at eviction.
   // Bin i = evicted with exactly i hits; bin HIT_HIST_BINS-1 = that many or more.
   static constexpr std::size_t HIT_HIST_BINS = 9; // bins 0..7 + "8+"
@@ -176,6 +180,9 @@ class CACHE : public champsim::operable, public MemoryRequestConsumer, public Me
   uint64_t bconf_thd = 6; // bhist confidence threshold
   uint64_t mid_thd   = 1; // min DoA-or-mostly-dead evictions before mid-insertion triggers
   uint64_t st_size = 2;   // shadow table capacity
+
+  // Set by cpu0_STLB at initialize(); used by LLC to scan for DoA page correlations.
+  inline static const CACHE* stlb_ptr = nullptr;
 
   std::map<uint64_t, std::map<uint64_t, hist_entry>> phist; // [vpn_hash][pc_hash] → entry
   std::deque<std::pair<uint64_t, uint64_t>> shadow_table;   // recently bypassed (VPN, translation data)
@@ -315,6 +322,8 @@ public:
 
   const std::bitset<NUM_REPLACEMENT_MODULES> repl_type;
   const std::bitset<NUM_PREFETCH_MODULES> pref_type;
+
+  ~CACHE() { if (stlb_ptr == this) stlb_ptr = nullptr; }
 
   // constructor
   CACHE(std::string v1, double freq_scale, uint32_t v2, uint32_t v3, uint32_t v8, uint32_t fill_lat, long int max_tag, long int max_fill, unsigned offset_bits,
