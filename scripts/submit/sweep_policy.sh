@@ -94,17 +94,7 @@ if [ "$N" -eq 0 ]; then
 fi
 
 if [ "$DEBUG" -eq 1 ]; then
-  TASK_RANGE=""
-  for i in "${!TRACES[@]}"; do
-    if [[ "${TRACES[$i]}" == *srv_128* ]]; then
-      TASK_RANGE="$((i+1))-$((i+1))"
-      break
-    fi
-  done
-  if [ -z "$TASK_RANGE" ]; then
-    echo "WARNING: srv_128 not found in ${TRACE_DIR} — using task 1 instead" >&2
-    TASK_RANGE="1-1"
-  fi
+  TASK_RANGE="1-1"
   MODE_TAG="_debug"
 else
   TASK_RANGE="1-${N}"
