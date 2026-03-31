@@ -1,17 +1,17 @@
 #!/usr/bin/env bash
 # sweep_mid.sh — sweep mid_thd (mid-insertion threshold) from 1 to MAX_N.
 #
-# Usage: ./sweep_mid.sh {maz|qmm} [--max-n N] [--pthd N] [--bthd N] [--debug] [--warmup N] [--sim N]
+# Usage: ./sweep_mid.sh {maz|qmm|dpc3|google|test} [--max-n N] [--debug] [--warmup N] [--sim N]
 #
-# Submits one job array per mid_thd value plus a baseline.  Each run uses
-# dppred=1, cbpred=1 with the given pconf_thd/bconf_thd (default 6/6) so the
-# history tables are populated.  mid_thd controls how many consecutive DoA or
-# mostly-dead evictions are required before the lru_mid policy inserts a new
-# block at the set midpoint rather than MRU.
+# Submits one job array per mid_thd value plus a no-predictor baseline.
+# Bypass predictors (dppred/cbpred) are always OFF so this study isolates
+# the effect of mid-insertion threshold alone.  mid_thd controls how many
+# consecutive DoA-or-mostly-dead evictions are required before lru_mid
+# inserts a new block at the set midpoint rather than MRU.
 #
 # Configurations submitted:
-#   baseline              : dppred=0, cbpred=0, mid_thd=1
-#   mid_thd{1..MAX_N}     : dppred=1, cbpred=1, pconf_thd=PTHD, bconf_thd=BTHD, mid_thd=1..MAX_N
+#   baseline          : dppred=0, cbpred=0, mid_thd=1
+#   mid_thd{1..MAX_N} : dppred=0, cbpred=0, mid_thd=1..MAX_N
 # Total: 1 + MAX_N configs
 
 set -euo pipefail
@@ -23,8 +23,6 @@ PROJECT_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 token=""
 DEBUG=0
 MAX_N=5
-PTHD=6
-BTHD=6
 WARMUP_OVERRIDE=""
 SIM_OVERRIDE=""
 
@@ -32,19 +30,17 @@ while [[ $# -gt 0 ]]; do
   case "$1" in
     maz|mazumdar|qmm|dpc3|google|test) token="${1,,}"; shift ;;
     --max-n)   MAX_N="$2"; shift 2 ;;
-    --pthd)    PTHD="$2";  shift 2 ;;
-    --bthd)    BTHD="$2";  shift 2 ;;
     --debug)   DEBUG=1; shift ;;
     --warmup)  WARMUP_OVERRIDE="$2"; shift 2 ;;
     --sim)     SIM_OVERRIDE="$2"; shift 2 ;;
     *) echo "Unknown argument: $1" >&2
-       echo "Usage: $0 {maz|qmm} [--max-n N] [--pthd N] [--bthd N] [--debug] [--warmup N] [--sim N]" >&2
+       echo "Usage: $0 {maz|qmm|dpc3|google|test} [--max-n N] [--debug] [--warmup N] [--sim N]" >&2
        exit 2 ;;
   esac
 done
 
 if [ -z "$token" ]; then
-  echo "Usage: $0 {maz|qmm} [--max-n N] [--pthd N] [--bthd N] [--debug] [--warmup N] [--sim N]" >&2
+  echo "Usage: $0 {maz|qmm|dpc3|google|test} [--max-n N] [--debug] [--warmup N] [--sim N]" >&2
   exit 2
 fi
 
@@ -110,15 +106,15 @@ LOG_DIR="${PROJECT_ROOT}/logs/${BASE_LABEL}"
 mkdir -p "$LOG_DIR"
 
 # ── Build config list: (exp_name dppred cbpred pconf_thd bconf_thd mid_thd) ──
+# Bypass predictors are kept OFF throughout — this study isolates mid-insertion.
 configs=()
 configs+=("baseline 0 0 0 0 1")
 for mthd in $(seq 1 "$MAX_N"); do
-  configs+=("mid_thd${mthd} 1 1 ${PTHD} ${BTHD} ${mthd}")
+  configs+=("mid_thd${mthd} 0 0 0 0 ${mthd}")
 done
 
 echo "Submitting ${#configs[@]} configurations × ${N} traces (tasks ${TASK_RANGE})"
 echo "Warmup / Sim  : ${WARMUP} / ${SIM}"
-echo "pconf_thd     : ${PTHD}    bconf_thd: ${BTHD}"
 echo "mid_thd sweep : 1..${MAX_N}"
 echo "Results base  : results/${BASE_LABEL}/"
 echo "Logs          : logs/${BASE_LABEL}/"
