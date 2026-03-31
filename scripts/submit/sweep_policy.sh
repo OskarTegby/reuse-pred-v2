@@ -1,0 +1,159 @@
+#!/usr/bin/env bash
+# sweep_policy.sh — submit per-policy experiments at default predictor thresholds.
+#
+# Runs 8 configurations covering baseline replacement policies (liveness study)
+# and predictor-augmented variants, at fixed default thresholds (pconf=6, bconf=6).
+# For a threshold sweep, use sweep_cs.sh instead.
+#
+# Usage: ./sweep_policy.sh {maz|qmm|dpc3|google|test} [--debug] [--warmup N] [--sim N]
+#
+# Configurations submitted:
+#   lru            – champsim_lru,     DPPRED=0, CBPRED=0  (vanilla LRU + liveness stats)
+#   srrip          – champsim_srrip,   DPPRED=0, CBPRED=0
+#   drrip          – champsim_drrip,   DPPRED=0, CBPRED=0
+#   lru_mid        – champsim_lru_mid, DPPRED=0, CBPRED=0  (liveness baseline; = LRU)
+#   lru_pred       – champsim_lru,     DPPRED=1, CBPRED=1  (bypass predictor on plain LRU)
+#   lru_mid_pred   – champsim_lru_mid, DPPRED=1, CBPRED=1  (full system: lru_mid + predictor)
+#   srrip_pred     – champsim_srrip,   DPPRED=1, CBPRED=1
+#   drrip_pred     – champsim_drrip,   DPPRED=1, CBPRED=1
+# Total: 8 configs
+
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
+
+# ── Argument parsing ──────────────────────────────────────────────────────────
+token=""
+DEBUG=0
+WARMUP_OVERRIDE=""
+SIM_OVERRIDE=""
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    maz|mazumdar|qmm|dpc3|google|test) token="${1,,}"; shift ;;
+    --debug)   DEBUG=1; shift ;;
+    --warmup)  WARMUP_OVERRIDE="$2"; shift 2 ;;
+    --sim)     SIM_OVERRIDE="$2"; shift 2 ;;
+    *) echo "Unknown argument: $1" >&2
+       echo "Usage: $0 {maz|qmm|dpc3|google|test} [--debug] [--warmup N] [--sim N]" >&2
+       exit 2 ;;
+  esac
+done
+
+if [ -z "$token" ]; then
+  echo "Usage: $0 {maz|qmm|dpc3|google|test} [--debug] [--warmup N] [--sim N]" >&2
+  exit 2
+fi
+
+# ── Trace-set settings ────────────────────────────────────────────────────────
+case "$token" in
+  maz|mazumdar)
+    WARMUP=100000000
+    SIM=1000000000
+    TRACE_DIR="${PROJECT_ROOT}/trace-files/MAZUMDAR"
+    ;;
+  qmm)
+    WARMUP=50000000
+    SIM=100000000
+    TRACE_DIR="${PROJECT_ROOT}/trace-files/QMM"
+    ;;
+  dpc3)
+    WARMUP=50000000
+    SIM=100000000
+    TRACE_DIR="${PROJECT_ROOT}/trace-files/DPC3"
+    ;;
+  google)
+    WARMUP=50000000
+    SIM=100000000
+    TRACE_DIR="${PROJECT_ROOT}/trace-files/GOOGLE"
+    ;;
+  test)
+    WARMUP=1000000
+    SIM=5000000
+    TRACE_DIR="${PROJECT_ROOT}/trace-files/TEST"
+    ;;
+esac
+
+[ -n "$WARMUP_OVERRIDE" ] && WARMUP="$WARMUP_OVERRIDE"
+[ -n "$SIM_OVERRIDE" ]    && SIM="$SIM_OVERRIDE"
+
+# ── Resolve trace list ────────────────────────────────────────────────────────
+mapfile -t TRACES < <(ls -1 "${TRACE_DIR}"/*.champsimtrace.xz 2>/dev/null | sort)
+N=${#TRACES[@]}
+if [ "$N" -eq 0 ]; then
+  echo "ERROR: No traces found in ${TRACE_DIR}" >&2
+  exit 2
+fi
+
+if [ "$DEBUG" -eq 1 ]; then
+  TASK_RANGE=""
+  for i in "${!TRACES[@]}"; do
+    if [[ "${TRACES[$i]}" == *srv_128* ]]; then
+      TASK_RANGE="$((i+1))-$((i+1))"
+      break
+    fi
+  done
+  if [ -z "$TASK_RANGE" ]; then
+    echo "WARNING: srv_128 not found in ${TRACE_DIR} — using task 1 instead" >&2
+    TASK_RANGE="1-1"
+  fi
+  MODE_TAG="_debug"
+else
+  TASK_RANGE="1-${N}"
+  MODE_TAG=""
+fi
+
+DATE=$(date +%Y%m%d_%H%M)
+BASE_LABEL="${token}_pol_${DATE}${MODE_TAG}"
+
+LOG_DIR="${PROJECT_ROOT}/logs/${BASE_LABEL}"
+mkdir -p "$LOG_DIR"
+
+# ── Config list: (exp_name binary dppred cbpred pconf_thd bconf_thd) ──────────
+# Default predictor thresholds: pconf=6, bconf=6
+configs=(
+  "lru          champsim_lru      0 0 6 6"
+  "srrip         champsim_srrip    0 0 6 6"
+  "drrip         champsim_drrip    0 0 6 6"
+  "lru_mid       champsim_lru_mid  0 0 6 6"
+  "lru_pred      champsim_lru      1 1 6 6"
+  "lru_mid_pred  champsim_lru_mid  1 1 6 6"
+  "srrip_pred    champsim_srrip    1 1 6 6"
+  "drrip_pred    champsim_drrip    1 1 6 6"
+)
+
+echo "Submitting ${#configs[@]} configurations × ${N} traces (tasks ${TASK_RANGE})"
+echo "Warmup / Sim  : ${WARMUP} / ${SIM}"
+echo "Results base  : results/${BASE_LABEL}/"
+echo "Logs          : logs/${BASE_LABEL}/"
+echo ""
+
+# ── Submit all configs ────────────────────────────────────────────────────────
+for config in "${configs[@]}"; do
+  read -r exp_name binary dppred cbpred pconf_thd bconf_thd <<< "$config"
+
+  # Verify binary exists before submitting
+  if [ ! -x "${PROJECT_ROOT}/bin/${binary}" ]; then
+    echo "  ERROR: binary not found: bin/${binary}" >&2
+    echo "  Run ./build_all.sh first." >&2
+    exit 2
+  fi
+
+  RUN_LABEL="${BASE_LABEL}/${exp_name}"
+  mkdir -p "${PROJECT_ROOT}/results/${RUN_LABEL}"
+
+  raw=$(qsub -t "$TASK_RANGE" \
+             -N "pol_${exp_name}" \
+             -o "${LOG_DIR}/" \
+             -e "${LOG_DIR}/" \
+             -wd "$PROJECT_ROOT" \
+             -v WARMUP="$WARMUP",SIM="$SIM",TRACE_DIR="$TRACE_DIR",RUN_LABEL="$RUN_LABEL",BINARY="$binary",DPPRED="$dppred",CBPRED="$cbpred",PCONF_THD="$pconf_thd",BCONF_THD="$bconf_thd" \
+             "${PROJECT_ROOT}/scripts/submit/run_cs.sh")
+  jid=$(echo "$raw" | awk '/Your job/ {print $3}' | cut -d. -f1)
+  echo "  [jid=${jid}] ${exp_name}  (${binary})"
+done
+
+echo ""
+echo "All configs submitted. Monitor with: qstat -u \$USER"
+echo "Results will appear under: results/${BASE_LABEL}/"
