@@ -48,32 +48,39 @@ if [ -z "$token" ]; then
   exit 2
 fi
 
+SHARED_TRACES=/home/users/shared/traces
+
 # ── Trace-set settings ────────────────────────────────────────────────────────
 case "$token" in
   maz|mazumdar)
     WARMUP=100000000
     SIM=1000000000
     TRACE_DIR="${PROJECT_ROOT}/trace-files/MAZUMDAR"
+    TRACE_EXT="champsimtrace.xz"
     ;;
   qmm)
     WARMUP=50000000
     SIM=100000000
     TRACE_DIR="${PROJECT_ROOT}/trace-files/QMM"
+    TRACE_EXT="champsimtrace.xz"
     ;;
   dpc3)
     WARMUP=50000000
     SIM=100000000
-    TRACE_DIR="${PROJECT_ROOT}/trace-files/DPC3"
+    TRACE_DIR="${SHARED_TRACES}/dpc3_traces"
+    TRACE_EXT="champsimtrace.xz"
     ;;
   google)
     WARMUP=50000000
     SIM=100000000
-    TRACE_DIR="${PROJECT_ROOT}/trace-files/GOOGLE"
+    TRACE_DIR="${SHARED_TRACES}/Google_Traces_v2"
+    TRACE_EXT="champsim.gz"
     ;;
   test)
     WARMUP=1000000
     SIM=5000000
     TRACE_DIR="${PROJECT_ROOT}/trace-files/TEST"
+    TRACE_EXT="champsimtrace.xz"
     ;;
 esac
 
@@ -81,7 +88,7 @@ esac
 [ -n "$SIM_OVERRIDE" ]    && SIM="$SIM_OVERRIDE"
 
 # ── Resolve trace list ────────────────────────────────────────────────────────
-mapfile -t TRACES < <(ls -1 "${TRACE_DIR}"/*.champsimtrace.xz 2>/dev/null | sort)
+mapfile -t TRACES < <(ls -1 "${TRACE_DIR}"/*.${TRACE_EXT} 2>/dev/null | sort)
 N=${#TRACES[@]}
 if [ "$N" -eq 0 ]; then
   echo "ERROR: No traces found in ${TRACE_DIR}" >&2
@@ -139,7 +146,7 @@ for config in "${configs[@]}"; do
              -o "${LOG_DIR}/" \
              -e "${LOG_DIR}/" \
              -wd "\$PROJECT_ROOT" \
-             -v WARMUP="$WARMUP",SIM="$SIM",TRACE_DIR="$TRACE_DIR",RUN_LABEL="$RUN_LABEL",DPPRED="$dppred",CBPRED="$cbpred",PCONF_THD="$pconf_thd",BCONF_THD="$bconf_thd",MID_THD="$mid_thd" \
+             -v WARMUP="$WARMUP",SIM="$SIM",TRACE_DIR="$TRACE_DIR",TRACE_EXT="$TRACE_EXT",RUN_LABEL="$RUN_LABEL",DPPRED="$dppred",CBPRED="$cbpred",PCONF_THD="$pconf_thd",BCONF_THD="$bconf_thd",MID_THD="$mid_thd" \
              "${PROJECT_ROOT}/scripts/submit/run_cs.sh")
   jid=$(echo "$raw" | awk '/Your job/ {print $3}' | cut -d. -f1)
   echo "  [jid=${jid}] ${exp_name}"
