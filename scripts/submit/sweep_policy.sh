@@ -5,9 +5,12 @@
 # and predictor-augmented variants, at fixed default thresholds (pconf=6, bconf=6).
 # For a threshold sweep, use sweep_cs.sh instead.
 #
-# Usage: ./sweep_policy.sh {maz|qmm|dpc3|google|test} [--debug] [--warmup N] [--sim N]
+# Usage: ./sweep_policy.sh {maz|qmm|dpc3|google|test} [--debug] [--warmup N] [--sim N] [--pref]
 #
-# Configurations submitted:
+# --pref  Also submit the 8 prefetch variants (L1D=ip_stride, L2C=spp_dev).
+#         Requires champsim_{policy}_pref binaries built with ./build_all.sh --pref.
+#
+# Configurations submitted (default, 8 configs):
 #   lru            – champsim_lru,     DPPRED=0, CBPRED=0  (vanilla LRU + liveness stats)
 #   srrip          – champsim_srrip,   DPPRED=0, CBPRED=0
 #   drrip          – champsim_drrip,   DPPRED=0, CBPRED=0
@@ -16,7 +19,16 @@
 #   lru_mid_pred   – champsim_lru_mid, DPPRED=1, CBPRED=1  (full system: lru_mid + predictor)
 #   srrip_pred     – champsim_srrip,   DPPRED=1, CBPRED=1
 #   drrip_pred     – champsim_drrip,   DPPRED=1, CBPRED=1
-# Total: 8 configs
+# With --pref, 8 additional configs (same policies, _pref binaries):
+#   lru_pref       – champsim_lru_pref,     DPPRED=0, CBPRED=0
+#   srrip_pref     – champsim_srrip_pref,   DPPRED=0, CBPRED=0
+#   drrip_pref     – champsim_drrip_pref,   DPPRED=0, CBPRED=0
+#   lru_mid_pref   – champsim_lru_mid_pref, DPPRED=0, CBPRED=0
+#   lru_pred_pref        – champsim_lru_pref,     DPPRED=1, CBPRED=1
+#   lru_mid_pred_pref    – champsim_lru_mid_pref, DPPRED=1, CBPRED=1
+#   srrip_pred_pref      – champsim_srrip_pref,   DPPRED=1, CBPRED=1
+#   drrip_pred_pref      – champsim_drrip_pref,   DPPRED=1, CBPRED=1
+# Total: 8 or 16 configs
 
 set -euo pipefail
 
@@ -26,6 +38,7 @@ PROJECT_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 # ── Argument parsing ──────────────────────────────────────────────────────────
 token=""
 DEBUG=0
+WITH_PREF=0
 WARMUP_OVERRIDE=""
 SIM_OVERRIDE=""
 
@@ -33,16 +46,17 @@ while [[ $# -gt 0 ]]; do
   case "$1" in
     maz|mazumdar|qmm|dpc3|google|test) token="${1,,}"; shift ;;
     --debug)   DEBUG=1; shift ;;
+    --pref)    WITH_PREF=1; shift ;;
     --warmup)  WARMUP_OVERRIDE="$2"; shift 2 ;;
     --sim)     SIM_OVERRIDE="$2"; shift 2 ;;
     *) echo "Unknown argument: $1" >&2
-       echo "Usage: $0 {maz|qmm|dpc3|google|test} [--debug] [--warmup N] [--sim N]" >&2
+       echo "Usage: $0 {maz|qmm|dpc3|google|test} [--debug] [--pref] [--warmup N] [--sim N]" >&2
        exit 2 ;;
   esac
 done
 
 if [ -z "$token" ]; then
-  echo "Usage: $0 {maz|qmm|dpc3|google|test} [--debug] [--warmup N] [--sim N]" >&2
+  echo "Usage: $0 {maz|qmm|dpc3|google|test} [--debug] [--pref] [--warmup N] [--sim N]" >&2
   exit 2
 fi
 
@@ -119,6 +133,20 @@ configs=(
   "srrip_pred    champsim_srrip    1 1 6 6"
   "drrip_pred    champsim_drrip    1 1 6 6"
 )
+
+# Append prefetch variants when --pref is given.
+if [ "${WITH_PREF}" -eq 1 ]; then
+  configs+=(
+    "lru_pref          champsim_lru_pref      0 0 6 6"
+    "srrip_pref        champsim_srrip_pref    0 0 6 6"
+    "drrip_pref        champsim_drrip_pref    0 0 6 6"
+    "lru_mid_pref      champsim_lru_mid_pref  0 0 6 6"
+    "lru_pred_pref     champsim_lru_pref      1 1 6 6"
+    "lru_mid_pred_pref champsim_lru_mid_pref  1 1 6 6"
+    "srrip_pred_pref   champsim_srrip_pref    1 1 6 6"
+    "drrip_pred_pref   champsim_drrip_pref    1 1 6 6"
+  )
+fi
 
 echo "Submitting ${#configs[@]} configurations × ${N} traces (tasks ${TASK_RANGE})"
 echo "Warmup / Sim  : ${WARMUP} / ${SIM}"
