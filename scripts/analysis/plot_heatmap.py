@@ -4,11 +4,9 @@ plot_heatmap.py — IPC/MPKI/bypass heatmap & dpPred 1-D chart from a ChampSim t
 
 Usage:
     python3 plot_heatmap.py <results_dir> [--trace TRACE] [--metric METRIC] [--dppred] [--out OUT]
-    python3 plot_heatmap.py <results_dir> --mid-thd [--max-n N] [--metric METRIC] [--trace TRACE] [--out OUT]
 
     results_dir   Base sweep directory, e.g. cluster_results/qmm_20260322/
-                  Must contain a 'baseline/' sub-dir plus pthd{N}/ and pthd{N}_bthd{M}/ dirs,
-                  or mid_thd{1..N}/ dirs when using --mid-thd.
+                  Must contain a 'baseline/' sub-dir plus pthd{N}/ and pthd{N}_bthd{M}/ dirs.
 
     --trace       Trace name (e.g. srv_128).  If omitted with multiple traces, geomean is used.
 
@@ -26,15 +24,9 @@ Usage:
     --stlb-only   With --dppred and mpki/mpki_abs: count only STLB misses (ignore LLC).
                   Default (without this flag): count STLB+LLC misses, same as the 2-D heatmap.
 
-    --mid-thd     1-D bar chart over mid_thd{1..N} — shows geomean IPC speedup as the minimum
-                  number of consecutive DoA-or-mostly-dead evictions required to trigger
-                  mid-point insertion in lru_mid is varied from 1 to MAX_N.
-                  Expects results_dir to contain baseline/ and mid_thd{1..MAX_N}/ sub-dirs.
-                  Works with any ratio-based metric (ipc, mpki).
-
-    --max-n       Upper bound for mid_thd sweep (default 5).  Used with --mid-thd.
-
     --out         Output PNG path.  Defaults to <metric>_<mode>_<trace>_<label>.png
+
+For the mid-insertion threshold sweep (sweep_mid.sh results) use plot_mid_thd.py instead.
 """
 
 import argparse
@@ -287,10 +279,6 @@ def main():
                         help="1-D chart over pthd0..6 (dpPred-only) instead of 2-D heatmap")
     parser.add_argument("--stlb-only", action="store_true", dest="stlb_only",
                         help="With --dppred and mpki/mpki_abs: use STLB-only misses")
-    parser.add_argument("--mid-thd", action="store_true", dest="mid_thd",
-                        help="1-D bar chart over mid_thd{1..MAX_N} (mid-insertion threshold sweep)")
-    parser.add_argument("--max-n", type=int, default=5, dest="max_n",
-                        help="Upper bound for --mid-thd sweep (default 5)")
     parser.add_argument("--out", default=None)
     args = parser.parse_args()
 
@@ -299,9 +287,9 @@ def main():
         args.metric = "ipc"
         args.dppred = True
 
-    base   = args.results_dir.rstrip("/")
-    label  = os.path.basename(base)
-    metric = args.metric
+    base        = args.results_dir.rstrip("/")
+    label       = os.path.basename(base)
+    metric      = args.metric
     dppred_mode = args.dppred
 
     # Map metric → parse function.
@@ -389,47 +377,6 @@ def main():
             else:
                 vals.append(v)
         return aggregate(vals)
-
-    # ── 1-D mid-thd sweep chart ───────────────────────────────────────────────
-    if args.mid_thd:
-        if metric not in ("ipc", "mpki"):
-            sys.exit(f"ERROR: --mid-thd only supports --metric ipc or mpki (got {metric!r})")
-
-        max_n = args.max_n
-        ns = list(range(1, max_n + 1))
-        values = [collect(f"mid_thd{n}") for n in ns]
-
-        if metric == "ipc":
-            ylabel      = "IPC speedup vs baseline (%)"
-            chart_title = "mid-insertion threshold: IPC speedup (geomean)"
-        else:
-            ylabel      = "Total MPKI reduction vs baseline (%, STLB+LLC)"
-            chart_title = "mid-insertion threshold: MPKI reduction (geomean)"
-
-        title = f"{chart_title} — {trace_label} — {label}"
-        color = METRIC_COLORS[metric]
-
-        fig, ax = plt.subplots(figsize=(max(6, max_n + 2), 5))
-        bars = ax.bar(range(len(ns)), values, color=color, edgecolor="black", linewidth=0.6)
-        ax.axhline(0, color="black", linewidth=0.8, linestyle="--")
-        fmt = lambda v: f"+{v:.2f}%" if v >= 0 else f"{v:.2f}%"
-        for bar, v in zip(bars, values):
-            if not np.isnan(v):
-                yoff = max(abs(v) * 0.02, 0.05) * (1 if v >= 0 else -3)
-                ax.text(bar.get_x() + bar.get_width() / 2,
-                        bar.get_height() + yoff,
-                        fmt(v), ha="center", va="bottom", fontsize=9)
-        ax.set_xticks(range(len(ns)))
-        ax.set_xticklabels([f"N={n}" for n in ns])
-        ax.set_xlabel("mid-insertion threshold (N DoA-or-mostly-dead evictions required)", fontsize=11)
-        ax.set_ylabel(ylabel, fontsize=11)
-        ax.set_title(title, fontsize=12)
-
-        plt.tight_layout()
-        out_path = args.out or f"mid_thd_{metric}_{trace_label}_{label}.png"
-        plt.savefig(out_path, dpi=150, bbox_inches="tight")
-        print(f"Saved: {out_path}")
-        return
 
     # ── 1-D dpPred-only chart ─────────────────────────────────────────────────
     if dppred_mode:

@@ -132,7 +132,7 @@ for config in "${configs[@]}"; do
              -o "${LOG_DIR}/" \
              -e "${LOG_DIR}/" \
              -wd "\$PROJECT_ROOT" \
-             -v WARMUP="$WARMUP",SIM="$SIM",TRACE_DIR="$TRACE_DIR",TRACE_EXT="$TRACE_EXT",RUN_LABEL="$RUN_LABEL",DPPRED="$dppred",CBPRED="$cbpred",PCONF_THD="$pconf_thd",BCONF_THD="$bconf_thd",MID_THD="$mid_thd" \
+             -v WARMUP="$WARMUP",SIM="$SIM",TRACE_DIR="$TRACE_DIR",TRACE_EXT="$TRACE_EXT",RUN_LABEL="$RUN_LABEL",BINARY=champsim_lru_mid,DPPRED="$dppred",CBPRED="$cbpred",PCONF_THD="$pconf_thd",BCONF_THD="$bconf_thd",MID_THD="$mid_thd" \
              "${PROJECT_ROOT}/scripts/submit/run_cs.sh")
   jid=$(echo "$raw" | awk '/Your job/ {print $3}' | cut -d. -f1)
   echo "  [jid=${jid}] ${exp_name}"
