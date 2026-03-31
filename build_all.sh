@@ -35,7 +35,7 @@ for policy in "${POLICIES[@]}"; do
   fi
   echo "=== Building ${policy} ==="
   python3 config.sh champsim_config.json "$cfg"
-  make -j"$(nproc)"
+  make static -j"$(nproc)"
   echo "  → bin/champsim_${policy}"
   echo ""
 done
