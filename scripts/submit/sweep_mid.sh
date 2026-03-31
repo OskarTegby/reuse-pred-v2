@@ -88,7 +88,7 @@ esac
 [ -n "$SIM_OVERRIDE" ]    && SIM="$SIM_OVERRIDE"
 
 # ── Resolve trace list ────────────────────────────────────────────────────────
-mapfile -t TRACES < <(ls -1 "${TRACE_DIR}"/*.${TRACE_EXT} 2>/dev/null | sort)
+mapfile -t TRACES < <(find "${TRACE_DIR}" -name "*.${TRACE_EXT}" | sort)
 N=${#TRACES[@]}
 if [ "$N" -eq 0 ]; then
   echo "ERROR: No traces found in ${TRACE_DIR}" >&2
