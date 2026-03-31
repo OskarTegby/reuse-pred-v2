@@ -89,7 +89,17 @@ echo ""
 join_dirs()   { printf '%s ' "$@"; }
 join_labels() { printf '%s ' "$@"; }
 
-# ── 1. Per-access liveness bar charts ────────────────────────────────────────
+# ── 1. IPC speedup and MPKI bar charts ───────────────────────────────────────
+echo "=== IPC speedup and MPKI charts ==="
+
+python3 "${SCRIPT_DIR}/plot_policy_comparison.py" \
+  "${RESULTS_DIR}" \
+  --out "${OUT_DIR}/policy_comparison" \
+  || echo "  WARNING: policy comparison plots failed — skipped"
+
+echo ""
+
+# ── 2. Per-access liveness bar charts ────────────────────────────────────────
 echo "=== Liveness bar charts ==="
 
 # All configs in one chart
