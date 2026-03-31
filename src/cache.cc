@@ -170,6 +170,24 @@ void CACHE::record_eviction_liveness(const BLOCK& victim, liveness_class lv)
   }
 }
 
+// Accumulates per-PC liveness event counts.  No-op for caches other than
+// the LLC and STLB.  Unlike the history-table confidence counters in
+// update_eviction_counters, these counters only ever increment — they are
+// never reset — so they record total event frequencies across the whole run.
+void CACHE::record_pc_liveness(const BLOCK& victim, liveness_class lv)
+{
+  if (NAME != "cpu0_STLB" && NAME != "LLC")
+    return;
+
+  auto& entry = (NAME == "cpu0_STLB") ? sim_stats.back().llt_pc_stats[victim.ip]
+                                       : sim_stats.back().llc_pc_stats[victim.ip];
+  switch (lv) {
+    case liveness_class::doa:          entry.doa++;          break;
+    case liveness_class::mostly_dead:  entry.mostly_dead++;  break;
+    case liveness_class::mostly_alive: entry.mostly_alive++; break;
+  }
+}
+
 // Updates phist (STLB) or bhist (LLC) when a valid entry is displaced.
 //
 // All history state is updated exclusively at eviction time — never earlier.
@@ -211,10 +229,8 @@ void CACHE::update_eviction_counters(const BLOCK& victim, liveness_class lv)
     const auto vpn_hash = fold_xor(victim.address >> OFFSET_BITS, VPN_BITS);
     const auto pc_hash  = fold_xor(victim.ip,                     PC_BITS);
     update(phist[vpn_hash][pc_hash]);
-    update(llt_pc_stats[victim.ip]);
   } else if (cbpred && NAME == "LLC" && victim.dp) {
     update(bhist[fold_xor(victim.address >> OFFSET_BITS, BHT_BITS)]);
-    update(llc_pc_stats[victim.ip]);
   }
 }
 
@@ -304,6 +320,7 @@ bool CACHE::handle_fill(const PACKET& fill_mshr)
       // update_eviction_counters are both no-ops for those levels anyway.
       const auto lv = classify_liveness(*way);
       record_eviction_liveness(*way, lv);
+      record_pc_liveness(*way, lv);
       update_eviction_counters(*way, lv);
     }
   }
@@ -818,6 +835,9 @@ void CACHE::end_phase(unsigned finished_cpu)
   roi_stats.back().evict_mostly_alive = sim_stats.back().evict_mostly_alive;
   roi_stats.back().evict_zero_residence = sim_stats.back().evict_zero_residence;
   roi_stats.back().evict_hit_hist     = sim_stats.back().evict_hit_hist;
+
+  roi_stats.back().llt_pc_stats = std::move(sim_stats.back().llt_pc_stats);
+  roi_stats.back().llc_pc_stats = std::move(sim_stats.back().llc_pc_stats);
 }
 
 bool CACHE::should_activate_prefetcher(const PACKET& pkt) const { return ((1 << pkt.type) & pref_activate_mask) && !pkt.prefetch_from_this; }

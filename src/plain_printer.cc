@@ -131,6 +131,36 @@ void champsim::plain_printer::print(CACHE::stats_type stats)
                << " but evict_total is " << s.evict_total
                << " (delta " << static_cast<int64_t>(hist_sum) - static_cast<int64_t>(s.evict_total) << ")"
                << std::endl;
+
+      // ── Per-PC liveness breakdown ─────────────────────────────────────────
+      const auto& pc_map = (s.name == "cpu0_STLB") ? s.llt_pc_stats : s.llc_pc_stats;
+      if (!pc_map.empty()) {
+        std::vector<std::pair<uint64_t, pc_liveness_entry>> sorted(pc_map.begin(), pc_map.end());
+        std::sort(sorted.begin(), sorted.end(),
+                  [](const auto& a, const auto& b) { return a.second.total() > b.second.total(); });
+
+        stream << s.name << " PER-PC LIVENESS (" << sorted.size() << " PCs):\n";
+        stream << "  " << std::left  << std::setw(18) << "PC"
+               << std::right << std::setw(10) << "evictions"
+               << std::setw(22) << "DoA"
+               << std::setw(22) << "mostly-dead"
+               << std::setw(22) << "mostly-alive" << "\n";
+        for (const auto& [ip, e] : sorted) {
+          const double ptot = static_cast<double>(e.total() ? e.total() : 1);
+          auto pct = [&](uint64_t n) {
+            std::ostringstream os;
+            os << n << " (" << std::fixed << std::setprecision(1) << 100.0 * n / ptot << "%)";
+            return os.str();
+          };
+          stream << "  0x" << std::hex << std::setw(16) << std::setfill('0') << ip
+                 << std::dec << std::setfill(' ')
+                 << std::right << std::setw(10) << e.total()
+                 << std::setw(22) << pct(e.doa)
+                 << std::setw(22) << pct(e.mostly_dead)
+                 << std::setw(22) << pct(e.mostly_alive) << "\n";
+        }
+        stream << std::defaultfloat;
+      }
     }
     // stream << " AVERAGE MISS LATENCY: " << (stats.total_miss_latency)/TOTAL_MISS << " cycles " << stats.total_miss_latency << "/" << TOTAL_MISS<< std::endl;
   }

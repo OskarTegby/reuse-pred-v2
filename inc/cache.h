@@ -32,6 +32,15 @@
 #include "memory_class.h"
 #include "operable.h"
 
+// Cumulative per-PC liveness event counts.  Only ever incremented, never
+// reset, so they record total event frequencies across the whole simulation.
+struct pc_liveness_entry {
+  uint64_t doa          = 0;
+  uint64_t mostly_dead  = 0;
+  uint64_t mostly_alive = 0;
+  uint64_t total() const { return doa + mostly_dead + mostly_alive; }
+};
+
 struct cache_stats {
   std::string name;
   // prefetch stats
@@ -69,6 +78,10 @@ struct cache_stats {
   // Bin i = evicted with exactly i hits; bin HIT_HIST_BINS-1 = that many or more.
   static constexpr std::size_t HIT_HIST_BINS = 9; // bins 0..7 + "8+"
   std::array<uint64_t, HIT_HIST_BINS> evict_hit_hist = {};
+
+  // Per-PC liveness event counts (cumulative, never reset).
+  std::map<uint64_t, pc_liveness_entry> llt_pc_stats; // STLB: [ip] → counts
+  std::map<uint64_t, pc_liveness_entry> llc_pc_stats; // LLC:  [ip] → counts
 };
 
 struct cache_queue_stats {
@@ -151,6 +164,7 @@ class CACHE : public champsim::operable, public MemoryRequestConsumer, public Me
     uint64_t mostly_dead = 0;
   };
 
+
   // Shared physical-frame queue: dpPred fills it; cbPred reads it.
   inline static std::deque<uint64_t> pfq{};
   inline static uint64_t pfq_cap = 8;
@@ -166,8 +180,6 @@ class CACHE : public champsim::operable, public MemoryRequestConsumer, public Me
   std::map<uint64_t, std::map<uint64_t, hist_entry>> phist; // [vpn_hash][pc_hash] → entry
   std::deque<std::pair<uint64_t, uint64_t>> shadow_table;   // recently bypassed (VPN, translation data)
   std::map<uint64_t, hist_entry> bhist;                      // [block_hash] → entry
-  std::map<uint64_t, hist_entry> llt_pc_stats;               // [ip] → per-PC LLT liveness stats (observation only)
-  std::map<uint64_t, hist_entry> llc_pc_stats;               // [ip] → per-PC LLC liveness stats (observation only)
 
   static constexpr unsigned  VPN_BITS = 4;
   static constexpr unsigned  PC_BITS  = 6;
@@ -184,7 +196,8 @@ class CACHE : public champsim::operable, public MemoryRequestConsumer, public Me
   bool cbpred_bypass(const PACKET& fill_mshr);                  // true → skip LLC fill
   liveness_class classify_liveness(const BLOCK& victim) const;  // compute liveness class + run invariant asserts
   void update_eviction_counters(const BLOCK& victim, liveness_class lv); // update phist/bhist counters
-  void record_eviction_liveness(const BLOCK& victim, liveness_class lv); // record liveness stats
+  void record_eviction_liveness(const BLOCK& victim, liveness_class lv); // record aggregate liveness stats
+  void record_pc_liveness(const BLOCK& victim, liveness_class lv);       // accumulate per-PC liveness event counts
   bool needs_mid_insertion(uint64_t full_addr, uint64_t ip) const;        // true → insert/refresh at set midpoint
 
 public:
