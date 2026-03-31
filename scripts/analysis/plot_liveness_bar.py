@@ -217,8 +217,10 @@ def main():
         sys.exit("ERROR: no data loaded")
 
     suite_desc = " + ".join(labels)
-    out_stem = Path(args.out).stem
-    out_suffix = Path(args.out).suffix or ".png"
+    out_path_obj = Path(args.out)
+    out_stem = out_path_obj.stem
+    out_suffix = out_path_obj.suffix or ".png"
+    out_dir = out_path_obj.parent
 
     cache_display = {"cpu0_STLB": "STLB", "LLC": "LLC"}
     for cache in ["cpu0_STLB", "LLC"]:
@@ -228,7 +230,7 @@ def main():
         fig.suptitle(f"{cache_display[cache]} liveness at eviction — {suite_desc}",
                      fontsize=12)
         fig.tight_layout()
-        out_path = f"{out_stem}_{cache_display[cache]}{out_suffix}"
+        out_path = str(out_dir / f"{out_stem}_{cache_display[cache]}{out_suffix}")
         fig.savefig(out_path, dpi=200, bbox_inches="tight")
         plt.close(fig)
         print(f"Saved: {out_path}")

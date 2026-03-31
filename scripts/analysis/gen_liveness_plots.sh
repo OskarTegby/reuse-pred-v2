@@ -113,22 +113,15 @@ for cache in LLC cpu0_STLB; do
   for i in "${!present_baseline[@]}"; do
     cfg_dir="${present_baseline[$i]}"
     cfg_label="${present_baseline_labels[$i]}"
-    safe_label="${cfg_label//+pred/pred}"
 
     python3 "${SCRIPT_DIR}/analyze_pc_liveness.py" \
       "$cfg_dir" \
       --cache "$cache" \
-      --out "${OUT_DIR}/pc_${cache}_${safe_label}"
+      --out "${OUT_DIR}/pc_${cfg_label}" \
+      || echo "  WARNING: no per-PC data for ${cfg_label} ${cache} — skipped"
   done
 
-  # Combined scatter: all baseline policies overlaid (multi-suite mode)
-  if [ ${#present_baseline[@]} -gt 1 ]; then
-    python3 "${SCRIPT_DIR}/analyze_pc_liveness.py" \
-      "${present_baseline[@]}" \
-      --labels "${present_baseline_labels[@]}" \
-      --cache "$cache" \
-      --out "${OUT_DIR}/pc_${cache}_baseline_all"
-  fi
+
 done
 
 echo ""
