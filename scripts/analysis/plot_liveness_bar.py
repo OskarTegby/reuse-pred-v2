@@ -177,6 +177,32 @@ def plot_cache_panel(ax, rows, cache_name, sort_by_dead=True):
 
 # ── Main ──────────────────────────────────────────────────────────────────────
 
+def suite_geomean_row(label: str, rows: list, cache: str):
+    """Collapse all workloads in a suite into a single geomean row for that cache."""
+    eps = 1e-6
+    doa_rates, md_rates, ma_rates = [], [], []
+    for _, data in rows:
+        d = data.get(cache, {})
+        tot = d.get("total", 0) or 1
+        doa_rates.append(d.get("doa", 0) / tot * 100)
+        md_rates.append(d.get("mostly_dead", 0) / tot * 100)
+        ma_rates.append(d.get("mostly_alive", 0) / tot * 100)
+    if not doa_rates:
+        return None
+    gm_doa = np.exp(np.mean(np.log(np.clip(doa_rates, eps, None))))
+    gm_md  = np.exp(np.mean(np.log(np.clip(md_rates,  eps, None))))
+    gm_ma  = np.exp(np.mean(np.log(np.clip(ma_rates,  eps, None))))
+    gm_sum = gm_doa + gm_md + gm_ma
+    # Synthetic data dict that plot_cache_panel can consume
+    n = len(doa_rates)
+    return (label, {cache: {
+        "total":        n,
+        "doa":          int(gm_doa / gm_sum * n),
+        "mostly_dead":  int(gm_md  / gm_sum * n),
+        "mostly_alive": int(gm_ma  / gm_sum * n),
+    }})
+
+
 def main():
     ap = argparse.ArgumentParser(
         description=__doc__,
@@ -190,6 +216,8 @@ def main():
                     help="Output PNG (default: liveness_bar.png)")
     ap.add_argument("--no-sort", action="store_true",
                     help="Keep workloads in filename order instead of sorting by dead fraction")
+    ap.add_argument("--summary", action="store_true",
+                    help="Show one geomean bar per suite (policy comparison) instead of one bar per workload")
     args = ap.parse_args()
 
     dirs = [Path(d) for d in args.results_dirs]
@@ -202,18 +230,15 @@ def main():
     if len(labels) != len(dirs):
         sys.exit("ERROR: --labels count must match number of directories")
 
-    # Load all suites; tag each workload with its suite label
-    all_rows = []
+    # Load all suites
+    suites = []
     for lbl, d in zip(labels, dirs):
         print(f"Loading '{lbl}' from {d} ...")
         suite_rows = load_suite(d)
-        if len(dirs) > 1:
-            # Prefix workload names with suite label to distinguish them
-            suite_rows = [(f"{lbl}/{wl}", data) for wl, data in suite_rows]
-        all_rows.extend(suite_rows)
+        suites.append((lbl, suite_rows))
         print(f"  {len(suite_rows)} workloads")
 
-    if not all_rows:
+    if not suites:
         sys.exit("ERROR: no data loaded")
 
     suite_desc = " + ".join(labels)
@@ -224,11 +249,30 @@ def main():
 
     cache_display = {"cpu0_STLB": "STLB", "LLC": "LLC"}
     for cache in ["cpu0_STLB", "LLC"]:
-        fig_w = max(8, len(all_rows) * 0.55 + 3)
+        if args.summary:
+            # One geomean bar per suite — policy comparison view
+            all_rows = [r for lbl, rows in suites
+                        for r in [suite_geomean_row(lbl, rows, cache)] if r]
+            fig_w = max(6, len(all_rows) * 1.0 + 2)
+        else:
+            # One bar per workload across all suites
+            all_rows = []
+            for lbl, rows in suites:
+                tagged = [(f"{lbl}/{wl}" if len(suites) > 1 else wl, data)
+                          for wl, data in rows]
+                all_rows.extend(tagged)
+            fig_w = max(8, len(all_rows) * 0.55 + 3)
+
+        if not all_rows:
+            print(f"  WARNING: no data for {cache} — skipped")
+            continue
+
         fig, ax = plt.subplots(figsize=(fig_w, 6))
-        plot_cache_panel(ax, all_rows, cache, sort_by_dead=not args.no_sort)
-        fig.suptitle(f"{cache_display[cache]} liveness at eviction — {suite_desc}",
-                     fontsize=12)
+        plot_cache_panel(ax, all_rows, cache, sort_by_dead=not args.no_sort and not args.summary)
+        title = (f"{cache_display[cache]} liveness at eviction"
+                 if args.summary else
+                 f"{cache_display[cache]} liveness at eviction — {suite_desc}")
+        fig.suptitle(title, fontsize=12)
         fig.tight_layout()
         out_path = str(out_dir / f"{out_stem}_{cache_display[cache]}{out_suffix}")
         fig.savefig(out_path, dpi=200, bbox_inches="tight")
