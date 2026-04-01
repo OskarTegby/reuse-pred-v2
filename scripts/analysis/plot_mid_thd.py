@@ -12,7 +12,7 @@ Usage
         [--max-n N] [--metric ipc|mpki] [--out <path>]
 
     <results_dir> must contain:
-        baseline/          — lru_mid, no predictor
+        lru/                    — plain LRU baseline (produced by sweep_mid.sh)
         mid_thd1/ .. mid_thdN/  — varying threshold
 """
 
@@ -89,32 +89,40 @@ def main():
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     ap.add_argument("results_dir")
-    ap.add_argument("--max-n",  type=int, default=5, dest="max_n",
+    ap.add_argument("--max-n",   type=int, default=5, dest="max_n",
                     help="Highest mid_thd value present (default: 5)")
-    ap.add_argument("--metric", default="ipc", choices=["ipc", "mpki"])
-    ap.add_argument("--out",    default=None)
+    ap.add_argument("--metric",  default="ipc", choices=["ipc", "mpki"])
+    ap.add_argument("--mid-key", default=None, choices=["addr", "pc"], dest="mid_key",
+                    help="History key used (addr or pc) — added to plot title")
+    ap.add_argument("--out",     default=None)
     args = ap.parse_args()
 
     base = Path(args.results_dir)
     if not base.is_dir():
         sys.exit(f"ERROR: not a directory: {base}")
 
-    baseline_dir = base / "baseline"
+    baseline_dir = base / "lru" if (base / "lru").is_dir() else base / "baseline"
     if not baseline_dir.is_dir():
-        sys.exit(f"ERROR: baseline/ not found under {base}")
+        sys.exit(f"ERROR: no baseline found under {base} (expected lru/ or baseline/)")
 
     parse_fn = parse_ipc if args.metric == "ipc" else parse_mpki
 
-    # Discover traces from baseline
-    traces = sorted(d.name for d in baseline_dir.iterdir() if d.is_dir())
-    if not traces:
-        sys.exit(f"ERROR: no trace subdirectories in {baseline_dir}")
+    # Discover traces from baseline dir (supports */champsim.out and *.out layouts)
+    out_files = sorted(baseline_dir.glob("*/champsim.out"))
+    nested = True
+    if not out_files:
+        out_files = sorted(baseline_dir.glob("*.out"))
+        nested = False
+    if not out_files:
+        sys.exit(f"ERROR: no output files found in {baseline_dir}")
+
+    traces = [f.parent.name if nested else f.stem for f in out_files]
     print(f"Traces: {len(traces)}  Metric: {args.metric}  max_n: {args.max_n}")
 
-    # Load baselines
+    # Load LRU baselines
     baselines = {}
-    for t in traces:
-        v = parse_fn(baseline_dir / t / "champsim.out")
+    for t, f in zip(traces, out_files):
+        v = parse_fn(f)
         if v is None:
             print(f"  WARNING: missing baseline for {t}", file=sys.stderr)
         baselines[t] = v
@@ -144,8 +152,9 @@ def main():
     ylabel = ("IPC speedup vs baseline (%)"
               if args.metric == "ipc"
               else "Total MPKI reduction vs baseline (%, STLB+LLC)")
+    key_tag = f", mid_key={args.mid_key}" if args.mid_key else ""
     title  = (f"mid-insertion threshold sweep — {args.metric.upper()} "
-              f"(geomean, {len(valid_traces)} traces) — {base.name}")
+              f"(geomean, {len(valid_traces)} traces{key_tag}) — {base.name}")
 
     fig, ax = plt.subplots(figsize=(max(6, args.max_n + 2), 5))
     bars = ax.bar(range(len(ns)), agg_values,

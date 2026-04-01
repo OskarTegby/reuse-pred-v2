@@ -3,15 +3,15 @@
 #
 # Usage: ./sweep_mid.sh {maz|qmm|dpc3|google|test} [--max-n N] [--debug] [--warmup N] [--sim N]
 #
-# Submits one job array per mid_thd value plus a no-predictor baseline.
+# Submits one job array per mid_thd value plus a plain LRU baseline.
 # Bypass predictors (dppred/cbpred) are always OFF so this study isolates
 # the effect of mid-insertion threshold alone.  mid_thd controls how many
 # consecutive DoA-or-mostly-dead evictions are required before lru_mid
 # inserts a new block at the set midpoint rather than MRU.
 #
 # Configurations submitted:
-#   baseline          : dppred=0, cbpred=0, mid_thd=1
-#   mid_thd{1..MAX_N} : dppred=0, cbpred=0, mid_thd=1..MAX_N
+#   lru               : champsim_lru,     dppred=0, cbpred=0  (reference baseline)
+#   mid_thd{1..MAX_N} : champsim_lru_mid, dppred=0, cbpred=0, mid_thd=1..MAX_N
 # Total: 1 + MAX_N configs
 
 set -euo pipefail
@@ -25,6 +25,8 @@ DEBUG=0
 MAX_N=5
 WARMUP_OVERRIDE=""
 SIM_OVERRIDE=""
+MID_KEY_STR="addr"   # addr (default) or pc
+MID_KEY_VAL=0
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -33,14 +35,21 @@ while [[ $# -gt 0 ]]; do
     --debug)   DEBUG=1; shift ;;
     --warmup)  WARMUP_OVERRIDE="$2"; shift 2 ;;
     --sim)     SIM_OVERRIDE="$2"; shift 2 ;;
+    --mid-key)
+      case "$2" in
+        addr) MID_KEY_STR="addr"; MID_KEY_VAL=0 ;;
+        pc)   MID_KEY_STR="pc";   MID_KEY_VAL=1 ;;
+        *) echo "Unknown --mid-key value: $2 (expected addr or pc)" >&2; exit 2 ;;
+      esac
+      shift 2 ;;
     *) echo "Unknown argument: $1" >&2
-       echo "Usage: $0 {maz|qmm|dpc3|google|test} [--max-n N] [--debug] [--warmup N] [--sim N]" >&2
+       echo "Usage: $0 {maz|qmm|dpc3|google|test} [--max-n N] [--mid-key addr|pc] [--debug] [--warmup N] [--sim N]" >&2
        exit 2 ;;
   esac
 done
 
 if [ -z "$token" ]; then
-  echo "Usage: $0 {maz|qmm|dpc3|google|test} [--max-n N] [--debug] [--warmup N] [--sim N]" >&2
+  echo "Usage: $0 {maz|qmm|dpc3|google|test} [--max-n N] [--mid-key addr|pc] [--debug] [--warmup N] [--sim N]" >&2
   exit 2
 fi
 
@@ -100,42 +109,46 @@ else
 fi
 
 DATE=$(date +%Y%m%d_%H%M)
-BASE_LABEL="${token}_mid_${DATE}${MODE_TAG}"
+BASE_LABEL="${token}_mid_${MID_KEY_STR}_${DATE}${MODE_TAG}"
 
 LOG_DIR="${PROJECT_ROOT}/logs/${BASE_LABEL}"
 mkdir -p "$LOG_DIR"
 
-# ── Build config list: (exp_name dppred cbpred pconf_thd bconf_thd mid_thd) ──
-# Bypass predictors are kept OFF throughout — this study isolates mid-insertion.
-configs=()
-configs+=("baseline 0 0 0 0 1")
-for mthd in $(seq 1 "$MAX_N"); do
-  configs+=("mid_thd${mthd} 0 0 0 0 ${mthd}")
-done
+# ── Submit LRU baseline ───────────────────────────────────────────────────────
+RUN_LABEL="${BASE_LABEL}/lru"
+mkdir -p "${PROJECT_ROOT}/results/${RUN_LABEL}"
 
-echo "Submitting ${#configs[@]} configurations × ${N} traces (tasks ${TASK_RANGE})"
+echo "Submitting 1 + ${MAX_N} configurations × ${N} traces (tasks ${TASK_RANGE})"
 echo "Warmup / Sim  : ${WARMUP} / ${SIM}"
-echo "mid_thd sweep : 1..${MAX_N}"
+echo "mid_thd sweep : 1..${MAX_N}  mid_key: ${MID_KEY_STR}"
 echo "Results base  : results/${BASE_LABEL}/"
 echo "Logs          : logs/${BASE_LABEL}/"
 echo ""
 
-# ── Submit all configs ────────────────────────────────────────────────────────
-for config in "${configs[@]}"; do
-  read -r exp_name dppred cbpred pconf_thd bconf_thd mid_thd <<< "$config"
+raw=$(qsub -t "$TASK_RANGE" \
+           -N "cs_lru" \
+           -o "${LOG_DIR}/" \
+           -e "${LOG_DIR}/" \
+           -wd "$PROJECT_ROOT" \
+           -v WARMUP="$WARMUP",SIM="$SIM",TRACE_DIR="$TRACE_DIR",TRACE_EXT="$TRACE_EXT",RUN_LABEL="$RUN_LABEL",BINARY=champsim_lru,DPPRED=0,CBPRED=0,PCONF_THD=0,BCONF_THD=0,MID_THD=1 \
+           "${PROJECT_ROOT}/scripts/submit/run_cs.sh")
+jid=$(echo "$raw" | awk '/Your job/ {print $3}' | cut -d. -f1)
+echo "  [jid=${jid}] lru  (baseline)"
 
-  RUN_LABEL="${BASE_LABEL}/${exp_name}"
+# ── Submit mid_thd sweep ──────────────────────────────────────────────────────
+for mthd in $(seq 1 "$MAX_N"); do
+  RUN_LABEL="${BASE_LABEL}/mid_thd${mthd}"
   mkdir -p "${PROJECT_ROOT}/results/${RUN_LABEL}"
 
   raw=$(qsub -t "$TASK_RANGE" \
-             -N "cs_${exp_name}" \
+             -N "cs_mid_thd" \
              -o "${LOG_DIR}/" \
              -e "${LOG_DIR}/" \
              -wd "$PROJECT_ROOT" \
-             -v WARMUP="$WARMUP",SIM="$SIM",TRACE_DIR="$TRACE_DIR",TRACE_EXT="$TRACE_EXT",RUN_LABEL="$RUN_LABEL",BINARY=champsim_lru_mid,DPPRED="$dppred",CBPRED="$cbpred",PCONF_THD="$pconf_thd",BCONF_THD="$bconf_thd",MID_THD="$mid_thd" \
+             -v WARMUP="$WARMUP",SIM="$SIM",TRACE_DIR="$TRACE_DIR",TRACE_EXT="$TRACE_EXT",RUN_LABEL="$RUN_LABEL",BINARY=champsim_lru_mid,DPPRED=0,CBPRED=0,PCONF_THD=0,BCONF_THD=0,MID_THD="$mthd",MID_KEY="$MID_KEY_VAL" \
              "${PROJECT_ROOT}/scripts/submit/run_cs.sh")
   jid=$(echo "$raw" | awk '/Your job/ {print $3}' | cut -d. -f1)
-  echo "  [jid=${jid}] ${exp_name}"
+  echo "  [jid=${jid}] mid_thd${mthd}"
 done
 
 echo ""
@@ -143,4 +156,5 @@ echo "All configs submitted. Monitor with: qstat -u \$USER"
 echo "Results will appear under: results/${BASE_LABEL}/"
 echo ""
 echo "Plot with:"
-echo "  python3 plot_heatmap.py results/${BASE_LABEL}/ --mid-thd --max-n ${MAX_N}"
+echo "  python3 scripts/analysis/plot_mid_thd.py results/${BASE_LABEL}/ --baseline-dir results/${BASE_LABEL}/lru --max-n ${MAX_N}"
+echo "  python3 scripts/analysis/plot_doa_correlation.py results/${BASE_LABEL}/ --baseline-dir results/${BASE_LABEL}/lru"
