@@ -125,11 +125,13 @@ SCENARIO("lru_mid: block with DoA history is mid-inserted and evicted sooner tha
 // ── MRU insertion (no history): block survives two fills ─────────────────────
 
 SCENARIO("lru_mid: fresh block without history is inserted at MRU and survives two fills") {
-  // DPPRED disabled → phist never updated → doa always 0 → MRU insertion.
+  // A has never been evicted → mid_hist_addr has no entry for A's VPN →
+  // needs_mid_insertion returns false → MRU insertion.
+  // DPPRED state is irrelevant: mid-insertion history is tracked independently.
   ::unsetenv("DPPRED");
-  ::unsetenv("PCONF_THD");
+  ::unsetenv("MID_KEY"); // addr-based (default)
 
-  GIVEN("A 3-way cpu0_STLB with lru_mid but DPPRED disabled") {
+  GIVEN("A 3-way cpu0_STLB with lru_mid and no prior eviction history for A") {
     constexpr uint64_t hit_latency  = 2;
     constexpr uint64_t fill_latency = 2;
     do_nothing_MRC mock_ll;
@@ -183,12 +185,12 @@ SCENARIO("lru_mid: fresh block without history is inserted at MRU and survives t
 // ── Non-LLC/STLB cache always uses plain LRU ─────────────────────────────────
 
 SCENARIO("lru_mid: a cache not named LLC or cpu0_STLB always uses MRU insertion") {
-  // Even with DPPRED=1, a cache named e.g. "L1D" never calls needs_mid_insertion.
-  // So the block is always placed at MRU regardless of any history in phist.
-  ::setenv("DPPRED", "1", 1);
-  ::unsetenv("PCONF_THD");
+  // needs_mid_insertion() only fires for caches named "LLC" or "cpu0_STLB".
+  // A cache named "L1D" always uses plain MRU regardless of any history.
+  ::unsetenv("DPPRED");
+  ::unsetenv("MID_KEY");
 
-  GIVEN("A 3-way L1D cache with lru_mid and DPPRED=1") {
+  GIVEN("A 3-way L1D cache with lru_mid") {
     constexpr uint64_t hit_latency  = 2;
     constexpr uint64_t fill_latency = 2;
     do_nothing_MRC mock_ll;
@@ -217,8 +219,9 @@ SCENARIO("lru_mid: a cache not named LLC or cpu0_STLB always uses MRU insertion"
       run(elements, 30);
       fill(mock_ul, elements, 0x3000, ip, id);      // C
 
-      // Force A to be evicted (DoA: no hits on A). Even if phist were consulted,
-      // the NAME is "L1D" so lru_mid always uses MRU for this cache.
+      // Force A to be evicted (DoA: no hits on A).
+      // The NAME is "L1D" so lru_mid always uses MRU for this cache
+      // (mid_hist tables are not updated and needs_mid_insertion is not called).
       run(elements, 30);
       fill(mock_ul, elements, 0x4000, ip, id);      // D evicts A (DoA)
 
@@ -244,4 +247,136 @@ SCENARIO("lru_mid: a cache not named LLC or cpu0_STLB always uses MRU insertion"
   }
 
   ::unsetenv("DPPRED");
+}
+
+// ── Mid-insertion works without DPPRED (addr key) ────────────────────────────
+// Key regression test: verifies that lru_mid uses its own mid_hist tables,
+// not the predictor tables (phist/bhist), to decide on insertion position.
+// With DPPRED disabled, phist is never updated — but mid_hist_addr IS updated
+// at every STLB eviction.  So needs_mid_insertion should still return true.
+
+SCENARIO("lru_mid: mid-insertion fires without DPPRED when addr has DoA history (MID_KEY=addr)") {
+  ::unsetenv("DPPRED");
+  ::unsetenv("MID_KEY"); // addr-based (default)
+
+  GIVEN("A 3-way cpu0_STLB with lru_mid and DPPRED disabled") {
+    constexpr uint64_t hit_latency  = 2;
+    constexpr uint64_t fill_latency = 2;
+    do_nothing_MRC mock_ll;
+    CACHE::NonTranslatingQueues uut_queues{1, 32, 32, 32, 0, hit_latency, LOG2_BLOCK_SIZE, false};
+    CACHE uut{"cpu0_STLB", 1, 1, 3, 32, fill_latency, 1, 1, 0, false, false, false,
+              (1 << LOAD) | (1 << PREFETCH), uut_queues, &mock_ll,
+              CACHE::pprefetcherDno, CACHE::rreplacementDlru_mid};
+    to_rq_MRP mock_ul{&uut};
+
+    std::array<champsim::operable*, 4> elements{{&mock_ll, &uut_queues, &uut, &mock_ul}};
+    uut.initialize();
+    uut.warmup = false;
+    uut_queues.warmup = false;
+    uut.begin_phase();
+    uut_queues.begin_phase();
+
+    WHEN("A is evicted as DoA (populating mid_hist_addr), then re-inserted") {
+      uint64_t id = 1;
+      constexpr uint64_t ip     = 0xCAFE;
+      constexpr uint64_t addr_a = 0x1000;
+
+      // Phase 0 – build doa_A = 1 in mid_hist_addr (DPPRED is off; phist is NOT updated).
+      fill(mock_ul, elements, addr_a, ip, id);       // A: way 0
+      run(elements, 30);
+      fill(mock_ul, elements, 0x2000, ip, id);       // B: way 1
+      run(elements, 30);
+      fill(mock_ul, elements, 0x3000, ip, id);       // C: way 2
+      run(elements, 30);
+      fill(mock_ul, elements, 0x4000, ip, id);       // D: evicts A (LRU) as DoA → mid_hist_addr[A]++
+
+      run(elements, 400);
+
+      // Phase 1 – evict B to free a slot with an old timestamp.
+      fill(mock_ul, elements, 0x5000, ip, id);       // E: evicts B (LRU)
+      run(elements, 30);
+
+      // Phase 2 – re-insert A; mid_hist_addr[A].doa >= mid_thd → mid-inserted.
+      fill(mock_ul, elements, addr_a, ip, id);       // A: mid-inserted (ts ≈ median)
+
+      // Phase 3 – two fills that should drive A out.
+      fill(mock_ul, elements, 0x6000, ip, id);       // F: evicts D (first tie)
+      fill(mock_ul, elements, 0x7000, ip, id);       // G: evicts A (now the LRU)
+
+      const auto count_before = mock_ll.packet_count();
+      fill(mock_ul, elements, addr_a, ip, id);       // probe A
+
+      THEN("A is a miss — mid-insertion fired without DPPRED via mid_hist_addr") {
+        CHECK(mock_ll.packet_count() == count_before + 1);
+      }
+    }
+  }
+}
+
+// ── Mid-insertion with PC key (MID_KEY=1) ────────────────────────────────────
+// Verifies the MID_KEY toggle: when MID_KEY=1 (pc), needs_mid_insertion reads
+// from mid_hist_pc keyed by the instruction PC rather than the block address.
+// Two different addresses accessed from the same PC should both trigger
+// mid-insertion once the PC has accumulated DoA history.
+
+SCENARIO("lru_mid: mid-insertion fires on same PC regardless of address (MID_KEY=pc)") {
+  ::unsetenv("DPPRED");
+  ::setenv("MID_KEY", "1", 1); // pc-based
+
+  GIVEN("A 3-way cpu0_STLB with lru_mid, DPPRED disabled, and MID_KEY=pc") {
+    constexpr uint64_t hit_latency  = 2;
+    constexpr uint64_t fill_latency = 2;
+    do_nothing_MRC mock_ll;
+    CACHE::NonTranslatingQueues uut_queues{1, 32, 32, 32, 0, hit_latency, LOG2_BLOCK_SIZE, false};
+    CACHE uut{"cpu0_STLB", 1, 1, 3, 32, fill_latency, 1, 1, 0, false, false, false,
+              (1 << LOAD) | (1 << PREFETCH), uut_queues, &mock_ll,
+              CACHE::pprefetcherDno, CACHE::rreplacementDlru_mid};
+    to_rq_MRP mock_ul{&uut};
+
+    std::array<champsim::operable*, 4> elements{{&mock_ll, &uut_queues, &uut, &mock_ul}};
+    uut.initialize();
+    uut.warmup = false;
+    uut_queues.warmup = false;
+    uut.begin_phase();
+    uut_queues.begin_phase();
+
+    WHEN("addr_X (different from addr_a) is evicted DoA from ip, then addr_a from same ip is re-inserted") {
+      uint64_t id = 1;
+      constexpr uint64_t ip     = 0xCAFE;  // shared PC for both addresses
+      constexpr uint64_t addr_x = 0x8000;  // first address — its eviction builds pc history
+      constexpr uint64_t addr_a = 0x1000;  // second address — should trigger mid-insertion via PC
+
+      // Phase 0 – build doa for ip in mid_hist_pc via addr_x's DoA eviction.
+      fill(mock_ul, elements, addr_x, ip, id);       // X: way 0, ip=0xCAFE
+      run(elements, 30);
+      fill(mock_ul, elements, 0x2000, ip, id);       // B: way 1
+      run(elements, 30);
+      fill(mock_ul, elements, 0x3000, ip, id);       // C: way 2
+      run(elements, 30);
+      fill(mock_ul, elements, 0x4000, ip, id);       // D: evicts X (LRU) as DoA → mid_hist_pc[ip]++
+
+      run(elements, 400);
+
+      // Phase 1 – evict B to free a slot.
+      fill(mock_ul, elements, 0x5000, ip, id);       // E: evicts B (LRU)
+      run(elements, 30);
+
+      // Phase 2 – insert addr_a from the same ip.
+      // mid_hist_pc[ip].doa >= mid_thd → needs_mid_insertion → mid-inserted.
+      fill(mock_ul, elements, addr_a, ip, id);       // A: mid-inserted (ts ≈ median)
+
+      // Phase 3 – two fills that should drive A out.
+      fill(mock_ul, elements, 0x6000, ip, id);       // F: evicts D (first tie)
+      fill(mock_ul, elements, 0x7000, ip, id);       // G: evicts A (now the LRU)
+
+      const auto count_before = mock_ll.packet_count();
+      fill(mock_ul, elements, addr_a, ip, id);       // probe A
+
+      THEN("A is a miss — mid-insertion fired for addr_a because its PC has DoA history") {
+        CHECK(mock_ll.packet_count() == count_before + 1);
+      }
+    }
+  }
+
+  ::unsetenv("MID_KEY");
 }
