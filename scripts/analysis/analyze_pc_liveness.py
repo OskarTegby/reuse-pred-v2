@@ -121,12 +121,13 @@ def pool_suite(results_dir: Path, cache_name: str, trace_filter: str | None):
 
     pool = defaultdict(lambda: [0, 0, 0])  # ip → [doa, md, ma]
     n_files = 0
+    n_skipped = 0
     n_truncated = 0
 
     for f in out_files:
         entries, truncated = parse_pc_liveness(f, cache_name)
         if entries is None:
-            print(f"  WARNING: no PER-PC LIVENESS block for {cache_name} in {f.name} — skipped")
+            n_skipped += 1
             continue
         if truncated:
             n_truncated += 1
@@ -136,6 +137,9 @@ def pool_suite(results_dir: Path, cache_name: str, trace_filter: str | None):
             pool[ip][2] += ma
         n_files += 1
 
+    if n_skipped:
+        print(f"  Note: {n_skipped}/{n_files + n_skipped} files had no PER-PC LIVENESS block "
+              f"for {cache_name} — skipped")
     if n_truncated:
         print(f"  Note: {n_truncated}/{n_files} files had truncated per-PC tables "
               "(raise MAX_PC_ROWS in plain_printer.cc for full coverage)")
@@ -377,8 +381,8 @@ def main():
                     help="Only use files whose name contains this substring")
     ap.add_argument("--lorenz", action="store_true",
                     help="Also generate Lorenz concentration plots")
-    ap.add_argument("--out",    default="pc_liveness",
-                    help="Output file prefix (default: pc_liveness)")
+    ap.add_argument("--out",    default=None,
+                    help="Output file prefix (default: <run_dir>/plots/pc_liveness)")
     args = ap.parse_args()
 
     dirs = [Path(d) for d in args.results_dirs]
@@ -390,6 +394,13 @@ def main():
                               for d in dirs]
     if len(labels) != len(dirs):
         sys.exit("ERROR: --labels count must match number of directories")
+
+    # Default output prefix: <run_dir>/plots/pc_liveness
+    # run_dir is the parent of the first input dir (which is a config subdir).
+    run_dir = dirs[0].parent
+    plots_dir = run_dir / "plots"
+    plots_dir.mkdir(parents=True, exist_ok=True)
+    out_prefix = args.out or str(plots_dir / "pc_liveness")
 
     suite_pools = []   # (label, pool_dict, n_files)
 
@@ -408,17 +419,17 @@ def main():
     for label, pool, n_files in suite_pools:
         safe = re.sub(r"[^a-zA-Z0-9_\-]", "_", label)
         plot_scatter(pool, label, args.cache, n_files,
-                     Path(f"{args.out}_{args.cache}_{safe}_scatter.png"))
+                     Path(f"{out_prefix}_{args.cache}_{safe}_scatter.png"))
 
     if args.lorenz:
         print("\nGenerating Lorenz plots ...")
         for label, pool, n_files in suite_pools:
             safe = re.sub(r"[^a-zA-Z0-9_\-]", "_", label)
             plot_lorenz_suite(pool, label, args.cache, n_files,
-                              Path(f"{args.out}_{args.cache}_{safe}_lorenz.png"))
+                              Path(f"{out_prefix}_{args.cache}_{safe}_lorenz.png"))
         if len(suite_pools) > 1:
             print("\nGenerating per-class Lorenz comparison ...")
-            plot_lorenz_by_class(suite_pools, args.cache, args.out)
+            plot_lorenz_by_class(suite_pools, args.cache, out_prefix)
 
     print("\nDone.")
 
