@@ -7,7 +7,7 @@
 #
 # Usage: ./sweep_policy.sh {maz|qmm|dpc3|google|test} [--debug] [--warmup N] [--sim N] [--pref]
 #
-# --pref  Also submit the 8 prefetch variants (L1D=ip_stride, L2C=spp_dev).
+# --pref  Also submit the 8 prefetch variants (L1I=next_line_instr, L1D=ip_stride, L2C=spp_dev).
 #         Requires champsim_{policy}_pref binaries built with ./build_all.sh --pref.
 #
 # Configurations submitted (default, 8 configs):
