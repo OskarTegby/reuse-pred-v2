@@ -239,6 +239,7 @@ void CACHE::update_eviction_counters(const BLOCK& victim, liveness_class lv)
     }
   };
 
+  // Predictor tables: keep existing gated update rules unchanged.
   if (dppred && NAME == "cpu0_STLB") {
     const auto vpn_hash = fold_xor(victim.address >> OFFSET_BITS, VPN_BITS);
     const auto pc_hash  = fold_xor(victim.ip,                     PC_BITS);
@@ -246,25 +247,31 @@ void CACHE::update_eviction_counters(const BLOCK& victim, liveness_class lv)
   } else if (cbpred && NAME == "LLC" && victim.dp) {
     update(bhist[fold_xor(victim.address >> OFFSET_BITS, BHT_BITS)]);
   }
+
+  // Insertion-policy tables: always updated for LLC and STLB, no hashing.
+  if (NAME == "LLC") {
+    update(llc_mid_hist_addr[victim.address >> OFFSET_BITS]);
+    update(llc_mid_hist_pc[victim.ip]);
+  } else if (NAME == "cpu0_STLB") {
+    update(stlb_mid_hist_addr[victim.address >> OFFSET_BITS]);
+    update(stlb_mid_hist_pc[victim.ip]);
+  }
 }
 
 // Returns true when the entry's history shows its last eviction was DoA or
 // mostly-dead, meaning it should be inserted at the set midpoint in lru_mid.
 bool CACHE::needs_mid_insertion(uint64_t full_addr, uint64_t ip) const
 {
-  if (NAME == "cpu0_STLB") {
-    const auto vpn_hash = fold_xor(full_addr >> OFFSET_BITS, VPN_BITS);
-    const auto pc_hash  = fold_xor(ip, PC_BITS);
-    const auto outer    = phist.find(vpn_hash);
-    if (outer == phist.end()) return false;
-    const auto inner = outer->second.find(pc_hash);
-    if (inner == outer->second.end()) return false;
-    return inner->second.doa >= mid_thd || inner->second.mostly_dead >= mid_thd;
-  } else if (NAME == "LLC") {
-    const auto block_hash = fold_xor(full_addr >> OFFSET_BITS, BHT_BITS);
-    const auto it = bhist.find(block_hash);
-    if (it == bhist.end()) return false;
-    return it->second.doa >= mid_thd || it->second.mostly_dead >= mid_thd;
+  auto check = [this](const std::map<uint64_t, hist_entry>& tbl, uint64_t key) {
+    const auto it = tbl.find(key);
+    return it != tbl.end() && (it->second.doa >= mid_thd || it->second.mostly_dead >= mid_thd);
+  };
+  if (NAME == "LLC") {
+    return (mid_key == mid_key_t::pc) ? check(llc_mid_hist_pc,    ip)
+                                      : check(llc_mid_hist_addr,   full_addr >> OFFSET_BITS);
+  } else if (NAME == "cpu0_STLB") {
+    return (mid_key == mid_key_t::pc) ? check(stlb_mid_hist_pc,   ip)
+                                      : check(stlb_mid_hist_addr,  full_addr >> OFFSET_BITS);
   }
   return false;
 }
@@ -296,6 +303,7 @@ void CACHE::load_predictor_settings()
   mid_thd   = getenv_uint64("MID_THD",   mid_thd);
   st_size   = getenv_uint64("ST_SIZE",   st_size);
   pfq_cap   = getenv_uint64("PFQ_CAP",   pfq_cap);
+  mid_key   = (getenv_uint64("MID_KEY", 0) == 1) ? mid_key_t::pc : mid_key_t::addr;
 }
 
 bool CACHE::handle_fill(const PACKET& fill_mshr)

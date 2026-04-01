@@ -188,6 +188,26 @@ class CACHE : public champsim::operable, public MemoryRequestConsumer, public Me
   std::deque<std::pair<uint64_t, uint64_t>> shadow_table;   // recently bypassed (VPN, translation data)
   std::map<uint64_t, hist_entry> bhist;                      // [block_hash] → entry
 
+  // Selects which history signal drives needs_mid_insertion().
+  // Controlled by the MID_KEY env var (0 = addr, 1 = pc; default 0).
+  enum class mid_key_t : uint8_t { addr = 0, pc = 1 };
+  mid_key_t mid_key = mid_key_t::addr;
+
+  // Unbounded insertion-policy tables: always updated at eviction regardless
+  // of predictor state.  No hashing — no collisions.  Budget is intentionally
+  // unrealistic for now.  LLC and STLB keep separate tables because they track
+  // different address granularities (cache lines vs pages) and have independent
+  // liveness behaviour.
+  //   llc_mid_hist_addr  : LLC, keyed by block address (full_addr >> OFFSET_BITS)
+  //   llc_mid_hist_pc    : LLC, keyed by the PC that triggered the access
+  //   stlb_mid_hist_addr : STLB, keyed by VPN (full_addr >> OFFSET_BITS)
+  //   stlb_mid_hist_pc   : STLB, keyed by the PC that triggered the access
+  // needs_mid_insertion() consults only the table selected by mid_key.
+  std::map<uint64_t, hist_entry> llc_mid_hist_addr;
+  std::map<uint64_t, hist_entry> llc_mid_hist_pc;
+  std::map<uint64_t, hist_entry> stlb_mid_hist_addr;
+  std::map<uint64_t, hist_entry> stlb_mid_hist_pc;
+
   static constexpr unsigned  VPN_BITS = 4;
   static constexpr unsigned  PC_BITS  = 6;
   static constexpr unsigned  BHT_BITS = 12;
