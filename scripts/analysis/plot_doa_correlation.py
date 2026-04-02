@@ -1,24 +1,32 @@
 #!/usr/bin/env python3
-"""plot_doa_correlation.py — scatter plot of STLB DoA rate vs LLC DoA-on-DoA-page fraction.
+"""plot_doa_correlation.py — STLB DoA rate vs LLC DoA-on-DoA-page fraction.
 
-For each trace, parse:
-  - STLB DoA rate   : cpu0_STLB DOA / cpu0_STLB total evictions  (x-axis)
-  - LLC DoA-on-page : LLC DOA_ON_DOA_STLB_PAGE / LLC total DoA    (y-axis)
+Two modes:
 
-Each point is one trace.  Overlaying multiple configs (e.g. baseline, mid_thd1 …)
-on the same axes shows how the mid-insertion threshold shifts the relationship.
+  --bar  (default)
+      Bar chart: one bar per workload showing the % of LLC DoA cache blocks
+      that landed on a DoA STLB page translation, plus a geomean bar.
+      Useful for understanding how strongly LLC dead-on-arrival behaviour is
+      explained by STLB liveness.  Uses the lru/ config by default.
+
+  --scatter
+      Scatter plot with one point per trace: STLB DoA rate (x) vs
+      LLC DoA-on-page rate (y).  Overlaying multiple configs shows how the
+      mid-insertion threshold shifts the relationship.
 
 Usage
 -----
-    # Single config (e.g. baseline from mid_thd sweep)
-    # All mid_thd configs overlaid against the lru/ baseline
-    python3 scripts/analysis/plot_doa_correlation.py results/qmm_mid_<date>/
+    # Bar chart — lru baseline only (default)
+    python3 scripts/analysis/plot_doa_correlation.py results/qmm_pol_<date>/ --configs
 
-    # Restrict to specific configs
+    # Scatter — all mid_thd configs overlaid
+    python3 scripts/analysis/plot_doa_correlation.py results/qmm_mid_<date>/ --scatter
+
+    # Scatter — specific configs only
     python3 scripts/analysis/plot_doa_correlation.py results/qmm_mid_<date>/ \\
-        --configs mid_thd1 mid_thd3 mid_thd5
+        --scatter --configs mid_thd1 mid_thd3 mid_thd5
 
-Output saved to <results_dir>/plots/doa_correlation.png
+Output saved to <results_dir>/plots/doa_correlation_bar.png or doa_correlation.png
 """
 
 import argparse
@@ -95,6 +103,51 @@ PALETTE = ["#1f77b4", "#ff7f0e", "#2ca02c", "#d62728",
            "#9467bd", "#8c564b", "#e377c2", "#7f7f7f"]
 
 
+def geomean(vals):
+    arr = np.clip(np.asarray(vals, dtype=float), 1e-9, None)
+    return float(np.exp(np.mean(np.log(arr))))
+
+
+def plot_bar(rows, title, out_path: Path):
+    """
+    rows : list of (trace_name, stlb_doa_rate, llc_on_page_rate)
+    Plots llc_on_page_rate per workload + geomean bar.
+    """
+    traces = [r[0] for r in rows]
+    values = [r[2] for r in rows]
+    gm     = geomean(values)
+
+    xlabels = traces + ["GeoMean"]
+    xvals   = list(values) + [gm]
+    x       = np.arange(len(xlabels))
+
+    colors = ["#2166ac"] * len(traces) + ["#d73027"]
+
+    fig_w = max(10, len(xlabels) * 0.45 + 2)
+    fig, ax = plt.subplots(figsize=(fig_w, 5))
+
+    bars = ax.bar(x, xvals, color=colors, edgecolor="black", linewidth=0.5)
+
+    # Annotate each bar
+    for bar, v in zip(bars, xvals):
+        ax.text(bar.get_x() + bar.get_width() / 2, bar.get_height() + 0.5,
+                f"{v:.1f}%", ha="center", va="bottom", fontsize=7)
+
+    ax.axvline(len(traces) - 0.5, color="black", linewidth=1.0, linestyle="--")
+    ax.set_xticks(x)
+    ax.set_xticklabels(xlabels, rotation=45, ha="right", fontsize=8)
+    ax.set_ylabel("LLC DoA blocks on a DoA STLB page (%)", fontsize=11)
+    ax.set_ylim(0, min(105, max(xvals) * 1.2))
+    ax.set_title(title, fontsize=11)
+    ax.grid(axis="y", alpha=0.25)
+
+    fig.tight_layout()
+    fig.savefig(out_path, dpi=150, bbox_inches="tight")
+    plt.close(fig)
+    print(f"Saved: {out_path}")
+    print(f"  GeoMean: {gm:.1f}%  (n={len(traces)} workloads)")
+
+
 def pearson_r(x, y):
     x, y = np.array(x), np.array(y)
     if len(x) < 2:
@@ -152,10 +205,13 @@ def main():
     )
     ap.add_argument("results_dir",
                     help="Top-level sweep results directory")
+    ap.add_argument("--scatter", action="store_true",
+                    help="Scatter plot mode (default: bar chart per workload)")
     ap.add_argument("--configs", nargs="*", default=None,
-                    help="Config subdirs to include (default: auto-discover all)")
+                    help="Config subdirs to overlay (default: auto-discover; "
+                         "pass with no args to show lru baseline only)")
     ap.add_argument("--out", default=None,
-                    help="Output PNG path (default: <results_dir>/plots/doa_correlation.png)")
+                    help="Output PNG path (default: <results_dir>/plots/doa_correlation{_bar}.png)")
     args = ap.parse_args()
 
     base = Path(args.results_dir)
@@ -165,25 +221,32 @@ def main():
     plots_dir = base / "plots"
     plots_dir.mkdir(exist_ok=True)
 
-    # Load lru/ as baseline
+    # Always load lru/ as the baseline
     baseline_dir = base / "lru" if (base / "lru").is_dir() else base / "baseline"
     if not baseline_dir.is_dir():
         sys.exit(f"ERROR: no baseline found under {base} (expected lru/ or baseline/)")
-    suite_data = []
     print(f"Loading baseline 'lru' from {baseline_dir} ...")
-    rows = load_config(baseline_dir)
-    if not rows:
-        print("  WARNING: no usable data in lru/ — skipped")
-    else:
-        print(f"  {len(rows)} traces")
-        suite_data.append(("lru", rows))
+    lru_rows = load_config(baseline_dir)
+    if not lru_rows:
+        sys.exit("ERROR: no usable data in lru/")
+    print(f"  {len(lru_rows)} traces")
 
-    # Discover or validate configs from results_dir
+    label = base.name
+
+    # ── Bar mode (default) ────────────────────────────────────────────────────
+    if not args.scatter:
+        out_path = Path(args.out) if args.out else plots_dir / "doa_correlation_bar.png"
+        plot_bar(lru_rows,
+                 f"LLC DoA blocks on a DoA STLB page — {label} / lru",
+                 out_path)
+        return
+
+    # ── Scatter mode ──────────────────────────────────────────────────────────
+    suite_data = [("lru", lru_rows)]
+
     if args.configs is not None:
-        # Explicit list (may be empty — means lru-only plot)
-        configs = args.configs
+        configs = args.configs  # may be empty → lru only
     else:
-        # Auto-discover: mid_thd* in numeric order, skip baseline and plots
         all_dirs = [d.name for d in base.iterdir()
                     if d.is_dir() and d.name not in ("plots", "lru", "baseline")]
         def sort_key(name):
@@ -191,8 +254,7 @@ def main():
             return int(m.group(1)) if m else float("inf")
         configs = sorted(all_dirs, key=sort_key)
 
-    print(f"Configs: {configs}")
-
+    print(f"Overlay configs: {configs or '(none)'}")
     for cfg in configs:
         cfg_dir = base / cfg
         if not cfg_dir.is_dir():
@@ -206,11 +268,7 @@ def main():
         print(f"  {len(rows)} traces")
         suite_data.append((cfg, rows))
 
-    if not suite_data:
-        sys.exit("ERROR: no usable data found")
-
     out_path = Path(args.out) if args.out else plots_dir / "doa_correlation.png"
-    label = base.name
     plot_correlation(suite_data, f"STLB DoA → LLC DoA-on-page correlation — {label}", out_path)
 
 
