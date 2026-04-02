@@ -179,7 +179,8 @@ def main():
         suite_data.append(("lru", rows))
 
     # Discover or validate configs from results_dir
-    if args.configs:
+    if args.configs is not None:
+        # Explicit list (may be empty — means lru-only plot)
         configs = args.configs
     else:
         # Auto-discover: mid_thd* in numeric order, skip baseline and plots
