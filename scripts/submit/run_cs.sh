@@ -74,7 +74,8 @@ INFO
 
 # Run the binary
 echo "Run: ${RUN_LABEL}  trace: ${TRACE_NAME}"
-"$BIN" --warmup_instructions "$WARMUP" --simulation_instructions "$SIM" "$TRACE_FILE" \
+"$BIN" --warmup_instructions "$WARMUP" --simulation_instructions "$SIM" \
+  --pc-stats "${RUN_DIR}/pc_liveness.csv" "$TRACE_FILE" \
   > "${RUN_DIR}/champsim.out" 2> "${RUN_DIR}/champsim.err"
 rc=$?
 

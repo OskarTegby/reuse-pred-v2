@@ -49,13 +49,12 @@ Usage
     python3 scripts/analyze_pc_liveness.py results/maz_<date>/baseline/ \\
         --cache LLC --scatter --lorenz
 
-Limitation: plain_printer.cc caps output at MAX_PC_ROWS (default 30) PCs per
-workload.  Important PCs (high share + high DoA) appear in most workloads and
-are therefore captured.  Raise MAX_PC_ROWS for exhaustive coverage.
+Per-PC stats are read from pc_liveness.csv written alongside champsim.out.
+All PCs are captured (no truncation).
 """
 
 import argparse
-import re
+import csv
 import sys
 from collections import defaultdict
 from pathlib import Path
@@ -79,32 +78,28 @@ X_COMMON = np.linspace(0, 1, 500)
 # ── Parsing ───────────────────────────────────────────────────────────────────
 
 def parse_pc_liveness(path: Path, cache_name: str):
-    """Parse PER-PC LIVENESS block from one *.out file.
+    """Parse per-PC liveness data from pc_liveness.csv next to path.
 
     Returns (entries, truncated) where entries is a list of
-    (ip, doa, mostly_dead, mostly_alive) and truncated is True if the
-    plain_printer MAX_PC_ROWS cap was hit.
+    (ip, doa, mostly_dead, mostly_alive).
     """
-    text = path.read_text(errors="replace")
-    header_pat = re.compile(
-        r"^" + re.escape(cache_name) + r" PER-PC LIVENESS \((\d+) PCs",
-        re.MULTILINE,
-    )
-    m = header_pat.search(text)
-    if not m:
+    csv_path = path.parent / "pc_liveness.csv"
+    if not csv_path.exists():
         return None, False
-    total_pcs = int(m.group(1))
-    row_pat = re.compile(
-        r"0x([0-9a-fA-F]+)\s+(\d+)\s+"
-        r"(\d+)\s+\([\d.]+%\)\s+"
-        r"(\d+)\s+\([\d.]+%\)\s+"
-        r"(\d+)\s+\([\d.]+%\)"
-    )
-    entries = [
-        (int(rm.group(1), 16), int(rm.group(3)), int(rm.group(4)), int(rm.group(5)))
-        for rm in row_pat.finditer(text[m.start():])
-    ]
-    return entries, len(entries) < total_pcs
+    entries = []
+    try:
+        with csv_path.open(newline="") as f:
+            for row in csv.DictReader(f):
+                if row["cache"] == cache_name:
+                    entries.append((
+                        int(row["pc"], 16),
+                        int(row["doa"]),
+                        int(row["mostly_dead"]),
+                        int(row["mostly_alive"]),
+                    ))
+    except Exception:
+        return None, False
+    return entries or None, False
 
 
 def pool_suite(results_dir: Path, cache_name: str, trace_filter: str | None):
@@ -151,8 +146,7 @@ def pool_suite(results_dir: Path, cache_name: str, trace_filter: str | None):
         print(f"  Note: {n_skipped}/{n_files + n_skipped} files had no PER-PC LIVENESS block "
               f"for {cache_name} — skipped")
     if n_truncated:
-        print(f"  Note: {n_truncated}/{n_files} files had truncated per-PC tables "
-              "(raise MAX_PC_ROWS in plain_printer.cc for full coverage)")
+        print(f"  Note: {n_truncated}/{n_files} files had truncated per-PC tables")
     return pool, n_files, n_truncated
 
 

@@ -64,6 +64,8 @@ int main(int argc, char** argv)
   uint64_t warmup_instructions = 1000000, simulation_instructions = 10000000;
   bool knob_json_out = false;
   std::ofstream json_file;
+  bool knob_pc_stats_out = false;
+  std::ofstream pc_stats_file;
 
   // check to see if knobs changed using getopt_long()
   int traces_encountered = 0;
@@ -72,6 +74,7 @@ int main(int argc, char** argv)
                                          {"hide_heartbeat", no_argument, 0, 'h'},
                                          {"cloudsuite", no_argument, 0, 'c'},
                                          {"json", optional_argument, 0, 'j'},
+                                         {"pc-stats", optional_argument, 0, 'p'},
                                          {"traces", no_argument, &traces_encountered, 1},
                                          {0, 0, 0, 0}};
 
@@ -95,6 +98,12 @@ int main(int argc, char** argv)
       knob_json_out = true;
       if (optarg)
         json_file.open(optarg);
+      break;
+    case 'p':
+      knob_pc_stats_out = true;
+      if (optarg)
+        pc_stats_file.open(optarg);
+      break;
     case 0:
       break;
     default:
@@ -135,7 +144,10 @@ int main(int argc, char** argv)
   std::cout << "ChampSim completed all CPUs" << std::endl;
   std::cout << std::endl;
 
-  champsim::plain_printer default_print{std::cout};
+  std::ostream* pc_os = knob_pc_stats_out
+      ? (pc_stats_file.is_open() ? static_cast<std::ostream*>(&pc_stats_file) : &std::cout)
+      : nullptr;
+  champsim::plain_printer default_print{std::cout, pc_os};
   default_print.print(phase_stats);
 
   for (CACHE& cache : gen_environment.cache_view())

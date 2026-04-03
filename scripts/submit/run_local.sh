@@ -122,7 +122,8 @@ sim=${SIM}
 INFO
 
   DPPRED=$dppred CBPRED=$cbpred PCONF_THD=$pconf_thd BCONF_THD=$bconf_thd \
-    "$BIN" --warmup_instructions "$WARMUP" --simulation_instructions "$SIM" "$trace_file" \
+    "$BIN" --warmup_instructions "$WARMUP" --simulation_instructions "$SIM" \
+    --pc-stats "${run_dir}/pc_liveness.csv" "$trace_file" \
     > "${run_dir}/champsim.out" 2> "${run_dir}/champsim.err"
 
   echo "  done: ${exp_name} / ${trace_name} (exit $?)"
