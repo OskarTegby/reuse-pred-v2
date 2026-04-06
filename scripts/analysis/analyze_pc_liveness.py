@@ -55,6 +55,7 @@ All PCs are captured (no truncation).
 
 import argparse
 import csv
+import re
 import sys
 from collections import defaultdict
 from pathlib import Path
@@ -441,7 +442,7 @@ def plot_top_k_composition(pool: dict, suite_label: str, cache_name: str,
     rate_order = np.argsort(dead_rate)[::-1]
     cumsum = np.cumsum(dead[rate_order])
     k = int(np.searchsorted(cumsum, coverage * grand_dead)) + 1
-    k = min(k, len(ips))
+    k = min(k, len(ips), 100)
 
     idx_k  = rate_order[:k]
     ips_k  = ips[idx_k]
