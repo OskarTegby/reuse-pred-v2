@@ -216,9 +216,10 @@ void CACHE::record_pc_liveness(const BLOCK& victim, liveness_class lv)
 //               Left unchanged on DoA: a DoA eviction is not a mostly-dead
 //               eviction, but it does not disprove a prior mostly-dead pattern.
 //
-// Both updates are gated on the predictor-enable conditions, so when
-// predictors are disabled neither counter changes and lru_mid falls back
-// to plain LRU behaviour.
+// The predictor-table updates below are gated on dppred/cbpred.
+// The insertion-policy tables (llc_mid_hist_*, stlb_mid_hist_*) are always
+// updated so that lru_mid maintains its history independently of whether the
+// bypass predictors are enabled.
 void CACHE::update_eviction_counters(const BLOCK& victim, liveness_class lv)
 {
   auto update = [lv](hist_entry& e) {
