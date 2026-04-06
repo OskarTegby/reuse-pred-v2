@@ -5,7 +5,7 @@
 # and predictor-augmented variants, at fixed default thresholds (pconf=6, bconf=6).
 # For a threshold sweep, use sweep_cs.sh instead.
 #
-# Usage: ./sweep_policy.sh {maz|qmm|dpc3|google|test} [--debug] [--warmup N] [--sim N] [--pref] [--paper-pref]
+# Usage: ./sweep_policy.sh {maz|qmm|dpc3|google|test} [--debug] [--warmup N] [--sim N] [--pref] [--paper-pref] [--mid-thd N] [--mid-key addr|pc]
 #
 # --pref        Also submit the 8 prefetch variants (L1I=next_line_instr, L1D=ip_stride, L2C=spp_dev).
 #               Requires champsim_{policy}_pref binaries built with ./build_all.sh --pref.
@@ -54,6 +54,9 @@ WITH_PREF=0
 WITH_PAPER_PREF=0
 WARMUP_OVERRIDE=""
 SIM_OVERRIDE=""
+MID_THD=1
+MID_KEY_STR="addr"
+MID_KEY_VAL=0
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -63,14 +66,22 @@ while [[ $# -gt 0 ]]; do
     --paper-pref)   WITH_PAPER_PREF=1; shift ;;
     --warmup)       WARMUP_OVERRIDE="$2"; shift 2 ;;
     --sim)          SIM_OVERRIDE="$2"; shift 2 ;;
+    --mid-thd)      MID_THD="$2"; shift 2 ;;
+    --mid-key)
+      case "$2" in
+        addr) MID_KEY_STR="addr"; MID_KEY_VAL=0 ;;
+        pc)   MID_KEY_STR="pc";   MID_KEY_VAL=1 ;;
+        *) echo "Unknown --mid-key value: $2 (expected addr or pc)" >&2; exit 2 ;;
+      esac
+      shift 2 ;;
     *) echo "Unknown argument: $1" >&2
-       echo "Usage: $0 {maz|qmm|dpc3|google|test} [--debug] [--pref] [--paper-pref] [--warmup N] [--sim N]" >&2
+       echo "Usage: $0 {maz|qmm|dpc3|google|test} [--debug] [--pref] [--paper-pref] [--warmup N] [--sim N] [--mid-thd N] [--mid-key addr|pc]" >&2
        exit 2 ;;
   esac
 done
 
 if [ -z "$token" ]; then
-  echo "Usage: $0 {maz|qmm|dpc3|google|test} [--debug] [--pref] [--warmup N] [--sim N]" >&2
+  echo "Usage: $0 {maz|qmm|dpc3|google|test} [--debug] [--pref] [--paper-pref] [--warmup N] [--sim N] [--mid-thd N] [--mid-key addr|pc]" >&2
   exit 2
 fi
 
@@ -80,7 +91,7 @@ SHARED_TRACES=/home/users/shared/traces
 case "$token" in
   maz|mazumdar)
     WARMUP=100000000
-    SIM=1000000000
+    SIM=100000000
     TRACE_DIR="${PROJECT_ROOT}/trace-files/MAZUMDAR"
     TRACE_EXT="champsimtrace.xz"
     ;;
@@ -178,6 +189,7 @@ fi
 
 echo "Submitting ${#configs[@]} configurations × ${N} traces (tasks ${TASK_RANGE})"
 echo "Warmup / Sim  : ${WARMUP} / ${SIM}"
+echo "mid_thd / key : ${MID_THD} / ${MID_KEY_STR}"
 echo "Results base  : results/${BASE_LABEL}/"
 echo "Logs          : logs/${BASE_LABEL}/"
 echo ""
@@ -201,7 +213,7 @@ for config in "${configs[@]}"; do
              -o "${LOG_DIR}/" \
              -e "${LOG_DIR}/" \
              -wd "$PROJECT_ROOT" \
-             -v WARMUP="$WARMUP",SIM="$SIM",TRACE_DIR="$TRACE_DIR",TRACE_EXT="$TRACE_EXT",RUN_LABEL="$RUN_LABEL",BINARY="$binary",DPPRED="$dppred",CBPRED="$cbpred",PCONF_THD="$pconf_thd",BCONF_THD="$bconf_thd" \
+             -v WARMUP="$WARMUP",SIM="$SIM",TRACE_DIR="$TRACE_DIR",TRACE_EXT="$TRACE_EXT",RUN_LABEL="$RUN_LABEL",BINARY="$binary",DPPRED="$dppred",CBPRED="$cbpred",PCONF_THD="$pconf_thd",BCONF_THD="$bconf_thd",MID_THD="$MID_THD",MID_KEY="$MID_KEY_VAL" \
              "${PROJECT_ROOT}/scripts/submit/run_cs.sh")
   jid=$(echo "$raw" | awk '/Your job/ {print $3}' | cut -d. -f1)
   echo "  [jid=${jid}] ${exp_name}  (${binary})"
