@@ -32,6 +32,15 @@
 #include "memory_class.h"
 #include "operable.h"
 
+// Cumulative per-PC liveness event counts.  Only ever incremented, never
+// reset, so they record total event frequencies across the whole simulation.
+struct pc_liveness_entry {
+  uint64_t doa          = 0;
+  uint64_t mostly_dead  = 0;
+  uint64_t mostly_alive = 0;
+  uint64_t total() const { return doa + mostly_dead + mostly_alive; }
+};
+
 struct cache_stats {
   std::string name;
   // prefetch stats
@@ -65,10 +74,18 @@ struct cache_stats {
   //                    valid, but the measurement carries no useful timing info.
   uint64_t evict_zero_residence = 0;
 
+  // LLC DoA blocks whose PFN has a currently-resident DoA STLB entry.
+  // Denominator is evict_doa.  Only meaningful for LLC.
+  uint64_t evict_doa_on_doa_stlb_page = 0;
+
   // Hit-count distribution at eviction.
   // Bin i = evicted with exactly i hits; bin HIT_HIST_BINS-1 = that many or more.
   static constexpr std::size_t HIT_HIST_BINS = 9; // bins 0..7 + "8+"
   std::array<uint64_t, HIT_HIST_BINS> evict_hit_hist = {};
+
+  // Per-PC liveness event counts (cumulative, never reset).
+  std::map<uint64_t, pc_liveness_entry> llt_pc_stats; // STLB: [ip] → counts
+  std::map<uint64_t, pc_liveness_entry> llc_pc_stats; // LLC:  [ip] → counts
 };
 
 struct cache_queue_stats {
@@ -151,6 +168,7 @@ class CACHE : public champsim::operable, public MemoryRequestConsumer, public Me
     uint64_t mostly_dead = 0;
   };
 
+
   // Shared physical-frame queue: dpPred fills it; cbPred reads it.
   inline static std::deque<uint64_t> pfq{};
   inline static uint64_t pfq_cap = 8;
@@ -163,11 +181,32 @@ class CACHE : public champsim::operable, public MemoryRequestConsumer, public Me
   uint64_t mid_thd   = 1; // min DoA-or-mostly-dead evictions before mid-insertion triggers
   uint64_t st_size = 2;   // shadow table capacity
 
+  // Set by cpu0_STLB at initialize(); used by LLC to scan for DoA page correlations.
+  inline static const CACHE* stlb_ptr = nullptr;
+
   std::map<uint64_t, std::map<uint64_t, hist_entry>> phist; // [vpn_hash][pc_hash] → entry
   std::deque<std::pair<uint64_t, uint64_t>> shadow_table;   // recently bypassed (VPN, translation data)
   std::map<uint64_t, hist_entry> bhist;                      // [block_hash] → entry
-  std::map<uint64_t, hist_entry> llt_pc_stats;               // [ip] → per-PC LLT liveness stats (observation only)
-  std::map<uint64_t, hist_entry> llc_pc_stats;               // [ip] → per-PC LLC liveness stats (observation only)
+
+  // Selects which history signal drives needs_mid_insertion().
+  // Controlled by the MID_KEY env var (0 = addr, 1 = pc; default 0).
+  enum class mid_key_t : uint8_t { addr = 0, pc = 1 };
+  mid_key_t mid_key = mid_key_t::addr;
+
+  // Unbounded insertion-policy tables: always updated at eviction regardless
+  // of predictor state.  No hashing — no collisions.  Budget is intentionally
+  // unrealistic for now.  LLC and STLB keep separate tables because they track
+  // different address granularities (cache lines vs pages) and have independent
+  // liveness behaviour.
+  //   llc_mid_hist_addr  : LLC, keyed by block address (full_addr >> OFFSET_BITS)
+  //   llc_mid_hist_pc    : LLC, keyed by the PC that triggered the access
+  //   stlb_mid_hist_addr : STLB, keyed by VPN (full_addr >> OFFSET_BITS)
+  //   stlb_mid_hist_pc   : STLB, keyed by the PC that triggered the access
+  // needs_mid_insertion() consults only the table selected by mid_key.
+  std::map<uint64_t, hist_entry> llc_mid_hist_addr;
+  std::map<uint64_t, hist_entry> llc_mid_hist_pc;
+  std::map<uint64_t, hist_entry> stlb_mid_hist_addr;
+  std::map<uint64_t, hist_entry> stlb_mid_hist_pc;
 
   static constexpr unsigned  VPN_BITS = 4;
   static constexpr unsigned  PC_BITS  = 6;
@@ -184,7 +223,8 @@ class CACHE : public champsim::operable, public MemoryRequestConsumer, public Me
   bool cbpred_bypass(const PACKET& fill_mshr);                  // true → skip LLC fill
   liveness_class classify_liveness(const BLOCK& victim) const;  // compute liveness class + run invariant asserts
   void update_eviction_counters(const BLOCK& victim, liveness_class lv); // update phist/bhist counters
-  void record_eviction_liveness(const BLOCK& victim, liveness_class lv); // record liveness stats
+  void record_eviction_liveness(const BLOCK& victim, liveness_class lv); // record aggregate liveness stats
+  void record_pc_liveness(const BLOCK& victim, liveness_class lv);       // accumulate per-PC liveness event counts
   bool needs_mid_insertion(uint64_t full_addr, uint64_t ip) const;        // true → insert/refresh at set midpoint
 
 public:
@@ -302,6 +342,8 @@ public:
 
   const std::bitset<NUM_REPLACEMENT_MODULES> repl_type;
   const std::bitset<NUM_PREFETCH_MODULES> pref_type;
+
+  ~CACHE() { if (stlb_ptr == this) stlb_ptr = nullptr; }
 
   // constructor
   CACHE(std::string v1, double freq_scale, uint32_t v2, uint32_t v3, uint32_t v8, uint32_t fill_lat, long int max_tag, long int max_fill, unsigned offset_bits,

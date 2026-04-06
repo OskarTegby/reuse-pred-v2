@@ -13,6 +13,7 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 
 # ── Argument parsing ──────────────────────────────────────────────────────────
 token=""
@@ -42,11 +43,11 @@ fi
 
 # ── Trace-set settings ────────────────────────────────────────────────────────
 case "$token" in
-  maz|mazumdar) TRACE_DIR="${SCRIPT_DIR}/trace-files/MAZUMDAR" ;;
-  qmm)          TRACE_DIR="${SCRIPT_DIR}/trace-files/QMM" ;;
+  maz|mazumdar) TRACE_DIR="${PROJECT_ROOT}/trace-files/MAZUMDAR" ;;
+  qmm)          TRACE_DIR="${PROJECT_ROOT}/trace-files/QMM" ;;
 esac
 
-BIN="${SCRIPT_DIR}/bin/champsim"
+BIN="${PROJECT_ROOT}/bin/champsim"
 if [ ! -x "$BIN" ]; then
   echo "ERROR: binary not found or not executable: ${BIN}" >&2
   echo "Run 'make -j\$(nproc)' first." >&2
@@ -106,7 +107,7 @@ run_task() {
   trace_name=$(basename "$trace_file" .champsimtrace.xz)
 
   local run_label="${BASE_LABEL}/${exp_name}"
-  local run_dir="${SCRIPT_DIR}/results/${run_label}/${trace_name}"
+  local run_dir="${PROJECT_ROOT}/results/${run_label}/${trace_name}"
   mkdir -p "$run_dir"
 
   cat > "${run_dir}/run_info.txt" <<INFO
@@ -121,14 +122,15 @@ sim=${SIM}
 INFO
 
   DPPRED=$dppred CBPRED=$cbpred PCONF_THD=$pconf_thd BCONF_THD=$bconf_thd \
-    "$BIN" --warmup_instructions "$WARMUP" --simulation_instructions "$SIM" "$trace_file" \
+    "$BIN" --warmup_instructions "$WARMUP" --simulation_instructions "$SIM" \
+    --pc-stats "${run_dir}/pc_liveness.csv" "$trace_file" \
     > "${run_dir}/champsim.out" 2> "${run_dir}/champsim.err"
 
   echo "  done: ${exp_name} / ${trace_name} (exit $?)"
 }
 
 export -f run_task
-export WARMUP SIM BIN SCRIPT_DIR BASE_LABEL
+export WARMUP SIM BIN PROJECT_ROOT BASE_LABEL
 
 running=0
 declare -a pids=()

@@ -16,7 +16,7 @@
 // cache.cc).
 //
 //   Mid-insertion fill:    timestamp = current-set median  (not MRU)
-//   Mid-insertion hit:     timestamp = current-set median  (refresh to midpoint, not MRU)
+//   Mid-insertion hit:     no change                       (no promotion)
 //   Normal (or non-LLC/STLB): timestamp = current_cycle    (standard LRU)
 //
 // "Median" is computed as the (NUM_WAY/2)-th smallest last_used timestamp in
@@ -68,7 +68,14 @@ void CACHE::update_replacement_state(uint32_t triggering_cpu, uint32_t set, uint
   auto& way_cycle = ::last_used_cycles[this].at(set * NUM_WAY + way);
 
   if ((NAME == "cpu0_STLB" || NAME == "LLC") && needs_mid_insertion(full_addr, ip)) {
-    // ── Mid-point insertion / refresh ────────────────────────────────────────
+    // ── Mid-point insertion / no-promotion hit ───────────────────────────────
+    // On a fill, place the block at the set's current median recency position.
+    // On a hit, leave the timestamp unchanged — mid-tagged blocks never get
+    // promoted, so they naturally drift toward eviction unless they lose their
+    // mid-insertion flag (i.e., their history entry flips back to live).
+    if (hit)
+      return;
+
     // Compute the (NUM_WAY/2)-th smallest timestamp in this set.  nth_element
     // is O(n) and n == NUM_WAY (≤ 16 in the default config), so this is cheap.
     const auto begin = std::next(::last_used_cycles[this].cbegin(), set * NUM_WAY);
@@ -77,8 +84,6 @@ void CACHE::update_replacement_state(uint32_t triggering_cpu, uint32_t set, uint
     std::nth_element(tmp.begin(), tmp.begin() + NUM_WAY / 2, tmp.end());
     const uint64_t mid = tmp[NUM_WAY / 2];
 
-    // Both fill and hit set the timestamp to the current median.
-    // A hit refreshes the block to the midpoint, not to MRU.
     way_cycle = mid;
   } else {
     // ── Normal LRU: promote/insert at MRU ────────────────────────────────────

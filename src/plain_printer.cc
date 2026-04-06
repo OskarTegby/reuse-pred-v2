@@ -99,6 +99,14 @@ void champsim::plain_printer::print(CACHE::stats_type stats)
              << "  MOSTLY_DEAD: " << s.evict_mostly_dead  << " (" << 100.0 * s.evict_mostly_dead  / total << "%)"
              << "  MOSTLY_ALIVE: "<< s.evict_mostly_alive << " (" << 100.0 * s.evict_mostly_alive / total << "%)"
              << std::endl;
+      if (s.name == "LLC") {
+        const double doa_total = static_cast<double>(s.evict_doa ? s.evict_doa : 1);
+        stream << s.name << " LIVENESS DOA_ON_DOA_STLB_PAGE: "
+               << s.evict_doa_on_doa_stlb_page
+               << " (" << std::fixed << std::setprecision(1)
+               << 100.0 * s.evict_doa_on_doa_stlb_page / doa_total << "% of LLC DoA)"
+               << std::endl;
+      }
       stream << s.name << " LIVENESS HIT_HIST:";
       for (std::size_t i = 0; i < cache_stats::HIT_HIST_BINS; ++i) {
         if (i + 1 < cache_stats::HIT_HIST_BINS)
@@ -131,6 +139,28 @@ void champsim::plain_printer::print(CACHE::stats_type stats)
                << " but evict_total is " << s.evict_total
                << " (delta " << static_cast<int64_t>(hist_sum) - static_cast<int64_t>(s.evict_total) << ")"
                << std::endl;
+
+      // ── Per-PC liveness breakdown (written to pc_stream as CSV) ──────────
+      const auto& pc_map = (s.name == "cpu0_STLB") ? s.llt_pc_stats : s.llc_pc_stats;
+      if (!pc_map.empty() && pc_stream != nullptr) {
+        std::vector<std::pair<uint64_t, pc_liveness_entry>> sorted(pc_map.begin(), pc_map.end());
+        std::sort(sorted.begin(), sorted.end(),
+                  [](const auto& a, const auto& b) { return a.second.total() > b.second.total(); });
+
+        if (!pc_header_written) {
+          *pc_stream << "cache,pc,evictions,doa,mostly_dead,mostly_alive\n";
+          pc_header_written = true;
+        }
+        for (const auto& [ip, e] : sorted) {
+          *pc_stream << s.name
+                     << ",0x" << std::hex << std::setw(16) << std::setfill('0') << ip
+                     << std::dec << std::setfill(' ')
+                     << "," << e.total()
+                     << "," << e.doa
+                     << "," << e.mostly_dead
+                     << "," << e.mostly_alive << "\n";
+        }
+      }
     }
     // stream << " AVERAGE MISS LATENCY: " << (stats.total_miss_latency)/TOTAL_MISS << " cycles " << stats.total_miss_latency << "/" << TOTAL_MISS<< std::endl;
   }

@@ -20,7 +20,10 @@ export PCONF_THD=${PCONF_THD:-0}
 export BCONF_THD=${BCONF_THD:-0}
 export MID_THD=${MID_THD:-1}
 
-BIN=./bin/champsim
+# Binary selection: BINARY env var selects the per-policy executable.
+# Defaults to champsim_lru_mid for backwards compatibility.
+BINARY=${BINARY:-champsim_lru_mid}
+BIN="./bin/${BINARY}"
 
 # Build sorted list of traces at runtime
 mapfile -t TRACES < <(find "${TRACE_DIR}" -name "*.${TRACE_EXT}" | sort)
@@ -59,6 +62,7 @@ fi
 cat > "${RUN_DIR}/run_info.txt" <<INFO
 run_label=${RUN_LABEL}
 trace=${TRACE_NAME}
+binary=${BINARY}
 dppred=${DPPRED}
 cbpred=${CBPRED}
 pconf_thd=${PCONF_THD}
@@ -70,7 +74,8 @@ INFO
 
 # Run the binary
 echo "Run: ${RUN_LABEL}  trace: ${TRACE_NAME}"
-"$BIN" --warmup_instructions "$WARMUP" --simulation_instructions "$SIM" "$TRACE_FILE" \
+"$BIN" --warmup_instructions "$WARMUP" --simulation_instructions "$SIM" \
+  --pc-stats="${RUN_DIR}/pc_liveness.csv" "$TRACE_FILE" \
   > "${RUN_DIR}/champsim.out" 2> "${RUN_DIR}/champsim.err"
 rc=$?
 

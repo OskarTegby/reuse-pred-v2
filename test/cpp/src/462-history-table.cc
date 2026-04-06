@@ -1,5 +1,12 @@
-// Tests that phist (used for cpu0_STLB / dpPred) accumulates the correct
-// doa and mostly_dead counters and that needs_mid_insertion() reflects them.
+// Tests that the mid-insertion history tables (stlb_mid_hist_addr and
+// stlb_mid_hist_pc for the STLB, llc_mid_hist_addr and llc_mid_hist_pc for
+// the LLC) accumulate the correct doa and mostly_dead counters and that
+// needs_mid_insertion() reflects them.
+//
+// These tables are updated unconditionally at every LLC/STLB eviction,
+// regardless of whether the bypass predictors (DPPRED/CBPRED) are enabled.
+// DPPRED is left unset in these tests to confirm that mid-insertion history
+// is independent of the predictor.
 //
 // The counters are private, so they are tested through their sole observable
 // effect: needs_mid_insertion() returning true causes lru_mid to place the
@@ -7,7 +14,7 @@
 // occupies a lower recency position and therefore gets evicted sooner than
 // one inserted at MRU.
 //
-// Cache setup: 3-way cpu0_STLB, lru_mid replacement, DPPRED=1.
+// Cache setup: 3-way cpu0_STLB, lru_mid replacement, DPPRED=0 (default).
 // With 3 ways, NUM_WAY/2 = 1.  nth_element at index 1 returns the median of
 // the three current last_used timestamps.
 //
@@ -67,10 +74,10 @@ void fill(MRP& ul, Array& elems, uint64_t addr, uint64_t ip, uint64_t& next_id)
 // Two subsequent fills (F, G) should evict A; if A is gone, the probe misses.
 
 SCENARIO("doa counter: after a DoA eviction needs_mid_insertion is true for that address") {
-  ::setenv("DPPRED", "1", 1);
-  ::unsetenv("PCONF_THD"); // keep default threshold (6) so no bypass fires
+  ::unsetenv("DPPRED"); // mid-insertion history is populated regardless of predictor state
+  ::unsetenv("MID_KEY"); // default: addr-based (MID_KEY=0)
 
-  GIVEN("A 3-way cpu0_STLB with lru_mid and DPPRED=1") {
+  GIVEN("A 3-way cpu0_STLB with lru_mid and DPPRED disabled") {
     constexpr uint64_t hit_latency  = 2;
     constexpr uint64_t fill_latency = 2;
     do_nothing_MRC mock_ll;
@@ -132,7 +139,6 @@ SCENARIO("doa counter: after a DoA eviction needs_mid_insertion is true for that
     }
   }
 
-  ::unsetenv("DPPRED");
 }
 
 // ── doa counter resets after a non-DoA eviction ──────────────────────────────
@@ -141,10 +147,10 @@ SCENARIO("doa counter: after a DoA eviction needs_mid_insertion is true for that
 // should survive two subsequent fills.
 
 SCENARIO("doa counter: resets after a non-DoA eviction (block was hit)") {
-  ::setenv("DPPRED", "1", 1);
-  ::unsetenv("PCONF_THD");
+  ::unsetenv("DPPRED");
+  ::unsetenv("MID_KEY");
 
-  GIVEN("A 3-way cpu0_STLB with lru_mid and DPPRED=1") {
+  GIVEN("A 3-way cpu0_STLB with lru_mid and DPPRED disabled") {
     constexpr uint64_t hit_latency  = 2;
     constexpr uint64_t fill_latency = 2;
     do_nothing_MRC mock_ll;
@@ -224,7 +230,6 @@ SCENARIO("doa counter: resets after a non-DoA eviction (block was hit)") {
     }
   }
 
-  ::unsetenv("DPPRED");
 }
 
 // ── mostly_dead counter increments on mostly-dead eviction ───────────────────
@@ -233,10 +238,10 @@ SCENARIO("doa counter: resets after a non-DoA eviction (block was hit)") {
 // the next fill → A is evicted sooner than if it were at MRU.
 
 SCENARIO("mostly_dead counter: after a mostly-dead eviction needs_mid_insertion is true") {
-  ::setenv("DPPRED", "1", 1);
-  ::unsetenv("PCONF_THD");
+  ::unsetenv("DPPRED");
+  ::unsetenv("MID_KEY");
 
-  GIVEN("A 3-way cpu0_STLB with lru_mid and DPPRED=1") {
+  GIVEN("A 3-way cpu0_STLB with lru_mid and DPPRED disabled") {
     constexpr uint64_t hit_latency  = 2;
     constexpr uint64_t fill_latency = 2;
     do_nothing_MRC mock_ll;
@@ -300,5 +305,4 @@ SCENARIO("mostly_dead counter: after a mostly-dead eviction needs_mid_insertion 
     }
   }
 
-  ::unsetenv("DPPRED");
 }
