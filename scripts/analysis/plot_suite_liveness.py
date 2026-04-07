@@ -351,6 +351,156 @@ def plot_hit_cdf_per_workload(suites, cache, out_path: Path):
     print(f"Saved: {out_path}")
 
 
+# ── Per-PC parsing ───────────────────────────────────────────────────────────
+
+_PC_HEADER = re.compile(r"^(\S+) PER-PC LIVENESS \(\d+ PCs\):", re.MULTILINE)
+_PC_ROW    = re.compile(
+    r"^\s+(0x[0-9a-fA-F]+)\s+(\d+)\s+(\d+)\s+\([\d.]+%\)\s+(\d+)\s+\([\d.]+%\)\s+(\d+)",
+    re.MULTILINE,
+)
+
+
+def parse_per_pc(path: Path, cache: str):
+    """Return (evictions, doa, mostly_dead) arrays for every PC in cache's PER-PC block."""
+    text = path.read_text(errors="replace")
+    start = None
+    for m in _PC_HEADER.finditer(text):
+        if m.group(1) == cache:
+            start = m.end()
+            break
+    if start is None:
+        return np.zeros(0), np.zeros(0), np.zeros(0)
+    next_hdr = _PC_HEADER.search(text, start)
+    section  = text[start: next_hdr.start() if next_hdr else len(text)]
+    rows = _PC_ROW.findall(section)
+    if not rows:
+        return np.zeros(0), np.zeros(0), np.zeros(0)
+    return (np.array([int(r[1]) for r in rows], dtype=float),
+            np.array([int(r[2]) for r in rows], dtype=float),
+            np.array([int(r[3]) for r in rows], dtype=float))
+
+
+def load_suite_pc(results_dir: Path, cache: str):
+    """Return list of (workload, evictions_arr, doa_arr, md_arr) for workloads with PC data."""
+    files = sorted(results_dir.glob("*/champsim.out"))
+    if not files:
+        files = sorted(results_dir.glob("*.out"))
+    out = []
+    for f in files:
+        wl = f.parent.name if f.name == "champsim.out" else f.stem
+        ev, doa, md = parse_per_pc(f, cache)
+        if ev.size > 0:
+            out.append((wl, ev, doa, md))
+    return out
+
+
+# ── Per-PC Lorenz helpers ─────────────────────────────────────────────────────
+
+def _pc_lorenz(evictions, doa_or_md):
+    """Lorenz curve sorted ascending by PC eviction count.
+
+    x = cumulative evictions / total,  y = cumulative dead-class / total.
+    Above diagonal: rarely-evicted PCs have a disproportionately high dead rate.
+    """
+    order    = np.argsort(evictions)
+    cum_ev   = np.concatenate([[0.0], np.cumsum(evictions[order])])
+    cum_d    = np.concatenate([[0.0], np.cumsum(doa_or_md[order])])
+    total_ev = cum_ev[-1]
+    total_d  = cum_d[-1]
+    if total_ev == 0 or total_d == 0:
+        return np.array([0.0, 1.0]), np.array([0.0, 1.0])
+    return cum_ev / total_ev, cum_d / total_d
+
+
+def _pool_pc(wl_list):
+    """Concatenate per-workload PC arrays into a single pooled suite-level array."""
+    return (np.concatenate([e for _, e, _, _ in wl_list]),
+            np.concatenate([d for _, _, d, _ in wl_list]),
+            np.concatenate([m for _, _, _, m in wl_list]))
+
+
+def _lorenz_panel(ax, x, y, color, label, linewidth=2, alpha=1.0, zorder=2, linestyle="-"):
+    ax.plot(x, y, color=color, linewidth=linewidth, alpha=alpha,
+            label=label, zorder=zorder, linestyle=linestyle)
+
+
+def _finish_lorenz_ax(ax, cache_name, class_label):
+    ax.plot([0, 1], [0, 1], color="gray", linewidth=1, linestyle="--",
+            label="Uniform rate", zorder=1)
+    ax.set_xlim(0, 1); ax.set_ylim(0, 1)
+    ax.xaxis.set_major_formatter(mticker.PercentFormatter(xmax=1))
+    ax.yaxis.set_major_formatter(mticker.PercentFormatter(xmax=1))
+    ax.set_xlabel("Cumulative % of total evictions\n(PCs sorted ascending by eviction count)",
+                  fontsize=9)
+    ax.set_ylabel(f"Cumulative % of {class_label} evictions", fontsize=9)
+    ax.set_title(f"{cache_name} — {class_label}", fontsize=10)
+    ax.legend(fontsize=8, loc="upper left", framealpha=0.85)
+    ax.grid(alpha=0.25, linewidth=0.5)
+
+
+# ── Figure 4: per-workload per-PC Lorenz ─────────────────────────────────────
+
+def plot_pc_lorenz_per_workload(suite_pc, cache, out_path: Path):
+    """Per-PC Lorenz curves — one panel per suite, two rows (DoA / mostly-dead).
+
+    Faded thin lines = individual workloads.
+    Solid bold = mean of per-workload curves (equal weight per workload).
+    Dashed bold = pooled curve (weighted by eviction volume).
+    """
+    cache_name = CACHE_DISPLAY.get(cache, cache)
+    n_suites = len(suite_pc)
+    fig, axes = plt.subplots(2, n_suites, figsize=(5 * n_suites, 9))
+    if n_suites == 1:
+        axes = axes.reshape(2, 1)
+
+    class_specs = [("doa", "Dead-on-arrival (DoA)"), ("md", "Mostly-dead")]
+
+    for col, ((lbl, wl_list), color) in enumerate(zip(suite_pc, SUITE_COLORS)):
+        for row, (field, class_lbl) in enumerate(class_specs):
+            ax = axes[row][col]
+            y_curves = []
+
+            for _, ev, doa, md in wl_list:
+                dead = doa if field == "doa" else md
+                if dead.sum() == 0:
+                    continue
+                x, y = _pc_lorenz(ev, dead)
+                y_interp = np.interp(X_COMMON, x, y)
+                y_curves.append(y_interp)
+                _lorenz_panel(ax, X_COMMON, y_interp, color,
+                              "_", linewidth=0.5, alpha=0.15, zorder=2)
+
+            if y_curves:
+                y_mean = np.mean(y_curves, axis=0)
+                _lorenz_panel(ax, X_COMMON, y_mean, color,
+                              f"{lbl} mean  (n={len(y_curves)})",
+                              linewidth=2.0, zorder=3)
+                ev_p, doa_p, md_p = _pool_pc(wl_list)
+                dead_p  = doa_p if field == "doa" else md_p
+                x_p, y_p = _pc_lorenz(ev_p, dead_p)
+                overall  = dead_p.sum() / ev_p.sum() * 100 if ev_p.sum() > 0 else 0
+                _lorenz_panel(ax, x_p, y_p, color,
+                              f"{lbl} pooled  ({overall:.1f}%)",
+                              linewidth=2.0, zorder=3, linestyle="--")
+
+            _finish_lorenz_ax(ax, cache_name, class_lbl)
+            if col == 0:
+                ax.set_ylabel(f"Cumulative % of {class_lbl} evictions", fontsize=9)
+            ax.set_title(f"{lbl} — {class_lbl}", fontsize=10)
+
+    fig.suptitle(
+        f"{cache_name} — per-PC Lorenz curves\n"
+        "(faded = individual workloads · solid bold = mean · dashed bold = pooled · "
+        "above diagonal = rarely-evicted PCs are disproportionately dead)",
+        fontsize=10,
+    )
+    fig.tight_layout()
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(out_path, dpi=200, bbox_inches="tight")
+    plt.close(fig)
+    print(f"Saved: {out_path}")
+
+
 # ── Main ──────────────────────────────────────────────────────────────────────
 
 def main():
@@ -385,9 +535,18 @@ def main():
     for cache in ["LLC", "cpu0_STLB"]:
         tag = CACHE_DISPLAY[cache]
         plot_aggregate_bar(       suites, cache, out_stem.parent / f"{out_stem.name}_bar_{tag}.png")
-        plot_lorenz(              suites, cache, out_stem.parent / f"{out_stem.name}_lorenz_{tag}.png")
-        plot_hit_cdf_pooled(      suites, cache, out_stem.parent / f"{out_stem.name}_cdf_pooled_{tag}.png")
-        plot_hit_cdf_per_workload(suites, cache, out_stem.parent / f"{out_stem.name}_cdf_per_wl_{tag}.png")
+        # plot_lorenz(...)              — workload-level Lorenz, available but disabled
+        # plot_hit_cdf_pooled(...)      — hit-count CDF, available but disabled
+        # plot_hit_cdf_per_workload(...) — hit-count CDF per workload, available but disabled
+
+        print(f"Loading per-PC data for {tag} ...")
+        suite_pc = []
+        for lbl, d in zip(labels, dirs):
+            wl_list = load_suite_pc(d, cache)
+            print(f"  {lbl}: {len(wl_list)} workloads with PC data")
+            suite_pc.append((lbl, wl_list))
+        plot_pc_lorenz_per_workload(suite_pc, cache,
+                                    out_stem.parent / f"{out_stem.name}_pc_lorenz_{tag}.png")
 
 
 if __name__ == "__main__":
