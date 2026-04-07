@@ -1,16 +1,16 @@
 #!/usr/bin/env bash
 # sweep_mid.sh — sweep mid_thd (mid-insertion threshold) from 1 to MAX_N.
 #
-# Usage: ./sweep_mid.sh {maz|qmm|dpc3|google|test} [--max-n N] [--debug] [--warmup N] [--sim N] [--mid-key addr|pc] [--paper-pref]
+# Usage: ./sweep_mid.sh {maz|qmm|dpc3|google|test} [--max-n N] [--debug] [--warmup N] [--sim N] [--mid-key addr|pc] [--mid-promote] [--paper-pref]
 #
 # Submits one job array per mid_thd value plus a plain LRU baseline.
-# Bypass predictors (dppred/cbpred) are always OFF so this study isolates
-# the effect of mid-insertion threshold alone.  mid_thd controls how many
-# consecutive DoA-or-mostly-dead evictions are required before lru_mid
-# inserts a new block at the set midpoint rather than MRU.
+# Bypass predictors (dppred/cbpred) are always OFF — this study isolates
+# the effect of mid-insertion threshold and key alone.  mid_thd controls
+# how many consecutive DoA-or-mostly-dead evictions are required before
+# lru_mid inserts a new block at the set midpoint rather than MRU.
 #
-# --paper-pref  Use EPI+Berti+next_line prefetcher binaries (champsim_lru_paper_pref
-#               and champsim_lru_mid_paper_pref) instead of the no-prefetch variants.
+# --mid-promote Promote mid-inserted blocks to MRU on hit (MID_PROMOTE=1).
+# --paper-pref  Use EPI+Berti+next_line prefetcher binaries.
 #               Requires binaries built with ./build_all.sh --paper-pref.
 #
 # Configurations submitted (default):
@@ -34,6 +34,7 @@ WARMUP_OVERRIDE=""
 SIM_OVERRIDE=""
 MID_KEY_STR="addr"   # addr (default) or pc
 MID_KEY_VAL=0
+MID_PROMOTE_VAL=0
 PAPER_PREF=0
 
 while [[ $# -gt 0 ]]; do
@@ -43,7 +44,8 @@ while [[ $# -gt 0 ]]; do
     --debug)      DEBUG=1; shift ;;
     --warmup)     WARMUP_OVERRIDE="$2"; shift 2 ;;
     --sim)        SIM_OVERRIDE="$2"; shift 2 ;;
-    --paper-pref) PAPER_PREF=1; shift ;;
+    --paper-pref)  PAPER_PREF=1; shift ;;
+    --mid-promote) MID_PROMOTE_VAL=1; shift ;;
     --mid-key)
       case "$2" in
         addr) MID_KEY_STR="addr"; MID_KEY_VAL=0 ;;
@@ -52,13 +54,13 @@ while [[ $# -gt 0 ]]; do
       esac
       shift 2 ;;
     *) echo "Unknown argument: $1" >&2
-       echo "Usage: $0 {maz|qmm|dpc3|google|test} [--max-n N] [--mid-key addr|pc] [--paper-pref] [--debug] [--warmup N] [--sim N]" >&2
+       echo "Usage: $0 {maz|qmm|dpc3|google|test} [--max-n N] [--mid-key addr|pc] [--mid-promote] [--paper-pref] [--debug] [--warmup N] [--sim N]" >&2
        exit 2 ;;
   esac
 done
 
 if [ -z "$token" ]; then
-  echo "Usage: $0 {maz|qmm|dpc3|google|test} [--max-n N] [--mid-key addr|pc] [--debug] [--warmup N] [--sim N]" >&2
+  echo "Usage: $0 {maz|qmm|dpc3|google|test} [--max-n N] [--mid-key addr|pc] [--mid-promote] [--paper-pref] [--debug] [--warmup N] [--sim N]" >&2
   exit 2
 fi
 
@@ -119,6 +121,7 @@ fi
 
 DATE=$(date +%Y%m%d_%H%M)
 PREF_TAG=""
+PROMOTE_TAG=""
 BASELINE_BIN="champsim_lru"
 SWEEP_BIN="champsim_lru_mid"
 if [ "${PAPER_PREF}" -eq 1 ]; then
@@ -126,7 +129,8 @@ if [ "${PAPER_PREF}" -eq 1 ]; then
   BASELINE_BIN="champsim_lru_paper_pref"
   SWEEP_BIN="champsim_lru_mid_paper_pref"
 fi
-BASE_LABEL="${token}_mid_${MID_KEY_STR}${PREF_TAG}_${DATE}${MODE_TAG}"
+[ "${MID_PROMOTE_VAL}" -eq 1 ] && PROMOTE_TAG="_promote"
+BASE_LABEL="${token}_mid_${MID_KEY_STR}${PROMOTE_TAG}${PREF_TAG}_${DATE}${MODE_TAG}"
 
 LOG_DIR="${PROJECT_ROOT}/logs/${BASE_LABEL}"
 mkdir -p "$LOG_DIR"
@@ -137,7 +141,7 @@ mkdir -p "${PROJECT_ROOT}/results/${RUN_LABEL}"
 
 echo "Submitting 1 + ${MAX_N} configurations × ${N} traces (tasks ${TASK_RANGE})"
 echo "Warmup / Sim  : ${WARMUP} / ${SIM}"
-echo "mid_thd sweep : 1..${MAX_N}  mid_key: ${MID_KEY_STR}"
+echo "mid_thd sweep : 1..${MAX_N}  mid_key: ${MID_KEY_STR}  promote_on_hit: $([ "${MID_PROMOTE_VAL}" -eq 1 ] && echo yes || echo no)"
 echo "Prefetchers   : $([ "${PAPER_PREF}" -eq 1 ] && echo "EPI+Berti+next_line (paper)" || echo "none")"
 echo "Results base  : results/${BASE_LABEL}/"
 echo "Logs          : logs/${BASE_LABEL}/"
@@ -148,7 +152,7 @@ raw=$(qsub -t "$TASK_RANGE" \
            -o "${LOG_DIR}/" \
            -e "${LOG_DIR}/" \
            -wd "$PROJECT_ROOT" \
-           -v WARMUP="$WARMUP",SIM="$SIM",TRACE_DIR="$TRACE_DIR",TRACE_EXT="$TRACE_EXT",RUN_LABEL="$RUN_LABEL",BINARY="${BASELINE_BIN}",DPPRED=0,CBPRED=0,PCONF_THD=0,BCONF_THD=0,MID_THD=1 \
+           -v WARMUP="$WARMUP",SIM="$SIM",TRACE_DIR="$TRACE_DIR",TRACE_EXT="$TRACE_EXT",RUN_LABEL="$RUN_LABEL",BINARY="${BASELINE_BIN}",DPPRED=0,CBPRED=0,PCONF_THD=0,BCONF_THD=0,MID_THD=1,MID_PROMOTE=0 \
            "${PROJECT_ROOT}/scripts/submit/run_cs.sh")
 jid=$(echo "$raw" | awk '/Your job/ {print $3}' | cut -d. -f1)
 echo "  [jid=${jid}] lru  (baseline)"
@@ -163,7 +167,7 @@ for mthd in $(seq 1 "$MAX_N"); do
              -o "${LOG_DIR}/" \
              -e "${LOG_DIR}/" \
              -wd "$PROJECT_ROOT" \
-             -v WARMUP="$WARMUP",SIM="$SIM",TRACE_DIR="$TRACE_DIR",TRACE_EXT="$TRACE_EXT",RUN_LABEL="$RUN_LABEL",BINARY="${SWEEP_BIN}",DPPRED=0,CBPRED=0,PCONF_THD=0,BCONF_THD=0,MID_THD="$mthd",MID_KEY="$MID_KEY_VAL" \
+             -v WARMUP="$WARMUP",SIM="$SIM",TRACE_DIR="$TRACE_DIR",TRACE_EXT="$TRACE_EXT",RUN_LABEL="$RUN_LABEL",BINARY="${SWEEP_BIN}",DPPRED=0,CBPRED=0,PCONF_THD=0,BCONF_THD=0,MID_THD="$mthd",MID_KEY="$MID_KEY_VAL",MID_PROMOTE="$MID_PROMOTE_VAL" \
              "${PROJECT_ROOT}/scripts/submit/run_cs.sh")
   jid=$(echo "$raw" | awk '/Your job/ {print $3}' | cut -d. -f1)
   echo "  [jid=${jid}] mid_thd${mthd}"

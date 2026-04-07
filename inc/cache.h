@@ -178,7 +178,8 @@ class CACHE : public champsim::operable, public MemoryRequestConsumer, public Me
   bool cbpred = false;
   uint64_t pconf_thd = 6; // phist confidence threshold
   uint64_t bconf_thd = 6; // bhist confidence threshold
-  uint64_t mid_thd   = 1; // min DoA-or-mostly-dead evictions before mid-insertion triggers
+  uint64_t mid_thd        = 1;     // min DoA-or-mostly-dead evictions before mid-insertion triggers
+  bool     mid_promote_on_hit = false; // promote mid-inserted blocks to MRU on hit (MID_PROMOTE=1)
   uint64_t st_size = 2;   // shadow table capacity
 
   // Set by cpu0_STLB at initialize(); used by LLC to scan for DoA page correlations.

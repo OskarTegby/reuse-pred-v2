@@ -16,8 +16,12 @@
 // cache.cc).
 //
 //   Mid-insertion fill:    timestamp = current-set median  (not MRU)
-//   Mid-insertion hit:     no change                       (no promotion)
+//   Mid-insertion hit:     no change  (MID_PROMOTE=0, default)
+//                    or    timestamp = current_cycle        (MID_PROMOTE=1)
 //   Normal (or non-LLC/STLB): timestamp = current_cycle    (standard LRU)
+//
+// MID_PROMOTE=1 promotes a mid-inserted block to MRU on the first hit,
+// rewarding the evidence that the block is alive despite its dead history.
 //
 // "Median" is computed as the (NUM_WAY/2)-th smallest last_used timestamp in
 // the set, evaluated at the time of the fill or hit.  This gives a stable
@@ -73,8 +77,11 @@ void CACHE::update_replacement_state(uint32_t triggering_cpu, uint32_t set, uint
     // On a hit, leave the timestamp unchanged — mid-tagged blocks never get
     // promoted, so they naturally drift toward eviction unless they lose their
     // mid-insertion flag (i.e., their history entry flips back to live).
-    if (hit)
+    if (hit) {
+      if (mid_promote_on_hit)
+        way_cycle = current_cycle;  // promote to MRU — block proved alive
       return;
+    }
 
     // Compute the (NUM_WAY/2)-th smallest timestamp in this set.  nth_element
     // is O(n) and n == NUM_WAY (≤ 16 in the default config), so this is cheap.

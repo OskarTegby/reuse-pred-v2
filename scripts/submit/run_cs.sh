@@ -19,6 +19,8 @@ export CBPRED=${CBPRED:-0}
 export PCONF_THD=${PCONF_THD:-0}
 export BCONF_THD=${BCONF_THD:-0}
 export MID_THD=${MID_THD:-1}
+export MID_KEY=${MID_KEY:-0}
+export MID_PROMOTE=${MID_PROMOTE:-0}
 
 # Binary selection: BINARY env var selects the per-policy executable.
 # Defaults to champsim_lru_mid for backwards compatibility.
@@ -68,6 +70,8 @@ cbpred=${CBPRED}
 pconf_thd=${PCONF_THD}
 bconf_thd=${BCONF_THD}
 mid_thd=${MID_THD}
+mid_key=${MID_KEY}
+mid_promote=${MID_PROMOTE}
 warmup=${WARMUP}
 sim=${SIM}
 INFO
