@@ -1,0 +1,208 @@
+#!/usr/bin/env python3
+"""plot_mid_thd_combined.py — IPC speedup vs mid_thd for all 4 configs × 3 suites.
+
+Three panels (one per suite), each showing 4 lines:
+  addr, no-promote  — lru_mid_new runs
+  addr, promote     — mid_lru_study runs (pre-fix implicit promotion)
+  PC,   no-promote  — lru_mid_new runs
+  PC,   promote     — mid_lru_study runs (or explicit --mid-promote run)
+
+Output: results/plots/mid_lru/mid_thd_combined.png
+"""
+
+import re
+import sys
+from pathlib import Path
+
+import matplotlib
+matplotlib.use("Agg")
+import matplotlib.pyplot as plt
+import matplotlib.ticker as mticker
+import numpy as np
+
+BASE = Path("results")
+
+CONFIGS = [
+    ("addr, no-promote", "#5B7FA6", "o", "-"),    # steel blue, solid
+    ("addr, promote",    "#1A4A7A", "s", "--"),   # dark blue, dashed
+    ("PC, no-promote",   "#E09B6A", "^", "-"),    # light orange, solid
+    ("PC, promote",      "#B03000", "D", "--"),   # dark red, dashed
+]
+
+SUITES = [
+    {
+        "label": "SPEC (DPC3)",
+        "dirs": [
+            BASE / "lru_mid_new/dpc3_mid_addr_20260406_1251",
+            BASE / "mid_lru_study/dpc3_mid_addr_20260401_2359",
+            BASE / "lru_mid_new/dpc3_mid_pc_20260406_1251",
+            BASE / "mid_lru_study/dpc3_mid_pc_20260401_2359",
+        ],
+    },
+    {
+        "label": "Google",
+        "dirs": [
+            BASE / "lru_mid_new/google_mid_addr_20260406_1251",
+            BASE / "mid_lru_study/google_mid_addr_20260402_0000",
+            BASE / "lru_mid_new/google_mid_pc_20260406_1251",
+            BASE / "mid_lru_study/google_mid_pc_promote_20260407_1031",
+        ],
+    },
+    {
+        "label": "Qualcomm",
+        "dirs": [
+            BASE / "lru_mid_new/qmm_mid_addr_20260406_1251",
+            BASE / "mid_lru_study/qmm_mid_addr_20260401_1625",
+            BASE / "lru_mid_new/qmm_mid_pc_20260406_1251",
+            BASE / "mid_lru_study/qmm_mid_pc_20260401_1625",
+        ],
+    },
+]
+
+MAX_N = 5
+
+
+def parse_ipc(path: Path):
+    in_roi = False
+    try:
+        for line in path.read_text(errors="replace").splitlines():
+            if "Region of Interest Statistics" in line:
+                in_roi = True
+            if in_roi and "cumulative IPC:" in line:
+                m = re.search(r"cumulative IPC:\s+([0-9.]+)", line)
+                if m:
+                    return float(m.group(1))
+    except OSError:
+        pass
+    return None
+
+
+def geomean_speedup(sweep_dir: Path, n: int):
+    """Return geomean IPC speedup (%) at mid_thd=n, or None if no data."""
+    lru_dir = sweep_dir / "lru"
+    baselines = {}
+    for f in sorted(lru_dir.glob("*/champsim.out")):
+        v = parse_ipc(f)
+        if v is not None:
+            baselines[f.parent.name] = v
+    if not baselines:
+        return None
+
+    thd_dir = sweep_dir / f"mid_thd{n}"
+    if not thd_dir.is_dir():
+        return None
+
+    pcts = []
+    for wl, b in baselines.items():
+        v = parse_ipc(thd_dir / wl / "champsim.out")
+        if v is not None and b > 0:
+            pcts.append((v / b - 1.0) * 100.0)
+    if not pcts:
+        return None
+    return (np.exp(np.mean(np.log([p / 100 + 1 for p in pcts]))) - 1) * 100
+
+
+def main():
+    ns = list(range(1, MAX_N + 1))
+    n_cfgs = len(CONFIGS)
+    bar_w  = 0.18
+    group_w = n_cfgs * bar_w   # no extra gap — N values are the visual separator
+
+    fig, axes = plt.subplots(1, 3, figsize=(15, 5), sharey=False)
+
+    # Build a colour ramp from light to dark for N=1..5 within each config's hue
+    def shade(hex_color, n, n_max):
+        """Lighten for small n, keep full colour at n_max."""
+        import matplotlib.colors as mc
+        rgb = np.array(mc.to_rgb(hex_color))
+        t = (n - 1) / max(n_max - 1, 1)   # 0 (lightest) → 1 (darkest)
+        white = np.ones(3)
+        return tuple(white * (1 - t) * 0.55 + rgb * (1 - (1 - t) * 0.55))
+
+    group_gap = 0.35   # extra space between config groups
+
+    from matplotlib.ticker import FixedLocator, FixedFormatter
+
+    for ax, suite in zip(axes, SUITES):
+        all_vals = []
+        major_pos, major_lbl = [], []   # group centres → config names
+        minor_pos, minor_lbl = [], []   # bar centres   → N values
+
+        for ci, ((lbl, color, _marker, _ls), sweep_dir) in enumerate(
+                zip(CONFIGS, suite["dirs"])):
+            g_start = ci * (MAX_N * bar_w + group_gap)
+
+            for ni, n in enumerate(ns):
+                x = g_start + ni * bar_w
+                minor_pos.append(x)
+                minor_lbl.append(str(n))
+                gm = geomean_speedup(sweep_dir, n)
+                if gm is None:
+                    print(f"  WARNING: no data — {suite['label']} / {lbl} / mid_thd{n}",
+                          file=sys.stderr)
+                    continue
+                c = shade(color, n, MAX_N)
+                ax.bar(x, gm, bar_w * 0.88, color=c, edgecolor="black",
+                       linewidth=0.4, zorder=3)
+                all_vals.append(gm)
+
+            # Group centre label
+            major_pos.append(g_start + (MAX_N - 1) * bar_w / 2)
+            major_lbl.append(lbl)
+
+        ax.axhline(0, color="black", linewidth=0.8, linestyle="--", zorder=1)
+
+        # Minor ticks: N=1..5 under each bar — no major ticks (they would
+        # suppress the middle minor label at the coinciding position)
+        ax.xaxis.set_minor_locator(FixedLocator(minor_pos))
+        ax.xaxis.set_minor_formatter(FixedFormatter(minor_lbl))
+        ax.tick_params(axis="x", which="minor", length=3, width=0.6,
+                       labelsize=6.5, pad=2)
+        ax.xaxis.set_major_locator(FixedLocator([]))
+        ax.tick_params(axis="x", which="major", length=0)
+
+        # Config group labels as text below the N labels, in axes-x / data-y
+        import matplotlib.transforms as mtrans
+        blend = mtrans.blended_transform_factory(ax.transData, ax.transAxes)
+        for cx, lbl in zip(major_pos, major_lbl):
+            ax.text(cx, -0.30, lbl, transform=blend,
+                    ha="center", va="top", fontsize=8.5)
+
+        ax.set_xlabel("N  (mid-insertion threshold)", fontsize=9, labelpad=10)
+        ax.set_ylabel("IPC speedup vs LRU (geomean, %)", fontsize=9)
+        ax.set_title(suite["label"], fontsize=12, fontweight="bold")
+        ax.yaxis.grid(True, linestyle="--", color="gray", alpha=0.60,
+                      linewidth=0.9, zorder=0)
+        ax.set_axisbelow(True)
+
+        if all_vals:
+            lo, hi = min(all_vals), max(all_vals)
+            span = max(hi - lo, 0.3)
+            ax.set_ylim(lo - 0.18 * span, hi + 0.22 * span)
+
+        ax.yaxis.set_major_formatter(mticker.FormatStrFormatter("%.2f%%"))
+
+    # Legend: N=1..5 shading using the first config's colour as reference
+    import matplotlib.patches as mpatches
+    ref_color = CONFIGS[0][1]
+    n_patches = [mpatches.Patch(facecolor=shade(ref_color, n, MAX_N),
+                                edgecolor="black", linewidth=0.4,
+                                label=f"N={n}") for n in ns]
+    fig.legend(handles=n_patches,
+               loc="lower center", ncol=MAX_N, fontsize=10,
+               framealpha=0.9, bbox_to_anchor=(0.5, -0.04))
+
+    fig.suptitle(
+        "IPC speedup vs LRU as a function of mid_thd",
+        fontsize=12, fontweight="bold",
+    )
+    fig.tight_layout(rect=[0, 0.12, 1, 1])
+
+    out = Path("results/plots/mid_lru/mid_thd_combined.png")
+    out.parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(out, dpi=180, bbox_inches="tight")
+    print(f"Saved: {out}")
+
+
+if __name__ == "__main__":
+    main()
