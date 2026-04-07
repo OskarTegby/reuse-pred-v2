@@ -90,6 +90,78 @@ void champsim::plain_printer::print(CACHE::stats_type stats)
       stream << stats.name << " BYPASSES: " << std::setw(10) << stats.llt_bypasses << std::endl;
     if (stats.name == "LLC")
       stream << stats.name << " BYPASSES: " << std::setw(10) << stats.llc_bypasses << std::endl;
+
+    if (stats.name == "cpu0_STLB" || stats.name == "LLC") {
+      const auto& s = stats;
+      const double total = static_cast<double>(s.evict_total ? s.evict_total : 1);
+      stream << s.name << " LIVENESS EVICTIONS: " << s.evict_total
+             << "  DOA: "         << s.evict_doa          << " (" << std::fixed << std::setprecision(1) << 100.0 * s.evict_doa          / total << "%)"
+             << "  MOSTLY_DEAD: " << s.evict_mostly_dead  << " (" << 100.0 * s.evict_mostly_dead  / total << "%)"
+             << "  MOSTLY_ALIVE: "<< s.evict_mostly_alive << " (" << 100.0 * s.evict_mostly_alive / total << "%)"
+             << std::endl;
+      if (s.name == "LLC") {
+        const double doa_total = static_cast<double>(s.evict_doa ? s.evict_doa : 1);
+        stream << s.name << " LIVENESS DOA_ON_DOA_STLB_PAGE: "
+               << s.evict_doa_on_doa_stlb_page
+               << " (" << std::fixed << std::setprecision(1)
+               << 100.0 * s.evict_doa_on_doa_stlb_page / doa_total << "% of LLC DoA)"
+               << std::endl;
+      }
+      stream << s.name << " LIVENESS HIT_HIST:";
+      for (std::size_t i = 0; i < cache_stats::HIT_HIST_BINS; ++i) {
+        if (i + 1 < cache_stats::HIT_HIST_BINS)
+          stream << "  " << i << ":" << s.evict_hit_hist[i];
+        else
+          stream << "  " << i << "+:" << s.evict_hit_hist[i];
+      }
+      stream << std::endl;
+
+      // ── Suspicious-condition summary (omitted when zero) ──────────────────
+      if (s.evict_zero_residence > 0)
+        stream << s.name << " LIVENESS WARNING: " << s.evict_zero_residence
+               << " eviction(s) with zero residence (installed and evicted same cycle)"
+               << std::endl;
+
+      // ── Consistency checks ────────────────────────────────────────────────
+      // (1) The three liveness classes are mutually exclusive and exhaustive.
+      const uint64_t class_sum = s.evict_doa + s.evict_mostly_dead + s.evict_mostly_alive;
+      if (class_sum != s.evict_total)
+        stream << s.name << " LIVENESS BUG: class counts sum to " << class_sum
+               << " but evict_total is " << s.evict_total
+               << " (delta " << static_cast<int64_t>(class_sum) - static_cast<int64_t>(s.evict_total) << ")"
+               << std::endl;
+
+      // (2) Every eviction increments exactly one histogram bin.
+      const uint64_t hist_sum = std::accumulate(s.evict_hit_hist.begin(),
+                                                 s.evict_hit_hist.end(), uint64_t{0});
+      if (hist_sum != s.evict_total)
+        stream << s.name << " LIVENESS BUG: hit_hist sums to " << hist_sum
+               << " but evict_total is " << s.evict_total
+               << " (delta " << static_cast<int64_t>(hist_sum) - static_cast<int64_t>(s.evict_total) << ")"
+               << std::endl;
+
+      // ── Per-PC liveness breakdown (written to pc_stream as CSV) ──────────
+      const auto& pc_map = (s.name == "cpu0_STLB") ? s.llt_pc_stats : s.llc_pc_stats;
+      if (!pc_map.empty() && pc_stream != nullptr) {
+        std::vector<std::pair<uint64_t, pc_liveness_entry>> sorted(pc_map.begin(), pc_map.end());
+        std::sort(sorted.begin(), sorted.end(),
+                  [](const auto& a, const auto& b) { return a.second.total() > b.second.total(); });
+
+        if (!pc_header_written) {
+          *pc_stream << "cache,pc,evictions,doa,mostly_dead,mostly_alive\n";
+          pc_header_written = true;
+        }
+        for (const auto& [ip, e] : sorted) {
+          *pc_stream << s.name
+                     << ",0x" << std::hex << std::setw(16) << std::setfill('0') << ip
+                     << std::dec << std::setfill(' ')
+                     << "," << e.total()
+                     << "," << e.doa
+                     << "," << e.mostly_dead
+                     << "," << e.mostly_alive << "\n";
+        }
+      }
+    }
     // stream << " AVERAGE MISS LATENCY: " << (stats.total_miss_latency)/TOTAL_MISS << " cycles " << stats.total_miss_latency << "/" << TOTAL_MISS<< std::endl;
   }
 }

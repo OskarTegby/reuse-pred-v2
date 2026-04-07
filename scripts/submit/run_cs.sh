@@ -10,6 +10,7 @@
 WARMUP=${WARMUP:-500000}
 SIM=${SIM:-1000000}
 TRACE_DIR=${TRACE_DIR:-trace-files/MAZUMDAR}
+TRACE_EXT=${TRACE_EXT:-champsimtrace.xz}
 RUN_LABEL=${RUN_LABEL:-unlabelled}
 
 # Predictor parameters (read from env by ChampSim; defaults = baseline)
@@ -17,11 +18,15 @@ export DPPRED=${DPPRED:-0}
 export CBPRED=${CBPRED:-0}
 export PCONF_THD=${PCONF_THD:-0}
 export BCONF_THD=${BCONF_THD:-0}
+export MID_THD=${MID_THD:-1}
 
-BIN=./bin/champsim
+# Binary selection: BINARY env var selects the per-policy executable.
+# Defaults to champsim_lru_mid for backwards compatibility.
+BINARY=${BINARY:-champsim_lru_mid}
+BIN="./bin/${BINARY}"
 
 # Build sorted list of traces at runtime
-mapfile -t TRACES < <(ls -1 "${TRACE_DIR}"/*.champsimtrace.xz 2>/dev/null | sort)
+mapfile -t TRACES < <(find "${TRACE_DIR}" -name "*.${TRACE_EXT}" | sort)
 N=${#TRACES[@]}
 if [ "$N" -eq 0 ]; then
   echo "ERROR: No traces found in ${TRACE_DIR}" >&2
@@ -38,7 +43,7 @@ if [ "$IDX" -lt 0 ] || [ "$IDX" -ge "$N" ]; then
 fi
 
 TRACE_FILE="${TRACES[$IDX]}"
-TRACE_NAME=$(basename "$TRACE_FILE" .champsimtrace.xz)
+TRACE_NAME=$(basename "$TRACE_FILE" ".${TRACE_EXT}")
 RUN_DIR="results/${RUN_LABEL}/${TRACE_NAME}"
 mkdir -p "$RUN_DIR"
 
@@ -57,17 +62,20 @@ fi
 cat > "${RUN_DIR}/run_info.txt" <<INFO
 run_label=${RUN_LABEL}
 trace=${TRACE_NAME}
+binary=${BINARY}
 dppred=${DPPRED}
 cbpred=${CBPRED}
 pconf_thd=${PCONF_THD}
 bconf_thd=${BCONF_THD}
+mid_thd=${MID_THD}
 warmup=${WARMUP}
 sim=${SIM}
 INFO
 
 # Run the binary
 echo "Run: ${RUN_LABEL}  trace: ${TRACE_NAME}"
-"$BIN" --warmup_instructions "$WARMUP" --simulation_instructions "$SIM" "$TRACE_FILE" \
+"$BIN" --warmup_instructions "$WARMUP" --simulation_instructions "$SIM" \
+  --pc-stats="${RUN_DIR}/pc_liveness.csv" "$TRACE_FILE" \
   > "${RUN_DIR}/champsim.out" 2> "${RUN_DIR}/champsim.err"
 rc=$?
 

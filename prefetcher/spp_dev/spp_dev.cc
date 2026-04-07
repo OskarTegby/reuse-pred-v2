@@ -1,5 +1,8 @@
 #include "spp_dev.h"
 
+#include <utility>
+#include <vector>
+
 #include "cache.h"
 
 namespace
@@ -8,6 +11,12 @@ spp::SIGNATURE_TABLE ST;
 spp::PATTERN_TABLE PT;
 spp::PREFETCH_FILTER FILTER;
 spp::GLOBAL_REGISTER GHR;
+
+// Prefetches buffered during prefetcher_cache_operate() and drained in
+// prefetcher_cycle_operate(). Calling prefetch_line() inside
+// prefetcher_cache_operate() modifies queues.PQ while operate_queue() holds
+// iterators into it, causing std::deque map-pointer invalidation.
+std::vector<std::pair<uint64_t, bool>> spp_pending; // (pf_addr, fill_this_level)
 } // namespace
 
 void CACHE::prefetcher_initialize()
@@ -29,7 +38,14 @@ void CACHE::prefetcher_initialize()
   std::cout << "FILTER_SET: " << spp::FILTER_SET << std::endl;
 }
 
-void CACHE::prefetcher_cycle_operate() {}
+void CACHE::prefetcher_cycle_operate()
+{
+  // Issue all prefetches buffered during this cycle's prefetcher_cache_operate()
+  // calls. Safe here because operate_queue() has finished and holds no iterators.
+  for (auto& [pf_addr, fill_this_level] : spp_pending)
+    prefetch_line(pf_addr, fill_this_level, 0);
+  spp_pending.clear();
+}
 
 uint32_t CACHE::prefetcher_cache_operate(uint64_t addr, uint64_t ip, uint8_t cache_hit, uint8_t type, uint32_t metadata_in)
 {
@@ -80,7 +96,9 @@ uint32_t CACHE::prefetcher_cache_operate(uint64_t addr, uint64_t ip, uint8_t cac
 
         if ((addr & ~(PAGE_SIZE - 1)) == (pf_addr & ~(PAGE_SIZE - 1))) { // Prefetch request is in the same physical page
           if (::FILTER.check(pf_addr, ((confidence_q[i] >= spp::FILL_THRESHOLD) ? spp::SPP_L2C_PREFETCH : spp::SPP_LLC_PREFETCH))) {
-            prefetch_line(pf_addr, (confidence_q[i] >= spp::FILL_THRESHOLD), 0); // Use addr (not base_addr) to obey the same physical page boundary
+            // Buffer instead of calling prefetch_line() directly here — see
+            // prefetcher_cycle_operate() for explanation.
+            spp_pending.emplace_back(pf_addr, confidence_q[i] >= spp::FILL_THRESHOLD);
 
             if (confidence_q[i] >= spp::FILL_THRESHOLD) {
               ::GHR.pf_issued++;

@@ -27,6 +27,8 @@ namespace champsim
 class plain_printer
 {
   std::ostream& stream;
+  std::ostream* pc_stream = nullptr;
+  bool pc_header_written = false;
 
   void print(O3_CPU::stats_type);
   void print(CACHE::stats_type);
@@ -40,7 +42,8 @@ class plain_printer
   }
 
 public:
-  plain_printer(std::ostream& str) : stream(str) {}
+  explicit plain_printer(std::ostream& str) : stream(str) {}
+  plain_printer(std::ostream& str, std::ostream* pc_str) : stream(str), pc_stream(pc_str) {}
   void print(phase_stats& stats);
   void print(std::vector<phase_stats>& stats);
 };

@@ -25,6 +25,8 @@ Usage:
                   Default (without this flag): count STLB+LLC misses, same as the 2-D heatmap.
 
     --out         Output PNG path.  Defaults to <metric>_<mode>_<trace>_<label>.png
+
+For the mid-insertion threshold sweep (sweep_mid.sh results) use plot_mid_thd.py instead.
 """
 
 import argparse
@@ -285,9 +287,9 @@ def main():
         args.metric = "ipc"
         args.dppred = True
 
-    base   = args.results_dir.rstrip("/")
-    label  = os.path.basename(base)
-    metric = args.metric
+    base        = args.results_dir.rstrip("/")
+    label       = os.path.basename(base)
+    metric      = args.metric
     dppred_mode = args.dppred
 
     # Map metric → parse function.

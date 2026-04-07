@@ -17,6 +17,8 @@
 #include "cache.h"
 
 #include <algorithm>
+#include <cassert>
+#include <climits>
 #include <cstdlib>
 #include <iomanip>
 #include <iterator>
@@ -77,7 +79,7 @@ bool CACHE::dppred_bypass(const PACKET& fill_mshr)
 {
   const auto vpn_hash = fold_xor(fill_mshr.address >> OFFSET_BITS, VPN_BITS);
   const auto pc_hash  = fold_xor(fill_mshr.ip,                     PC_BITS);
-  if (phist[vpn_hash][pc_hash] <= pconf_thd)
+  if (phist[vpn_hash][pc_hash].doa <= pconf_thd)
     return false;
 
   // Push physical frame into the shared queue for cbPred (FIFO)
@@ -102,30 +104,177 @@ bool CACHE::cbpred_bypass(const PACKET& fill_mshr)
   const auto block_hash = fold_xor(fill_mshr.address >> OFFSET_BITS, BHT_BITS);
   const bool in_pfq     = std::find(pfq.begin(), pfq.end(), pfn) != pfq.end();
 
-  if (!in_pfq || bhist[block_hash] <= bconf_thd)
+  if (!in_pfq || bhist[block_hash].doa <= bconf_thd)
     return false;
 
   sim_stats.back().llc_bypasses++;
   return true;
 }
 
-// Updates the history table when a valid entry is displaced: phist for a
-// translation entry evicted from the STLB, bhist for a cache block evicted
-// from the LLC.  Increments the confidence counter if the entry was never
-// accessed since insertion; resets it to zero otherwise.
-void CACHE::update_eviction_counters(const BLOCK& victim)
+// ── Liveness classification ───────────────────────────────────────────────────
+//
+// Definitions (all in simulation cycles):
+//   residence  = eviction_cycle − insert_cycle
+//   dead_tail  = eviction_cycle − last_hit_cycle
+//   DoA        : hit_count == 0  (never referenced after insertion)
+//   Mostly-dead: hit_count > 0 AND dead_tail > residence / 2
+//   Mostly-alive: otherwise (dead_tail ≤ residence / 2)
+//
+// Invariants asserted (violations indicate a simulator bug):
+//   (A) last_hit_cycle >= insert_cycle      (last hit cannot predate insertion)
+//   (B) current_cycle  >= insert_cycle      (time is monotonically increasing)
+//   (C) current_cycle  >= last_hit_cycle    (same)
+//   (D) dead_tail      <= residence         (arithmetic consequence of A-C;
+//                                            also guards against unsigned underflow)
+CACHE::liveness_class CACHE::classify_liveness(const BLOCK& victim) const
 {
-  auto increment_or_reset = [&victim](uint64_t& counter) {
-    counter = victim.accessed ? 0 : std::min(counter + 1, MAX_COUNTER);
+  assert(victim.last_hit_cycle >= victim.insert_cycle); // (A)
+  assert(current_cycle >= victim.insert_cycle);         // (B)
+  assert(current_cycle >= victim.last_hit_cycle);       // (C)
+
+  const uint64_t residence = current_cycle - victim.insert_cycle;
+  const uint64_t dead_tail = current_cycle - victim.last_hit_cycle;
+
+  assert(dead_tail <= residence); // (D): unsigned underflow guard
+
+  if (victim.hit_count == 0)
+    return liveness_class::doa;
+
+  // Use dead_tail > residence/2 rather than 2*dead_tail > residence to avoid
+  // any theoretical uint64_t overflow on extraordinarily long-lived blocks.
+  return (dead_tail > residence / 2) ? liveness_class::mostly_dead
+                                     : liveness_class::mostly_alive;
+}
+
+// Records liveness stats for the evicted block.  No-op for caches other than
+// the LLC and STLB.  Suspicious-condition (zero residence) is counted here.
+void CACHE::record_eviction_liveness(const BLOCK& victim, liveness_class lv)
+{
+  if (NAME != "cpu0_STLB" && NAME != "LLC")
+    return;
+
+  auto& s = sim_stats.back();
+  s.evict_total++;
+
+  if (current_cycle == victim.insert_cycle)
+    s.evict_zero_residence++;
+
+  const std::size_t bin = std::min(static_cast<std::size_t>(victim.hit_count),
+                                   cache_stats::HIT_HIST_BINS - 1);
+  s.evict_hit_hist[bin]++;
+
+  switch (lv) {
+    case liveness_class::doa:          s.evict_doa++;          break;
+    case liveness_class::mostly_dead:  s.evict_mostly_dead++;  break;
+    case liveness_class::mostly_alive: s.evict_mostly_alive++; break;
+  }
+
+  // For LLC DoA blocks: check whether the evicted block's PFN has a
+  // currently-resident STLB entry that is also DoA (hit_count == 0).
+  // This measures how often a dead cache block maps onto a dead page translation.
+  if (NAME == "LLC" && lv == liveness_class::doa && stlb_ptr != nullptr) {
+    const uint64_t pfn = victim.address >> LOG2_PAGE_SIZE;
+    const bool on_doa_stlb_page = std::any_of(
+        stlb_ptr->block.begin(), stlb_ptr->block.end(),
+        [pfn](const BLOCK& b) {
+          return b.valid && b.hit_count == 0 && (b.data >> LOG2_PAGE_SIZE) == pfn;
+        });
+    if (on_doa_stlb_page)
+      s.evict_doa_on_doa_stlb_page++;
+  }
+}
+
+// Accumulates per-PC liveness event counts.  No-op for caches other than
+// the LLC and STLB.  Unlike the history-table confidence counters in
+// update_eviction_counters, these counters only ever increment — they are
+// never reset — so they record total event frequencies across the whole run.
+void CACHE::record_pc_liveness(const BLOCK& victim, liveness_class lv)
+{
+  if (NAME != "cpu0_STLB" && NAME != "LLC")
+    return;
+
+  auto& entry = (NAME == "cpu0_STLB") ? sim_stats.back().llt_pc_stats[victim.ip]
+                                       : sim_stats.back().llc_pc_stats[victim.ip];
+  switch (lv) {
+    case liveness_class::doa:          entry.doa++;          break;
+    case liveness_class::mostly_dead:  entry.mostly_dead++;  break;
+    case liveness_class::mostly_alive: entry.mostly_alive++; break;
+  }
+}
+
+// Updates phist (STLB) or bhist (LLC) when a valid entry is displaced.
+//
+// All history state is updated exclusively at eviction time — never earlier.
+// This ensures that hits during the current residence do not affect the
+// promotion or bypass decisions for the *next* miss of the same address.
+//
+// doa         – incremented on DoA; reset when the accessed bit is set at
+//               eviction (equivalently: reset on mostly-dead or mostly-alive,
+//               both of which imply at least one hit during residence).
+//               A saturated doa counter gates the bypass decision.
+// mostly_dead – incremented on mostly-dead; reset on mostly-alive.
+//               Left unchanged on DoA: a DoA eviction is not a mostly-dead
+//               eviction, but it does not disprove a prior mostly-dead pattern.
+//
+// The predictor-table updates below are gated on dppred/cbpred.
+// The insertion-policy tables (llc_mid_hist_*, stlb_mid_hist_*) are always
+// updated so that lru_mid maintains its history independently of whether the
+// bypass predictors are enabled.
+void CACHE::update_eviction_counters(const BLOCK& victim, liveness_class lv)
+{
+  auto update = [lv](hist_entry& e) {
+    switch (lv) {
+      case liveness_class::doa:
+        e.doa++;
+        // mostly_dead unchanged: DoA is not a mostly-dead eviction, but
+        // it does not invalidate a previously observed mostly-dead pattern.
+        break;
+      case liveness_class::mostly_dead:
+        e.mostly_dead++;
+        e.doa = 0; // accessed bit was set: entry had at least one hit
+        break;
+      case liveness_class::mostly_alive:
+        e.doa         = 0;
+        e.mostly_dead = 0;
+        break;
+    }
   };
 
+  // Predictor tables: keep existing gated update rules unchanged.
   if (dppred && NAME == "cpu0_STLB") {
     const auto vpn_hash = fold_xor(victim.address >> OFFSET_BITS, VPN_BITS);
     const auto pc_hash  = fold_xor(victim.ip,                     PC_BITS);
-    increment_or_reset(phist[vpn_hash][pc_hash]);
+    update(phist[vpn_hash][pc_hash]);
   } else if (cbpred && NAME == "LLC" && victim.dp) {
-    increment_or_reset(bhist[fold_xor(victim.address >> OFFSET_BITS, BHT_BITS)]);
+    update(bhist[fold_xor(victim.address >> OFFSET_BITS, BHT_BITS)]);
   }
+
+  // Insertion-policy tables: always updated for LLC and STLB, no hashing.
+  if (NAME == "LLC") {
+    update(llc_mid_hist_addr[victim.address >> OFFSET_BITS]);
+    update(llc_mid_hist_pc[victim.ip]);
+  } else if (NAME == "cpu0_STLB") {
+    update(stlb_mid_hist_addr[victim.address >> OFFSET_BITS]);
+    update(stlb_mid_hist_pc[victim.ip]);
+  }
+}
+
+// Returns true when the entry's history shows its last eviction was DoA or
+// mostly-dead, meaning it should be inserted at the set midpoint in lru_mid.
+bool CACHE::needs_mid_insertion(uint64_t full_addr, uint64_t ip) const
+{
+  auto check = [this](const std::map<uint64_t, hist_entry>& tbl, uint64_t key) {
+    const auto it = tbl.find(key);
+    return it != tbl.end() && (it->second.doa >= mid_thd || it->second.mostly_dead >= mid_thd);
+  };
+  if (NAME == "LLC") {
+    return (mid_key == mid_key_t::pc) ? check(llc_mid_hist_pc,    ip)
+                                      : check(llc_mid_hist_addr,   full_addr >> OFFSET_BITS);
+  } else if (NAME == "cpu0_STLB") {
+    return (mid_key == mid_key_t::pc) ? check(stlb_mid_hist_pc,   ip)
+                                      : check(stlb_mid_hist_addr,  full_addr >> OFFSET_BITS);
+  }
+  return false;
 }
 
 // Reads environment variables to enable dpPred/cbPred and tune their
@@ -135,6 +284,7 @@ void CACHE::update_eviction_counters(const BLOCK& victim)
 //   CBPRED=1           enable dead-block predictor on the LLC
 //   PCONF_THD=<n>      dpPred confidence threshold (default 6)
 //   BCONF_THD=<n>      cbPred confidence threshold (default 6)
+//   MID_THD=<n>        min DoA-or-mostly-dead evictions before mid-insertion triggers (default 1)
 //   ST_SIZE=<n>        shadow-table capacity (default 2)
 //   PFQ_CAP=<n>        shared PFQ capacity (default 8)
 void CACHE::load_predictor_settings()
@@ -151,8 +301,10 @@ void CACHE::load_predictor_settings()
 
   pconf_thd = getenv_uint64("PCONF_THD", pconf_thd);
   bconf_thd = getenv_uint64("BCONF_THD", bconf_thd);
+  mid_thd   = getenv_uint64("MID_THD",   mid_thd);
   st_size   = getenv_uint64("ST_SIZE",   st_size);
   pfq_cap   = getenv_uint64("PFQ_CAP",   pfq_cap);
+  mid_key   = (getenv_uint64("MID_KEY", 0) == 1) ? mid_key_t::pc : mid_key_t::addr;
 }
 
 bool CACHE::handle_fill(const PACKET& fill_mshr)
@@ -183,7 +335,16 @@ bool CACHE::handle_fill(const PACKET& fill_mshr)
       predictor_bypassed = true;
       way = set_end;
     } else {
-      update_eviction_counters(*way);
+      // Classify liveness once; share the result between stats recording and
+      // history-table updates so the two stay in sync.
+      // classify_liveness() runs the invariant asserts for all cache levels.
+      // For caches other than LLC/STLB, hit_count is never incremented so the
+      // result is always DoA, but record_eviction_liveness and
+      // update_eviction_counters are both no-ops for those levels anyway.
+      const auto lv = classify_liveness(*way);
+      record_eviction_liveness(*way, lv);
+      record_pc_liveness(*way, lv);
+      update_eviction_counters(*way, lv);
     }
   }
 
@@ -235,6 +396,9 @@ bool CACHE::handle_fill(const PACKET& fill_mshr)
       way->dirty = (fill_mshr.type == WRITE);
       way->accessed = false;
       way->dp = cbpred && NAME == "LLC" && std::find(pfq.begin(), pfq.end(), fill_mshr.address >> LOG2_PAGE_SIZE) != pfq.end();
+      way->insert_cycle   = current_cycle;
+      way->last_hit_cycle = current_cycle;
+      way->hit_count      = 0;
       way->address = fill_mshr.address;
       way->v_address = fill_mshr.v_address;
       way->data = fill_mshr.data;
@@ -255,8 +419,10 @@ bool CACHE::handle_fill(const PACKET& fill_mshr)
   }
 
   if (success) {
-    // COLLECT STATS
-    sim_stats.back().total_miss_latency += current_cycle - (fill_mshr.cycle_enqueued + 1);
+    // COLLECT STATS — skip for synthetic re-insertions (to_return is empty,
+    // meaning this fill was not the result of a real miss reaching the lower level).
+    if (!fill_mshr.to_return.empty())
+      sim_stats.back().total_miss_latency += current_cycle - (fill_mshr.cycle_enqueued + 1);
 
     auto copy{fill_mshr};
     copy.pf_metadata = metadata_thru;
@@ -312,6 +478,12 @@ bool CACHE::try_hit(const PACKET& handle_pkt)
       way->accessed = true;
     else if (NAME == "LLC" && way->dp)
       way->accessed = true;
+
+    // Liveness tracking: update for all LLC and STLB blocks (not just dp).
+    if (NAME == "cpu0_STLB" || NAME == "LLC") {
+      way->hit_count++;
+      way->last_hit_cycle = current_cycle;
+    }
 
     // update prefetch stats and reset prefetch bit
     if (way->prefetch && !handle_pkt.prefetch_from_this) {
@@ -649,6 +821,8 @@ std::size_t CACHE::get_size(uint8_t queue_type, uint64_t)
 
 void CACHE::initialize()
 {
+  if (NAME == "cpu0_STLB")
+    stlb_ptr = this;
   impl_prefetcher_initialize();
   impl_initialize_replacement();
 }
@@ -679,6 +853,17 @@ void CACHE::end_phase(unsigned finished_cpu)
 
   roi_stats.back().llt_bypasses = sim_stats.back().llt_bypasses;
   roi_stats.back().llc_bypasses = sim_stats.back().llc_bypasses;
+
+  roi_stats.back().evict_total        = sim_stats.back().evict_total;
+  roi_stats.back().evict_doa          = sim_stats.back().evict_doa;
+  roi_stats.back().evict_mostly_dead  = sim_stats.back().evict_mostly_dead;
+  roi_stats.back().evict_mostly_alive = sim_stats.back().evict_mostly_alive;
+  roi_stats.back().evict_zero_residence = sim_stats.back().evict_zero_residence;
+  roi_stats.back().evict_hit_hist     = sim_stats.back().evict_hit_hist;
+  roi_stats.back().evict_doa_on_doa_stlb_page = sim_stats.back().evict_doa_on_doa_stlb_page;
+
+  roi_stats.back().llt_pc_stats = std::move(sim_stats.back().llt_pc_stats);
+  roi_stats.back().llc_pc_stats = std::move(sim_stats.back().llc_pc_stats);
 }
 
 bool CACHE::should_activate_prefetcher(const PACKET& pkt) const { return ((1 << pkt.type) & pref_activate_mask) && !pkt.prefetch_from_this; }

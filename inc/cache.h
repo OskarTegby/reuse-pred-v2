@@ -32,6 +32,15 @@
 #include "memory_class.h"
 #include "operable.h"
 
+// Cumulative per-PC liveness event counts.  Only ever incremented, never
+// reset, so they record total event frequencies across the whole simulation.
+struct pc_liveness_entry {
+  uint64_t doa          = 0;
+  uint64_t mostly_dead  = 0;
+  uint64_t mostly_alive = 0;
+  uint64_t total() const { return doa + mostly_dead + mostly_alive; }
+};
+
 struct cache_stats {
   std::string name;
   // prefetch stats
@@ -48,6 +57,35 @@ struct cache_stats {
 
   uint64_t llt_bypasses = 0;
   uint64_t llc_bypasses = 0;
+
+  // ── Block/page liveness stats (LLC and STLB only) ─────────────────────────
+  // Recorded at every valid eviction during the ROI.
+  //   DoA        – hit_count == 0 (never referenced after insertion)
+  //   Mostly-dead  – hit_count > 0 but dead_tail > residence/2
+  //   Mostly-alive – dead_tail ≤ residence/2
+  uint64_t evict_total        = 0;
+  uint64_t evict_doa          = 0;
+  uint64_t evict_mostly_dead  = 0;
+  uint64_t evict_mostly_alive = 0;
+
+  // Suspicious-condition counters (not errors, but worth investigating if nonzero).
+  //   zero_residence – block installed and evicted in the same cycle;
+  //                    dead_tail is always 0 here so classification is still
+  //                    valid, but the measurement carries no useful timing info.
+  uint64_t evict_zero_residence = 0;
+
+  // LLC DoA blocks whose PFN has a currently-resident DoA STLB entry.
+  // Denominator is evict_doa.  Only meaningful for LLC.
+  uint64_t evict_doa_on_doa_stlb_page = 0;
+
+  // Hit-count distribution at eviction.
+  // Bin i = evicted with exactly i hits; bin HIT_HIST_BINS-1 = that many or more.
+  static constexpr std::size_t HIT_HIST_BINS = 9; // bins 0..7 + "8+"
+  std::array<uint64_t, HIT_HIST_BINS> evict_hit_hist = {};
+
+  // Per-PC liveness event counts (cumulative, never reset).
+  std::map<uint64_t, pc_liveness_entry> llt_pc_stats; // STLB: [ip] → counts
+  std::map<uint64_t, pc_liveness_entry> llc_pc_stats; // LLC:  [ip] → counts
 };
 
 struct cache_queue_stats {
@@ -95,6 +133,11 @@ class CACHE : public champsim::operable, public MemoryRequestConsumer, public Me
     uint64_t ip = 0; // PC that caused the miss that filled this block
 
     uint32_t pf_metadata = 0;
+
+    // ── Liveness tracking (LLC and STLB; all blocks, not just dp) ───────────
+    uint64_t insert_cycle   = 0; // current_cycle at insertion
+    uint64_t last_hit_cycle = 0; // current_cycle at most recent hit (== insert_cycle if never hit)
+    uint32_t hit_count      = 0; // demand hits while resident (uint32_t: no artificial cap)
   };
   using set_type = std::vector<BLOCK>;
 
@@ -103,6 +146,28 @@ class CACHE : public champsim::operable, public MemoryRequestConsumer, public Me
   std::size_t get_set_index(uint64_t address) const;
 
   // ── dpPred-cbPred predictor ──────────────────────────────────────────────
+
+  // Liveness classification produced by classify_liveness() and shared
+  // between record_eviction_liveness() and update_eviction_counters().
+  enum class liveness_class { doa, mostly_dead, mostly_alive };
+
+  // History-table entry.  The two counters have independent update rules:
+  //   doa          – incremented on DoA eviction; reset when the accessed bit
+  //                  is set at eviction (i.e. on mostly-dead or mostly-alive
+  //                  eviction, both of which imply at least one hit).
+  //                  Gates dppred_bypass / cbpred_bypass: bypass when doa
+  //                  exceeds pconf_thd / bconf_thd.
+  //   mostly_dead  – incremented on mostly-dead eviction, reset on mostly-alive
+  //                  eviction; unchanged on DoA.
+  // The two counters never both increment on the same eviction, but a DoA
+  // eviction leaves mostly_dead untouched (it neither confirms nor disproves
+  // that the block was mostly-dead on a prior eviction).
+  // needs_mid_insertion() returns true when either doa or mostly_dead is >= mid_thd.
+  struct hist_entry {
+    uint64_t doa         = 0;
+    uint64_t mostly_dead = 0;
+  };
+
 
   // Shared physical-frame queue: dpPred fills it; cbPred reads it.
   inline static std::deque<uint64_t> pfq{};
@@ -113,23 +178,54 @@ class CACHE : public champsim::operable, public MemoryRequestConsumer, public Me
   bool cbpred = false;
   uint64_t pconf_thd = 6; // phist confidence threshold
   uint64_t bconf_thd = 6; // bhist confidence threshold
+  uint64_t mid_thd   = 1; // min DoA-or-mostly-dead evictions before mid-insertion triggers
   uint64_t st_size = 2;   // shadow table capacity
 
-  std::map<uint64_t, std::map<uint64_t, uint64_t>> phist; // [vpn_hash][pc_hash] → confidence
-  std::deque<std::pair<uint64_t, uint64_t>> shadow_table; // recently bypassed (VPN, translation data)
-  std::map<uint64_t, uint64_t> bhist;                      // [block_hash] → confidence
+  // Set by cpu0_STLB at initialize(); used by LLC to scan for DoA page correlations.
+  inline static const CACHE* stlb_ptr = nullptr;
 
-  static constexpr unsigned  VPN_BITS    = 4;
-  static constexpr unsigned  PC_BITS     = 6;
-  static constexpr unsigned  BHT_BITS    = 12;
-  static constexpr uint64_t  MAX_COUNTER = 16;
+  std::map<uint64_t, std::map<uint64_t, hist_entry>> phist; // [vpn_hash][pc_hash] → entry
+  std::deque<std::pair<uint64_t, uint64_t>> shadow_table;   // recently bypassed (VPN, translation data)
+  std::map<uint64_t, hist_entry> bhist;                      // [block_hash] → entry
+
+  // Selects which history signal drives needs_mid_insertion().
+  // Controlled by the MID_KEY env var (0 = addr, 1 = pc; default 0).
+  enum class mid_key_t : uint8_t { addr = 0, pc = 1 };
+  mid_key_t mid_key = mid_key_t::addr;
+
+  // Unbounded insertion-policy tables: always updated at eviction regardless
+  // of predictor state.  No hashing — no collisions.  Budget is intentionally
+  // unrealistic for now.  LLC and STLB keep separate tables because they track
+  // different address granularities (cache lines vs pages) and have independent
+  // liveness behaviour.
+  //   llc_mid_hist_addr  : LLC, keyed by block address (full_addr >> OFFSET_BITS)
+  //   llc_mid_hist_pc    : LLC, keyed by the PC that triggered the access
+  //   stlb_mid_hist_addr : STLB, keyed by VPN (full_addr >> OFFSET_BITS)
+  //   stlb_mid_hist_pc   : STLB, keyed by the PC that triggered the access
+  // needs_mid_insertion() consults only the table selected by mid_key.
+  std::map<uint64_t, hist_entry> llc_mid_hist_addr;
+  std::map<uint64_t, hist_entry> llc_mid_hist_pc;
+  std::map<uint64_t, hist_entry> stlb_mid_hist_addr;
+  std::map<uint64_t, hist_entry> stlb_mid_hist_pc;
+
+  static constexpr unsigned  VPN_BITS = 4;
+  static constexpr unsigned  PC_BITS  = 6;
+  static constexpr unsigned  BHT_BITS = 12;
+  // No MAX_COUNTER cap: hardware would use a fixed-width saturating counter
+  // (e.g. 4 bits → 0-15), but in the simulator the counters live in std::map
+  // as uint64_t, so capping loses information without saving any memory.
+  // The bypass threshold (pconf_thd / bconf_thd) is the only meaningful limit.
 
   uint64_t fold_xor(uint64_t val, unsigned bits) const;
-  void load_predictor_settings();                          // reads env vars to configure dpPred/cbPred at construction
-  bool dppred_shadow_lookup(const PACKET& handle_pkt);     // true → shadow hit: history reset, data served, entry re-inserted into STLB, PTW skipped
-  bool dppred_bypass(const PACKET& fill_mshr);             // true → skip STLB fill
-  bool cbpred_bypass(const PACKET& fill_mshr);             // true → skip LLC fill
-  void update_eviction_counters(const BLOCK& victim);      // update the history table for this cache level
+  void load_predictor_settings();                               // reads env vars to configure dpPred/cbPred at construction
+  bool dppred_shadow_lookup(const PACKET& handle_pkt);          // true → shadow hit: history reset, data served, entry re-inserted into STLB, PTW skipped
+  bool dppred_bypass(const PACKET& fill_mshr);                  // true → skip STLB fill
+  bool cbpred_bypass(const PACKET& fill_mshr);                  // true → skip LLC fill
+  liveness_class classify_liveness(const BLOCK& victim) const;  // compute liveness class + run invariant asserts
+  void update_eviction_counters(const BLOCK& victim, liveness_class lv); // update phist/bhist counters
+  void record_eviction_liveness(const BLOCK& victim, liveness_class lv); // record aggregate liveness stats
+  void record_pc_liveness(const BLOCK& victim, liveness_class lv);       // accumulate per-PC liveness event counts
+  bool needs_mid_insertion(uint64_t full_addr, uint64_t ip) const;        // true → insert/refresh at set midpoint
 
 public:
   struct NonTranslatingQueues : public champsim::operable {
@@ -246,6 +342,8 @@ public:
 
   const std::bitset<NUM_REPLACEMENT_MODULES> repl_type;
   const std::bitset<NUM_PREFETCH_MODULES> pref_type;
+
+  ~CACHE() { if (stlb_ptr == this) stlb_ptr = nullptr; }
 
   // constructor
   CACHE(std::string v1, double freq_scale, uint32_t v2, uint32_t v3, uint32_t v8, uint32_t fill_lat, long int max_tag, long int max_fill, unsigned offset_bits,
