@@ -351,6 +351,94 @@ def plot_hit_cdf_per_workload(suites, cache, out_path: Path):
     print(f"Saved: {out_path}")
 
 
+# ── Correlation parsing ───────────────────────────────────────────────────────
+
+_CORR_STLB     = re.compile(r"cpu0_STLB LIVENESS EVICTIONS:\s+(\d+)\s+DOA:\s+(\d+)")
+_CORR_LLC_TOT  = re.compile(r"LLC LIVENESS EVICTIONS:\s+(\d+)\s+DOA:\s+(\d+)")
+_CORR_PAGE     = re.compile(r"LLC LIVENESS DOA_ON_DOA_STLB_PAGE:\s+(\d+)")
+
+
+def parse_correlation(path: Path):
+    """Return (stlb_doa_pct, llc_doa_pct, llc_doa_on_page_pct) or None."""
+    text = path.read_text(errors="replace")
+    sm = _CORR_STLB.search(text)
+    lm = _CORR_LLC_TOT.search(text)
+    pm = _CORR_PAGE.search(text)
+    if not (sm and lm and pm):
+        return None
+    stlb_total = int(sm.group(1)); stlb_doa = int(sm.group(2))
+    llc_total  = int(lm.group(1)); llc_doa  = int(lm.group(2))
+    llc_page   = int(pm.group(1))
+    if stlb_total == 0 or llc_doa == 0:
+        return None
+    return (100.0 * stlb_doa / stlb_total,
+            100.0 * llc_doa  / llc_total if llc_total > 0 else 0.0,
+            100.0 * llc_page / llc_doa)
+
+
+def load_suite_corr(results_dir: Path):
+    """Return list of (workload, stlb_doa_pct, llc_doa_pct, llc_on_page_pct)."""
+    files = sorted(results_dir.glob("*/champsim.out"))
+    if not files:
+        files = sorted(results_dir.glob("*.out"))
+    rows = []
+    for f in files:
+        wl = f.parent.name if f.name == "champsim.out" else f.stem
+        r = parse_correlation(f)
+        if r is not None:
+            rows.append((wl, r[0], r[1], r[2]))
+    return rows
+
+
+# ── Correlation plot ──────────────────────────────────────────────────────────
+
+def plot_corr_strip(suite_corr, out_path: Path):
+    """Strip chart comparing three DoA metrics across suites.
+
+    Three panels: STLB DoA rate / LLC DoA rate / LLC DoA-on-DoA-page rate.
+    Each suite = jittered cloud of per-workload dots + diamond mean marker.
+    """
+    fig, axes = plt.subplots(1, 3, figsize=(11, 5), sharey=False)
+
+    metrics = [
+        (1, "STLB DoA rate (%)",            "STLB DoA rate\n(% of STLB evictions)"),
+        (2, "LLC DoA rate (%)",             "LLC DoA rate\n(% of LLC evictions)"),
+        (3, "LLC DoA-on-DoA-page rate (%)", "LLC DoA-on-DoA-page rate\n(% of LLC DoA blocks)"),
+    ]
+
+    rng = np.random.default_rng(0)
+
+    for ax, (col_idx, ylabel, title) in zip(axes, metrics):
+        for xi, ((lbl, rows), color) in enumerate(zip(suite_corr, SUITE_COLORS)):
+            if not rows:
+                continue
+            vals   = np.array([r[col_idx] for r in rows])
+            jitter = rng.uniform(-0.18, 0.18, size=len(vals))
+            ax.scatter(xi + jitter, vals, s=20, color=color,
+                       edgecolors="none", alpha=0.55, zorder=2)
+            mean = np.mean(vals)
+            ax.plot(xi, mean, marker="D", markersize=8, color=color,
+                    markeredgecolor="black", markeredgewidth=0.7, zorder=3,
+                    label=f"{lbl}  (mean {mean:.1f}%)")
+
+        ax.set_xticks(np.arange(len(suite_corr)))
+        ax.set_xticklabels([lbl for lbl, _ in suite_corr], fontsize=11)
+        ax.set_xlim(-0.5, len(suite_corr) - 0.5)
+        ax.set_ylabel(ylabel, fontsize=10)
+        ax.set_title(title, fontsize=10)
+        ax.yaxis.set_major_formatter(mticker.FormatStrFormatter("%.0f%%"))
+        ax.legend(fontsize=8, framealpha=0.85, loc="upper right")
+        ax.grid(axis="y", alpha=0.3, linewidth=0.5)
+
+    fig.suptitle("DoA correlation metrics per workload\n"
+                 "(dots = individual workloads · diamond = mean)", fontsize=11)
+    fig.tight_layout()
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(out_path, dpi=200, bbox_inches="tight")
+    plt.close(fig)
+    print(f"Saved: {out_path}")
+
+
 # ── Per-PC parsing ───────────────────────────────────────────────────────────
 
 _PC_HEADER = re.compile(r"^(\S+) PER-PC LIVENESS \(\d+ PCs\):", re.MULTILINE)
@@ -531,6 +619,15 @@ def main():
         suites.append((lbl, rows))
 
     out_stem = Path(args.out)
+
+    # Correlation strip chart (cache-independent)
+    print("Loading correlation data ...")
+    suite_corr = []
+    for lbl, d in zip(labels, dirs):
+        rows = load_suite_corr(d)
+        print(f"  {lbl}: {len(rows)} workloads with correlation data")
+        suite_corr.append((lbl, rows))
+    plot_corr_strip(suite_corr, out_stem.parent / f"{out_stem.name}_corr_strip.png")
 
     for cache in ["LLC", "cpu0_STLB"]:
         tag = CACHE_DISPLAY[cache]
