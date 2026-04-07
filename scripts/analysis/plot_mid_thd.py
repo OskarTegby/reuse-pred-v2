@@ -144,6 +144,8 @@ def main():
             if args.metric == "ipc":
                 per_trace.append((v / baselines[t] - 1.0) * 100.0)
             else:
+                if v == 0:
+                    continue  # no misses — skip; can't compute reduction
                 per_trace.append((baselines[t] / v - 1.0) * 100.0)
         agg_values.append(geomean_ratios(per_trace))
 

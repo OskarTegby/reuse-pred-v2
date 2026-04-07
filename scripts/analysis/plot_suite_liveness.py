@@ -130,8 +130,8 @@ def suite_geomean_fracs(rows, cache):
 
 # ── Figure 1: aggregate stacked bar ──────────────────────────────────────────
 
-def plot_aggregate_bar(suites, cache, out_path: Path):
-    """One stacked bar per suite (geomean across workloads): DoA / mostly-dead / mostly-alive."""
+def _draw_aggregate_bar(ax, suites, cache):
+    """Draw stacked liveness bars into ax. Returns True if data was plotted."""
     labels, doa_vals, md_vals, ma_vals = [], [], [], []
     for lbl, rows in suites:
         result = suite_geomean_fracs(rows, cache)
@@ -146,7 +146,7 @@ def plot_aggregate_bar(suites, cache, out_path: Path):
 
     if not labels:
         print(f"  WARNING: nothing to plot for {cache} bar — skipping")
-        return
+        return False
 
     n = len(labels)
     x = np.arange(n)
@@ -154,8 +154,6 @@ def plot_aggregate_bar(suites, cache, out_path: Path):
     doa_arr = np.array(doa_vals)
     md_arr  = np.array(md_vals)
     ma_arr  = np.array(ma_vals)
-
-    fig, ax = plt.subplots(figsize=(max(4, n * 1.4 + 2), 5))
 
     kw = dict(width=w, edgecolor="black", linewidth=0.7)
     ax.bar(x, doa_arr, bottom=np.zeros(n),     label="Dead-on-arrival (DoA)", color=COLOR_DOA, **kw)
@@ -177,7 +175,28 @@ def plot_aggregate_bar(suites, cache, out_path: Path):
     ax.set_title(f"{cache_name} evictions by liveness class\n(geomean across workloads per suite)", fontsize=11)
     ax.legend(loc="upper right", fontsize=9, framealpha=0.85)
     ax.grid(axis="y", alpha=0.3, linewidth=0.5)
+    return True
 
+
+def plot_aggregate_bar(suites, cache, out_path: Path):
+    """One stacked bar per suite (geomean across workloads): DoA / mostly-dead / mostly-alive."""
+    fig, ax = plt.subplots(figsize=(max(4, 3 * 1.4 + 2), 5))
+    if not _draw_aggregate_bar(ax, suites, cache):
+        plt.close(fig)
+        return
+    fig.tight_layout()
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(out_path, dpi=200, bbox_inches="tight")
+    plt.close(fig)
+    print(f"Saved: {out_path}")
+
+
+def plot_aggregate_bar_combined(suites, out_path: Path):
+    """Side-by-side stacked bar: LLC (left) and STLB (right) in one figure."""
+    fig, (ax_llc, ax_stlb) = plt.subplots(1, 2, figsize=(12, 5))
+    _draw_aggregate_bar(ax_llc,  suites, "LLC")
+    _draw_aggregate_bar(ax_stlb, suites, "cpu0_STLB")
+    fig.suptitle("Evictions by liveness class (geomean across workloads per suite)", fontsize=12)
     fig.tight_layout()
     out_path.parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(out_path, dpi=200, bbox_inches="tight")
@@ -449,23 +468,44 @@ _PC_ROW    = re.compile(
 
 
 def parse_per_pc(path: Path, cache: str):
-    """Return (evictions, doa, mostly_dead) arrays for every PC in cache's PER-PC block."""
+    """Return (evictions, doa, mostly_dead) arrays for every PC in cache's PER-PC block.
+
+    Tries two sources in order:
+      1. PER-PC LIVENESS text blocks in champsim.out (old format)
+      2. pc_liveness.csv written by the binary alongside champsim.out (new format)
+    """
     text = path.read_text(errors="replace")
     start = None
     for m in _PC_HEADER.finditer(text):
         if m.group(1) == cache:
             start = m.end()
             break
-    if start is None:
-        return np.zeros(0), np.zeros(0), np.zeros(0)
-    next_hdr = _PC_HEADER.search(text, start)
-    section  = text[start: next_hdr.start() if next_hdr else len(text)]
-    rows = _PC_ROW.findall(section)
-    if not rows:
-        return np.zeros(0), np.zeros(0), np.zeros(0)
-    return (np.array([int(r[1]) for r in rows], dtype=float),
-            np.array([int(r[2]) for r in rows], dtype=float),
-            np.array([int(r[3]) for r in rows], dtype=float))
+    if start is not None:
+        next_hdr = _PC_HEADER.search(text, start)
+        section  = text[start: next_hdr.start() if next_hdr else len(text)]
+        rows = _PC_ROW.findall(section)
+        if rows:
+            return (np.array([int(r[1]) for r in rows], dtype=float),
+                    np.array([int(r[2]) for r in rows], dtype=float),
+                    np.array([int(r[3]) for r in rows], dtype=float))
+
+    # Fall back to pc_liveness.csv written directly by the binary
+    csv_path = path.parent / "pc_liveness.csv"
+    if csv_path.exists():
+        import csv as _csv
+        evictions, doa, md = [], [], []
+        with csv_path.open(newline="") as f:
+            for row in _csv.DictReader(f):
+                if row["cache"] == cache:
+                    evictions.append(int(row["evictions"]))
+                    doa.append(int(row["doa"]))
+                    md.append(int(row["mostly_dead"]))
+        if evictions:
+            return (np.array(evictions, dtype=float),
+                    np.array(doa, dtype=float),
+                    np.array(md, dtype=float))
+
+    return np.zeros(0), np.zeros(0), np.zeros(0)
 
 
 def load_suite_pc(results_dir: Path, cache: str):
@@ -629,9 +669,11 @@ def main():
         suite_corr.append((lbl, rows))
     plot_corr_strip(suite_corr, out_stem.parent / f"{out_stem.name}_corr_strip.png")
 
+    # Combined LLC + STLB bar chart (side-by-side)
+    plot_aggregate_bar_combined(suites, out_stem.parent / f"{out_stem.name}_bar_LLC_STLB.png")
+
     for cache in ["LLC", "cpu0_STLB"]:
         tag = CACHE_DISPLAY[cache]
-        plot_aggregate_bar(       suites, cache, out_stem.parent / f"{out_stem.name}_bar_{tag}.png")
         # plot_lorenz(...)              — workload-level Lorenz, available but disabled
         # plot_hit_cdf_pooled(...)      — hit-count CDF, available but disabled
         # plot_hit_cdf_per_workload(...) — hit-count CDF per workload, available but disabled
