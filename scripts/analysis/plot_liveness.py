@@ -28,6 +28,7 @@ import argparse
 import os
 import re
 import sys
+from pathlib import Path
 
 import matplotlib
 matplotlib.use("Agg")
@@ -35,11 +36,173 @@ import matplotlib.pyplot as plt
 import matplotlib.ticker as mticker
 import numpy as np
 
+# ── Simpoint weights ──────────────────────────────────────────────────────────
+
+_DEFAULT_WEIGHTS_DIR = (
+    Path(__file__).parents[2] / ".." / "ChampSim-dev" / "trace-files" / "SPEC2006_weights"
+).resolve()
+
+
+def _load_spec_weights(weights_dir: Path) -> "dict[str, float]":
+    result: dict = {}
+    if not weights_dir.is_dir():
+        return result
+    for bm_dir in sorted(weights_dir.iterdir()):
+        if not bm_dir.is_dir():
+            continue
+        w_file = bm_dir / "weights.out"
+        s_file = bm_dir / "simpoints.out"
+        if not (w_file.exists() and s_file.exists()):
+            continue
+        w_vals = [float(x) for x in w_file.read_text().split()]
+        s_ids  = [int(x)   for x in s_file.read_text().split()]
+        for sp_id, w in zip(s_ids, w_vals):
+            result[f"{bm_dir.name}-{sp_id}B"] = w
+    return result
+
+
+def _benchmark_name(wl: str) -> str:
+    m = re.match(r'^(.+)-\d+[A-Z]+$', wl)
+    return m.group(1) if m else wl
+
+
+_SPEC_WEIGHTS: "dict[str, float]" = _load_spec_weights(_DEFAULT_WEIGHTS_DIR)
+
+MAX_WORKLOADS = 25   # maximum per-workload bars shown in multi-workload plots
+
+
+def _diverse_select(items, feature_fn, k):
+    """Greedy farthest-point sampling: select k items maximally spread in feature space.
+
+    Starts with the item closest to the centroid, then iteratively adds the item
+    that maximises the minimum distance to the already-selected set.  Features are
+    normalised per-dimension to [0, 1] before computing Euclidean distances.
+    Returns a list of indices into items, sorted by the original feature magnitude
+    (descending dead fraction) so the displayed bars read left-to-right coherently.
+    """
+    n = len(items)
+    if n <= k:
+        return list(range(n))
+    vecs = np.array([feature_fn(item) for item in items], dtype=float)
+    lo, hi = vecs.min(axis=0), vecs.max(axis=0)
+    span = np.where(hi > lo, hi - lo, 1.0)
+    v = (vecs - lo) / span
+    centroid = v.mean(axis=0)
+    selected = [int(np.argmin(np.linalg.norm(v - centroid, axis=1)))]
+    min_d = np.full(n, np.inf)
+    while len(selected) < k:
+        d = np.linalg.norm(v - v[selected[-1]], axis=1)
+        min_d = np.minimum(min_d, d)
+        min_d[selected] = -1.0
+        selected.append(int(np.argmax(min_d)))
+    return selected
+
+
+def _aggregate_spec_benchmarks(rows):
+    """Collapse SPEC simpoints into parent benchmark rows.
+
+    For SPEC traces (identified by the -NNNb suffix), compute weighted-average
+    liveness fractions within each benchmark and return one synthetic row per
+    benchmark.  Non-SPEC rows are kept as-is.
+    rows = [(wl_name, {cache: {total, doa, mostly_dead, mostly_alive, ...}})]
+    """
+    groups: dict = {}
+    for wl, data in rows:
+        groups.setdefault(_benchmark_name(wl), []).append((wl, data))
+
+    result = []
+    for bm_name in sorted(groups.keys()):
+        items = groups[bm_name]
+        # Non-SPEC: name didn't change → keep as-is
+        if len(items) == 1 and items[0][0] == bm_name:
+            result.append(items[0])
+            continue
+        # SPEC: aggregate simpoints into one benchmark row
+        all_caches: set = set()
+        for _, d in items:
+            all_caches |= set(d.keys())
+        agg_data: dict = {}
+        for cache in all_caches:
+            sp_fracs = []
+            for wl, data in items:
+                d = data.get(cache, {})
+                tot = d.get("total", 0)
+                if tot == 0:
+                    continue
+                w = _SPEC_WEIGHTS.get(wl)
+                sp_fracs.append((d.get("doa", 0) / tot,
+                                 d.get("mostly_dead", 0) / tot,
+                                 d.get("mostly_alive", 0) / tot, w))
+            if not sp_fracs:
+                continue
+            w_valid = [(d, m, a, w) for d, m, a, w in sp_fracs if w is not None]
+            if w_valid and _SPEC_WEIGHTS:
+                total_w = sum(w for _, _, _, w in w_valid)
+                if total_w > 0:
+                    avg_doa = sum(w / total_w * d for d, _, _, w in w_valid)
+                    avg_md  = sum(w / total_w * m for _, m, _, w in w_valid)
+                    avg_ma  = sum(w / total_w * a for _, _, a, w in w_valid)
+                else:
+                    avg_doa = sum(d for d, _, _, _ in sp_fracs) / len(sp_fracs)
+                    avg_md  = sum(m for _, m, _, _ in sp_fracs) / len(sp_fracs)
+                    avg_ma  = sum(a for _, _, a, _ in sp_fracs) / len(sp_fracs)
+            else:
+                avg_doa = sum(d for d, _, _, _ in sp_fracs) / len(sp_fracs)
+                avg_md  = sum(m for _, m, _, _ in sp_fracs) / len(sp_fracs)
+                avg_ma  = sum(a for _, _, a, _ in sp_fracs) / len(sp_fracs)
+            SCALE = 10000
+            agg_data[cache] = {
+                "total":        SCALE,
+                "doa":          int(avg_doa * SCALE),
+                "mostly_dead":  int(avg_md  * SCALE),
+                "mostly_alive": int(avg_ma  * SCALE),
+            }
+        if agg_data:
+            result.append((bm_name, agg_data))
+    return result
+
+
+def _benchmark_weighted_geomean_frac(trace_names, fracs) -> float:
+    """Benchmark-weighted geomean of a per-trace fraction list.
+
+    For SPEC traces (simpoint weights found): weighted geomean within each
+    benchmark (re-normalised for missing simpoints), then equal-weight geomean
+    across benchmarks.  For others: flat equal-weight geomean.
+    Clips fracs to a small epsilon before log so zero values don't collapse.
+    """
+    eps = 1e-6
+    by_wl = dict(zip(trace_names, fracs))
+    groups: dict = {}
+    for wl in by_wl:
+        groups.setdefault(_benchmark_name(wl), []).append(wl)
+    per_bench = []
+    for wl_list in groups.values():
+        if _SPEC_WEIGHTS:
+            pairs = [(by_wl[wl], _SPEC_WEIGHTS.get(wl)) for wl in wl_list]
+            if any(w is not None for _, w in pairs):
+                pairs = [(v, w) for v, w in pairs if w is not None]
+                total_w = sum(w for _, w in pairs)
+                if total_w > 0:
+                    per_bench.append(float(np.exp(
+                        sum((w / total_w) * np.log(max(v, eps)) for v, w in pairs))))
+                    continue
+        vals = [by_wl[wl] for wl in wl_list]
+        per_bench.append(float(np.exp(np.mean(np.log(np.clip(vals, eps, None))))))
+    if not per_bench:
+        return 0.0
+    return float(np.exp(np.mean(np.log(np.clip(per_bench, eps, None)))))
+
 
 COLORS = {
-    "doa":          "#d73027",
-    "mostly_dead":  "#fdae61",
-    "mostly_alive": "#1a9850",
+    "doa":          "#5B7FA6",   # steel blue
+    "mostly_dead":  "#E8A87C",   # soft peach
+    "mostly_alive": "#7CB9A8",   # soft teal
+}
+# Text contrast per segment color
+_LABEL_COLOR = {
+    "doa":          "white",
+    "mostly_dead":  "black",
+    "mostly_alive": "white",
 }
 
 HIT_HIST_COLORS = [
@@ -135,7 +298,7 @@ def plot_liveness(data_per_cache, label, out_path, show_hist=True):
             if v > 3:
                 ax.text(xi, b + v / 2, f"{v:.1f}%",
                         ha="center", va="center", fontsize=9, fontweight="bold",
-                        color="white" if v > 12 else "black")
+                        color=_LABEL_COLOR[key])
         bottoms += vals
 
     ax.set_xticks(x)
@@ -190,9 +353,14 @@ def geomean(values):
 
 def plot_liveness_per_workload(trace_data, label, out_path, cache_filter=None):
     """
-    trace_data : list of (trace_name, data_per_cache) sorted by trace name.
+    trace_data : list of (trace_name, data_per_cache).
+    SPEC simpoints are aggregated into parent benchmarks before display.
+    Only the top MAX_WORKLOADS benchmarks/workloads (by dead fraction) are shown.
     Produces one panel per cache with one stacked bar per workload + geomean.
     """
+    # Aggregate SPEC simpoints into parent benchmarks
+    trace_data = _aggregate_spec_benchmarks(trace_data)
+
     all_caches = ["cpu0_STLB", "LLC"]
     if cache_filter:
         all_caches = [c for c in all_caches if DISPLAY.get(c, c) == cache_filter]
@@ -200,18 +368,41 @@ def plot_liveness_per_workload(trace_data, label, out_path, cache_filter=None):
     if not caches:
         sys.exit("ERROR: no liveness data found.")
 
+    # Keep full list for geomean; select diverse subset for display
+    all_trace_data = trace_data
+
+    if len(trace_data) > MAX_WORKLOADS:
+        def _fvec(item):
+            return [
+                (item[1].get(c, {}).get("doa", 0) + item[1].get(c, {}).get("mostly_dead", 0))
+                / max(item[1].get(c, {}).get("total", 0), 1)
+                for c in caches
+            ]
+        sel = _diverse_select(trace_data, _fvec, MAX_WORKLOADS)
+        trace_data = [trace_data[i] for i in sel]
+
+    # Sort selected subset by descending dead fraction so bars read coherently
+    ref_cache = caches[0]
+    def dead_key(item):
+        d = item[1].get(ref_cache, {})
+        tot = d.get("total", 0) or 1
+        return (d.get("doa", 0) + d.get("mostly_dead", 0)) / tot
+    trace_data = sorted(trace_data, key=dead_key, reverse=True)
+
+    trace_names_all = [t for t, _ in all_trace_data]   # for geomean weighting
     trace_names = [t for t, _ in trace_data]
     n = len(trace_names)
     xlabels = trace_names + ["GeoMean"]
     x = np.arange(len(xlabels))
 
     nrows = len(caches)
-    fig_w = max(14, n * 0.35 + 3)
+    fig_w = max(10, n * 0.50 + 3)
     fig, axes = plt.subplots(nrows, 1, figsize=(fig_w, 5 * nrows), squeeze=False)
 
     for row, cache in enumerate(caches):
         ax = axes[row][0]
 
+        # Per-workload fracs for displayed workloads only
         pct = {k: [] for k in ("doa", "mostly_dead", "mostly_alive")}
         for _, data in trace_data:
             d = data.get(cache, {})
@@ -220,35 +411,57 @@ def plot_liveness_per_workload(trace_data, label, out_path, cache_filter=None):
             pct["mostly_dead"].append(100.0 * d.get("mostly_dead", 0) / tot)
             pct["mostly_alive"].append(100.0 * d.get("mostly_alive", 0) / tot)
 
-        # Append geometric mean for each class
+        # Geomean computed over ALL workloads (not just the displayed subset)
+        all_pct = {k: [] for k in ("doa", "mostly_dead", "mostly_alive")}
+        for _, data in all_trace_data:
+            d = data.get(cache, {})
+            tot = d.get("total", 0) or 1
+            all_pct["doa"].append(100.0 * d.get("doa", 0) / tot)
+            all_pct["mostly_dead"].append(100.0 * d.get("mostly_dead", 0) / tot)
+            all_pct["mostly_alive"].append(100.0 * d.get("mostly_alive", 0) / tot)
+
+        # Append benchmark-weighted geometric mean for each class (over all workloads)
         for key in pct:
-            pct[key].append(geomean(pct[key]))
+            pct[key].append(
+                _benchmark_weighted_geomean_frac(trace_names_all, all_pct[key]))
+        # Normalise geomean so the geomean bar sums to 100%
+        gm_sum = sum(pct[k][-1] for k in ("doa", "mostly_dead", "mostly_alive"))
+        if gm_sum > 0:
+            for k in ("doa", "mostly_dead", "mostly_alive"):
+                pct[k][-1] = pct[k][-1] / gm_sum * 100.0
 
         bar_w = 0.7
         bottoms = np.zeros(len(xlabels))
         for key in ("doa", "mostly_dead", "mostly_alive"):
             vals = np.array(pct[key])
-            bars = ax.bar(x, vals, bar_w, bottom=bottoms,
-                          color=COLORS[key], edgecolor="black", linewidth=0.4,
-                          label=LABELS_NICE[key])
-            # Label the geomean bar value for each class
-            gm_val = vals[-1]
-            gm_bot = bottoms[-1]
-            if gm_val > 2:
-                ax.text(x[-1], gm_bot + gm_val / 2, f"{gm_val:.1f}%",
-                        ha="center", va="center", fontsize=8, fontweight="bold",
-                        color="white" if gm_val > 10 else "black")
+            ax.bar(x, vals, bar_w, bottom=bottoms,
+                   color=COLORS[key], edgecolor="black", linewidth=0.4,
+                   label=LABELS_NICE[key])
+            tc = _LABEL_COLOR[key]
+            # Label every segment (workload bars + geomean bar)
+            for xi in range(len(vals)):
+                v = vals[xi]
+                b = bottoms[xi]
+                fs = 10 if xi == len(vals) - 1 else 8   # larger font for geomean
+                if v > 5:
+                    ax.text(x[xi], b + v / 2, f"{v:.0f}%",
+                            ha="center", va="center", fontsize=fs,
+                            fontweight="bold", color=tc)
             bottoms += vals
 
         # Separator before geomean
         ax.axvline(n - 0.5, color="black", linewidth=1.0, linestyle="--")
 
         ax.set_xticks(x)
-        ax.set_xticklabels(xlabels, rotation=45, ha="right", fontsize=7)
+        ax.set_xticklabels(xlabels, rotation=40, ha="right", fontsize=9)
         ax.set_ylabel("% of evictions", fontsize=11)
         ax.set_ylim(0, 105)
-        ax.set_title(f"{DISPLAY.get(cache, cache)} liveness at eviction — {label}", fontsize=11)
-        ax.legend(loc="upper right", fontsize=9)
+        n_shown = len(trace_names)
+        ax.set_title(
+            f"{DISPLAY.get(cache, cache)} liveness at eviction — {label}\n"
+            f"({n_shown} most diverse of {len(all_trace_data)}; geomean over all)",
+            fontsize=13)
+        ax.legend(loc="upper left", fontsize=9)
         ax.grid(axis="y", alpha=0.25)
 
     plt.tight_layout()
@@ -265,6 +478,7 @@ def main():
     parser.add_argument("--file",    default=None, help="Direct path to champsim.out")
     parser.add_argument("--trace",   default=None, help="Single trace name to plot")
     parser.add_argument("--config",  default="lru")
+    parser.add_argument("--label",   default=None, help="Display name for the suite (overrides directory name)")
     parser.add_argument("--cache",   default=None, choices=["LLC", "STLB"],
                         help="Cache to show in multi-workload mode (default: both)")
     parser.add_argument("--out",     default=None)
@@ -285,7 +499,7 @@ def main():
         sys.exit(1)
 
     base = args.results_dir.rstrip("/")
-    label = os.path.basename(base)
+    label = args.label or os.path.basename(base)
     config_dir = os.path.join(base, args.config)
     if not os.path.isdir(config_dir):
         sys.exit(f"ERROR: config dir not found: {config_dir}")
