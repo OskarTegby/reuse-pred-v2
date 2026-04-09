@@ -50,6 +50,7 @@ PROJECT_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 # ── Argument parsing ──────────────────────────────────────────────────────────
 token=""
 DEBUG=0
+WITH_BASE=1          # include the 8 no-prefetch configs (disable with --no-base)
 WITH_PREF=0
 WITH_PAPER_PREF=0
 WARMUP_OVERRIDE=""
@@ -63,6 +64,7 @@ while [[ $# -gt 0 ]]; do
   case "$1" in
     maz|mazumdar|qmm|dpc3|google|test) token="${1,,}"; shift ;;
     --debug)        DEBUG=1; shift ;;
+    --no-base)      WITH_BASE=0; shift ;;
     --pref)         WITH_PREF=1; shift ;;
     --paper-pref)   WITH_PAPER_PREF=1; shift ;;
     --warmup)       WARMUP_OVERRIDE="$2"; shift 2 ;;
@@ -77,13 +79,13 @@ while [[ $# -gt 0 ]]; do
       esac
       shift 2 ;;
     *) echo "Unknown argument: $1" >&2
-       echo "Usage: $0 {maz|qmm|dpc3|google|test} [--debug] [--pref] [--paper-pref] [--warmup N] [--sim N] [--mid-thd N] [--mid-key addr|pc] [--mid-promote]" >&2
+       echo "Usage: $0 {maz|qmm|dpc3|google|test} [--debug] [--no-base] [--pref] [--paper-pref] [--warmup N] [--sim N] [--mid-thd N] [--mid-key addr|pc] [--mid-promote]" >&2
        exit 2 ;;
   esac
 done
 
 if [ -z "$token" ]; then
-  echo "Usage: $0 {maz|qmm|dpc3|google|test} [--debug] [--pref] [--paper-pref] [--warmup N] [--sim N] [--mid-thd N] [--mid-key addr|pc] [--mid-promote]" >&2
+  echo "Usage: $0 {maz|qmm|dpc3|google|test} [--debug] [--no-base] [--pref] [--paper-pref] [--warmup N] [--sim N] [--mid-thd N] [--mid-key addr|pc] [--mid-promote]" >&2
   exit 2
 fi
 
@@ -150,16 +152,21 @@ mkdir -p "$LOG_DIR"
 
 # ── Config list: (exp_name binary dppred cbpred pconf_thd bconf_thd) ──────────
 # Default predictor thresholds: pconf=6, bconf=6
-configs=(
-  "lru          champsim_lru      0 0 6 6"
-  "srrip         champsim_srrip    0 0 6 6"
-  "drrip         champsim_drrip    0 0 6 6"
-  "lru_mid       champsim_lru_mid  0 0 6 6"
-  "lru_pred      champsim_lru      1 1 6 6"
-  "lru_mid_pred  champsim_lru_mid  1 1 6 6"
-  "srrip_pred    champsim_srrip    1 1 6 6"
-  "drrip_pred    champsim_drrip    1 1 6 6"
-)
+configs=()
+
+# Base (no-prefetch) configs — skipped with --no-base
+if [ "${WITH_BASE}" -eq 1 ]; then
+  configs+=(
+    "lru          champsim_lru      0 0 6 6"
+    "srrip         champsim_srrip    0 0 6 6"
+    "drrip         champsim_drrip    0 0 6 6"
+    "lru_mid       champsim_lru_mid  0 0 6 6"
+    "lru_pred      champsim_lru      1 1 6 6"
+    "lru_mid_pred  champsim_lru_mid  1 1 6 6"
+    "srrip_pred    champsim_srrip    1 1 6 6"
+    "drrip_pred    champsim_drrip    1 1 6 6"
+  )
+fi
 
 # Append prefetch variants when --pref is given.
 if [ "${WITH_PREF}" -eq 1 ]; then
