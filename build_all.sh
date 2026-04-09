@@ -13,15 +13,15 @@
 #
 # Outputs (in ./bin/):
 #   No-prefetch:
-#     champsim_lru      — vanilla LRU for STLB and LLC
-#     champsim_lru_mid  — mid-insertion LRU for STLB and LLC
-#     champsim_srrip    — SRRIP for STLB and LLC
-#     champsim_drrip    — DRRIP for STLB and LLC
+#     champsim_lru      — LRU for STLB and LLC
+#     champsim_lru_mid  — LRU for STLB, mid-insertion LRU for LLC
+#     champsim_srrip    — LRU for STLB, SRRIP for LLC
+#     champsim_drrip    — LRU for STLB, DRRIP for LLC
 #   With-prefetch (L1I=next_line_instr, L1D=ip_stride, L2C=spp_dev):
-#     champsim_lru_pref      — LRU + next_line_instr/ip_stride/spp_dev
-#     champsim_lru_mid_pref  — lru_mid + next_line_instr/ip_stride/spp_dev
-#     champsim_srrip_pref    — SRRIP + next_line_instr/ip_stride/spp_dev
-#     champsim_drrip_pref    — DRRIP + next_line_instr/ip_stride/spp_dev
+#     champsim_lru_pref      — LRU (STLB+LLC) + next_line_instr/ip_stride/spp_dev
+#     champsim_lru_mid_pref  — LRU STLB, lru_mid LLC + next_line_instr/ip_stride/spp_dev
+#     champsim_srrip_pref    — LRU STLB, SRRIP LLC + next_line_instr/ip_stride/spp_dev
+#     champsim_drrip_pref    — LRU STLB, DRRIP LLC + next_line_instr/ip_stride/spp_dev
 #   With-paper-prefetch (L1I=epi_instr, L1D=berti, L2C=next_line — matches PACIPV ISCA'25):
 #     champsim_lru_paper_pref      — LRU + epi_instr/berti/next_line
 #     champsim_lru_mid_paper_pref  — lru_mid + epi_instr/berti/next_line
