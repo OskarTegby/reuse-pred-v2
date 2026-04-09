@@ -30,6 +30,38 @@ import matplotlib.pyplot as plt
 import matplotlib.ticker as mticker
 import numpy as np
 
+# ── Simpoint weights ──────────────────────────────────────────────────────────
+
+_DEFAULT_WEIGHTS_DIR = (
+    Path(__file__).parents[2] / ".." / "ChampSim-dev" / "trace-files" / "SPEC2006_weights"
+).resolve()
+
+
+def _load_spec_weights(weights_dir: Path) -> "dict[str, float]":
+    result: dict = {}
+    if not weights_dir.is_dir():
+        return result
+    for bm_dir in sorted(weights_dir.iterdir()):
+        if not bm_dir.is_dir():
+            continue
+        w_file = bm_dir / "weights.out"
+        s_file = bm_dir / "simpoints.out"
+        if not (w_file.exists() and s_file.exists()):
+            continue
+        w_vals = [float(x) for x in w_file.read_text().split()]
+        s_ids  = [int(x)   for x in s_file.read_text().split()]
+        for sp_id, w in zip(s_ids, w_vals):
+            result[f"{bm_dir.name}-{sp_id}B"] = w
+    return result
+
+
+def _spec_benchmark_name(wl: str) -> str:
+    m = re.match(r'^(.+)-\d+[A-Z]+$', wl)
+    return m.group(1) if m else wl
+
+
+_SPEC_WEIGHTS: "dict[str, float]" = _load_spec_weights(_DEFAULT_WEIGHTS_DIR)
+
 # ── Palette ───────────────────────────────────────────────────────────────────
 
 COLOR_DOA = "#5B7FA6"   # steel blue
@@ -111,20 +143,53 @@ def geomean(values, eps=1e-6):
 
 
 def suite_geomean_fracs(rows, cache):
-    """Return (gm_doa_pct, gm_md_pct, gm_ma_pct) renormalised to sum to 100."""
-    doa_rates, md_rates, ma_rates = [], [], []
-    for _, data in rows:
+    """Return (gm_doa_pct, gm_md_pct, gm_ma_pct) renormalised to sum to 100.
+
+    Uses benchmark-weighted geomean for SPEC traces (simpoint weights found);
+    falls back to flat equal-weight geomean for other suites.
+    """
+    wl_names, doa_rates, md_rates, ma_rates = [], [], [], []
+    for wl, data in rows:
         d = data.get(cache, {})
         tot = d.get("total", 0) or 1
+        wl_names.append(wl)
         doa_rates.append(d.get("doa", 0) / tot * 100)
         md_rates.append(d.get("mostly_dead", 0) / tot * 100)
         ma_rates.append(d.get("mostly_alive", 0) / tot * 100)
     if not doa_rates:
         return None
-    gm_doa = geomean(doa_rates)
-    gm_md  = geomean(md_rates)
-    gm_ma  = geomean(ma_rates)
+
+    eps = 1e-6
+
+    def _weighted_frac_gm(names, fracs):
+        """Benchmark-weighted geomean: weighted within SPEC benchmarks, equal-weight across."""
+        by_wl = dict(zip(names, fracs))
+        groups: dict = {}
+        for w in by_wl:
+            groups.setdefault(_spec_benchmark_name(w), []).append(w)
+        per_bench = []
+        for wl_list in groups.values():
+            if _SPEC_WEIGHTS:
+                pairs = [(by_wl[w], _SPEC_WEIGHTS.get(w)) for w in wl_list]
+                if any(wgt is not None for _, wgt in pairs):
+                    pairs = [(v, wgt) for v, wgt in pairs if wgt is not None]
+                    total_w = sum(wgt for _, wgt in pairs)
+                    if total_w > 0:
+                        per_bench.append(float(np.exp(
+                            sum((wgt / total_w) * np.log(max(v, eps)) for v, wgt in pairs))))
+                        continue
+            vals = [by_wl[w] for w in wl_list]
+            per_bench.append(float(np.exp(np.mean(np.log(np.clip(vals, eps, None))))))
+        if not per_bench:
+            return 0.0
+        return float(np.exp(np.mean(np.log(np.clip(per_bench, eps, None)))))
+
+    gm_doa = _weighted_frac_gm(wl_names, doa_rates)
+    gm_md  = _weighted_frac_gm(wl_names, md_rates)
+    gm_ma  = _weighted_frac_gm(wl_names, ma_rates)
     total  = gm_doa + gm_md + gm_ma
+    if total == 0:
+        return None
     return gm_doa / total * 100, gm_md / total * 100, gm_ma / total * 100
 
 

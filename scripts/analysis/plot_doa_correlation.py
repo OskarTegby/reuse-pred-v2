@@ -40,6 +40,66 @@ import matplotlib.pyplot as plt
 import matplotlib.ticker as mticker
 import numpy as np
 
+# ── Simpoint weights ──────────────────────────────────────────────────────────
+
+_DEFAULT_WEIGHTS_DIR = (
+    Path(__file__).parents[2] / ".." / "ChampSim-dev" / "trace-files" / "SPEC2006_weights"
+).resolve()
+
+
+def _load_spec_weights(weights_dir: Path) -> "dict[str, float]":
+    result: dict = {}
+    if not weights_dir.is_dir():
+        return result
+    for bm_dir in sorted(weights_dir.iterdir()):
+        if not bm_dir.is_dir():
+            continue
+        w_file = bm_dir / "weights.out"
+        s_file = bm_dir / "simpoints.out"
+        if not (w_file.exists() and s_file.exists()):
+            continue
+        w_vals = [float(x) for x in w_file.read_text().split()]
+        s_ids  = [int(x)   for x in s_file.read_text().split()]
+        for sp_id, w in zip(s_ids, w_vals):
+            result[f"{bm_dir.name}-{sp_id}B"] = w
+    return result
+
+
+def _benchmark_name(wl: str) -> str:
+    m = re.match(r'^(.+)-\d+[A-Z]+$', wl)
+    return m.group(1) if m else wl
+
+
+_SPEC_WEIGHTS: "dict[str, float]" = _load_spec_weights(_DEFAULT_WEIGHTS_DIR)
+
+
+def _benchmark_weighted_geomean(vals_by_wl: "dict[str, float]") -> float:
+    """Benchmark-weighted geomean of absolute values (e.g. DoA rates).
+
+    For SPEC traces: weighted geomean within benchmark, equal-weight across.
+    For others: flat equal-weight geomean.
+    """
+    eps = 1e-9
+    groups: dict = {}
+    for wl, v in vals_by_wl.items():
+        groups.setdefault(_benchmark_name(wl), []).append(wl)
+    per_bench = []
+    for wl_list in groups.values():
+        if _SPEC_WEIGHTS:
+            pairs = [(vals_by_wl[wl], _SPEC_WEIGHTS.get(wl)) for wl in wl_list]
+            if any(w is not None for _, w in pairs):
+                pairs = [(v, w) for v, w in pairs if w is not None]
+                total_w = sum(w for _, w in pairs)
+                if total_w > 0:
+                    per_bench.append(float(np.exp(
+                        sum((w / total_w) * np.log(max(v, eps)) for v, w in pairs))))
+                    continue
+        vals = [vals_by_wl[wl] for wl in wl_list]
+        per_bench.append(float(np.exp(np.mean(np.log(np.clip(vals, eps, None))))))
+    if not per_bench:
+        return float("nan")
+    return float(np.exp(np.mean(np.log(np.clip(per_bench, eps, None)))))
+
 
 # ── Parsing ───────────────────────────────────────────────────────────────────
 
@@ -115,7 +175,7 @@ def plot_bar(rows, title, out_path: Path):
     """
     traces = [r[0] for r in rows]
     values = [r[2] for r in rows]
-    gm     = geomean(values)
+    gm     = _benchmark_weighted_geomean(dict(zip(traces, values)))
 
     xlabels = traces + ["GeoMean"]
     xvals   = list(values) + [gm]
