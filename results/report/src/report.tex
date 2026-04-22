@@ -296,11 +296,6 @@ reason why these results are shown here (Figure \ref{fig:suite_ipc_llc_only})
 is because we find that performance is better when using $LRU_\text{mid}$ in
 both the STLB and the LLC than when it is only being used in the STLB.
 
-This seems to suggest that the liveness data is a greater help when informing the
-insertion policy in the STLB than in the LLC, but we would need to study the STLB
-in isolation to be entirely sure. It is for sure an interesting result even though
-the speedup is limited to a few percent for now.
-
 The rest of the LLC-only results are found in the appendix. The only impact that the
 change in the STLB has here is that SRRIP probably will perform worse as it was designed
 with the LLC in mind.
@@ -312,6 +307,41 @@ with the LLC in mind.
   policy in the LLC.}
   \label{fig:suite_ipc_llc_only}
 \end{figure}
+
+\subsubsection{LLC-only vs.\ LLC+STLB}
+
+Comparing Figures~\ref{fig:suite_ipc} and~\ref{fig:suite_ipc_llc_only} directly,
+Figure~\ref{fig:stlb_llc_ipc} isolates $LRU_\text{mid}$ and
+$LRU_\text{mid}+\text{pred}$ and overlays the LLC-only and LLC+STLB variants side by
+side. For Google the difference is particularly striking: LLC-only actually hurts IPC
+by around 1.5\%, while LLC+STLB gives a gain of around 2\%. This suggests that the
+liveness signal is more actionable at the page level in the STLB than at the block
+level in the LLC, but we would need to study the STLB in isolation to be entirely sure.
+
+\begin{figure}[tp]
+  \centering
+  \includegraphics[width=\linewidth]{../../plots/stlb_llc_comparison/suite_ipc.png}
+  \caption{IPC speedup of $LRU_\text{mid}$ and $LRU_\text{mid}+\text{pred}$
+           when applied to the LLC only (solid) vs.\ both the LLC and STLB
+           (hatched), per suite. Baseline is LRU under the same scope.}
+  \label{fig:stlb_llc_ipc}
+\end{figure}
+
+\begin{figure}[tp]
+  \centering
+  \includegraphics[width=\linewidth]{../../plots/stlb_llc_comparison/suite_mpki.png}
+  \caption{STLB MPKI (left) and LLC MPKI (right) for $LRU_\text{mid}$ and
+           $LRU_\text{mid}+\text{pred}$ when applied to the LLC only (solid)
+           vs.\ both the LLC and STLB (hatched), per suite.}
+  \label{fig:stlb_llc_mpki}
+\end{figure}
+
+
+Figure~\ref{fig:stlb_llc_mpki} breaks the MPKI reduction down by scope.
+The STLB MPKI panel shows that extending the policy to the STLB reduces STLB misses
+noticeably for Qualcomm, while the LLC MPKI panel shows that performance is hurt more
+in SPEC by using $LRU_\text{mid}$ in the STLB too. The contrary is true for Google and
+Qualcomm. This might be an indication that the liveness data is a better help for LRU there.
 
 \subsubsection{Suite-level MPKI}
 
@@ -475,6 +505,7 @@ is not improved that much.
 
 
 % ─────────────────────────────────────────────────────────────────────────────
+\clearpage
 \section{Analysis and Open Questions}
 % ─────────────────────────────────────────────────────────────────────────────
 
