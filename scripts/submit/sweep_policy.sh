@@ -18,6 +18,7 @@
 #   srrip          – champsim_srrip,   DPPRED=0, CBPRED=0
 #   drrip          – champsim_drrip,   DPPRED=0, CBPRED=0
 #   lru_mid        – champsim_lru_mid, DPPRED=0, CBPRED=0  (liveness baseline; = LRU)
+#   lru_dp_only    – champsim_lru,     DPPRED=1, CBPRED=0  (dpPred/STLB-bypass only, no LLC bypass)
 #   lru_pred       – champsim_lru,     DPPRED=1, CBPRED=1  (bypass predictor on plain LRU)
 #   lru_mid_pred   – champsim_lru_mid, DPPRED=1, CBPRED=1  (full system: lru_mid + predictor)
 #   srrip_pred     – champsim_srrip,   DPPRED=1, CBPRED=1
@@ -161,6 +162,7 @@ if [ "${WITH_BASE}" -eq 1 ]; then
     "srrip         champsim_srrip    0 0 6 6"
     "drrip         champsim_drrip    0 0 6 6"
     "lru_mid       champsim_lru_mid  0 0 6 6"
+    "lru_dp_only   champsim_lru      1 0 6 6"
     "lru_pred      champsim_lru      1 1 6 6"
     "lru_mid_pred  champsim_lru_mid  1 1 6 6"
     "srrip_pred    champsim_srrip    1 1 6 6"
