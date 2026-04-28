@@ -57,6 +57,8 @@ struct cache_stats {
 
   uint64_t llt_bypasses = 0;
   uint64_t llc_bypasses = 0;
+  uint64_t pfq_probes   = 0;   // LLC fills checked against PFQ (CBPRED=1 only)
+  uint64_t pfq_hits     = 0;   // subset of pfq_probes whose page was in PFQ
 
   // ── Block/page liveness stats (LLC and STLB only) ─────────────────────────
   // Recorded at every valid eviction during the ROI.

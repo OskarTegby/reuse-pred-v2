@@ -88,8 +88,15 @@ void champsim::plain_printer::print(CACHE::stats_type stats)
 
     if (stats.name == "cpu0_STLB")
       stream << stats.name << " BYPASSES: " << std::setw(10) << stats.llt_bypasses << std::endl;
-    if (stats.name == "LLC")
+    if (stats.name == "LLC") {
       stream << stats.name << " BYPASSES: " << std::setw(10) << stats.llc_bypasses << std::endl;
+      if (stats.pfq_probes > 0) {
+        stream << stats.name << " PFQ PROBES: " << std::setw(10) << stats.pfq_probes
+               << "  HITS: " << std::setw(10) << stats.pfq_hits
+               << "  HIT RATE: " << std::fixed << std::setprecision(2)
+               << 100.0 * stats.pfq_hits / stats.pfq_probes << "%" << std::endl;
+      }
+    }
 
     if (stats.name == "cpu0_STLB" || stats.name == "LLC") {
       const auto& s = stats;
