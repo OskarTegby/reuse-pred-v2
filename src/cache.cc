@@ -104,6 +104,10 @@ bool CACHE::cbpred_bypass(const PACKET& fill_mshr)
   const auto block_hash = fold_xor(fill_mshr.address >> OFFSET_BITS, BHT_BITS);
   const bool in_pfq     = std::find(pfq.begin(), pfq.end(), pfn) != pfq.end();
 
+  sim_stats.back().pfq_probes++;
+  if (in_pfq)
+    sim_stats.back().pfq_hits++;
+
   if (!in_pfq || bhist[block_hash].doa <= bconf_thd)
     return false;
 
@@ -855,6 +859,8 @@ void CACHE::end_phase(unsigned finished_cpu)
 
   roi_stats.back().llt_bypasses = sim_stats.back().llt_bypasses;
   roi_stats.back().llc_bypasses = sim_stats.back().llc_bypasses;
+  roi_stats.back().pfq_probes   = sim_stats.back().pfq_probes;
+  roi_stats.back().pfq_hits     = sim_stats.back().pfq_hits;
 
   roi_stats.back().evict_total        = sim_stats.back().evict_total;
   roi_stats.back().evict_doa          = sim_stats.back().evict_doa;
