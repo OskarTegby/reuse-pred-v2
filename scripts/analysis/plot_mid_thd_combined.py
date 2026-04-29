@@ -1,13 +1,11 @@
 #!/usr/bin/env python3
-"""plot_mid_thd_combined.py — IPC speedup vs mid_thd for all 4 configs × 3 suites.
+"""plot_mid_thd_combined.py — IPC speedup vs mid_thd, old vs new data.
 
-Three panels (one per suite), each showing 4 lines:
-  addr, no-promote  — lru_mid_new runs
-  addr, promote     — mid_lru_study runs (pre-fix implicit promotion)
-  PC,   no-promote  — lru_mid_new runs
-  PC,   promote     — mid_lru_study runs (or explicit --mid-promote run)
+Three panels (one per suite), each showing 2 bars per threshold:
+  addr, STLB+LLC  — mid_lru_study runs (Apr1, STLB erroneously varied)
+  addr, LLC-only  — llc_repl_pol_study runs (Apr9, STLB locked to LRU)
 
-Output: results/plots/mid_lru/mid_thd_combined.png
+Output: results/plots/mid_lru_llc_only/mid_thd_comparison.png
 """
 
 import re
@@ -57,38 +55,30 @@ _SPEC_WEIGHTS: "dict[str, float]" = _load_spec_weights(_DEFAULT_WEIGHTS_DIR)
 BASE = Path("results")
 
 CONFIGS = [
-    ("addr, no-promote", "#5B7FA6", "o", "-"),    # steel blue, solid
-    ("addr, promote",    "#1A4A7A", "s", "--"),   # dark blue, dashed
-    ("PC, no-promote",   "#E09B6A", "^", "-"),    # light orange, solid
-    ("PC, promote",      "#B03000", "D", "--"),   # dark red, dashed
+    ("addr, STLB+LLC (old)", "#1A4A7A", "s", "--"),   # dark blue
+    ("addr, LLC-only (new)", "#E09B6A", "^", "-"),    # orange
 ]
 
 SUITES = [
     {
         "label": "SPEC (DPC3)",
         "dirs": [
-            BASE / "lru_mid_new/dpc3_mid_addr_20260406_1251",
             BASE / "mid_lru_study/dpc3_mid_addr_20260401_2359",
-            BASE / "lru_mid_new/dpc3_mid_pc_20260406_1251",
-            BASE / "mid_lru_study/dpc3_mid_pc_20260401_2359",
+            BASE / "llc_repl_pol_study/dpc3_mid_addr_20260409_0218",
         ],
     },
     {
         "label": "Google",
         "dirs": [
-            BASE / "lru_mid_new/google_mid_addr_20260406_1251",
             BASE / "mid_lru_study/google_mid_addr_20260402_0000",
-            BASE / "lru_mid_new/google_mid_pc_20260406_1251",
-            BASE / "mid_lru_study/google_mid_pc_promote_20260407_1031",
+            BASE / "llc_repl_pol_study/google_mid_addr_20260409_0218",
         ],
     },
     {
         "label": "Qualcomm",
         "dirs": [
-            BASE / "lru_mid_new/qmm_mid_addr_20260406_1251",
             BASE / "mid_lru_study/qmm_mid_addr_20260401_1625",
-            BASE / "lru_mid_new/qmm_mid_pc_20260406_1251",
-            BASE / "mid_lru_study/qmm_mid_pc_20260401_1625",
+            BASE / "llc_repl_pol_study/qmm_mid_addr_20260409_0218",
         ],
     },
 ]
@@ -172,7 +162,7 @@ def geomean_speedup(sweep_dir: Path, n: int):
 def main():
     import argparse
     ap = argparse.ArgumentParser()
-    ap.add_argument("--out", default="results/plots/mid_lru/mid_thd_combined.png")
+    ap.add_argument("--out", default="results/plots/mid_lru_llc_only/mid_thd_comparison.png")
     args = ap.parse_args()
 
     ns = list(range(1, MAX_N + 1))
@@ -265,8 +255,9 @@ def main():
                framealpha=0.9, bbox_to_anchor=(0.5, -0.04))
 
     fig.suptitle(
-        "IPC speedup vs LRU as a function of mid_thd",
-        fontsize=12, fontweight="bold",
+        "IPC speedup vs LRU as a function of mid_thd\n"
+        "addr-keyed: STLB+LLC (old, Apr1) vs LLC-only (new, Apr9)",
+        fontsize=11, fontweight="bold",
     )
     fig.tight_layout(rect=[0, 0.12, 1, 1])
 
