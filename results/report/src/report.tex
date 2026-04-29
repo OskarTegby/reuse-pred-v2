@@ -6,6 +6,7 @@
 \usepackage{microtype}
 \usepackage{parskip}
 \usepackage{float}
+\usepackage[section]{placeins}
 \usepackage{caption}
 \usepackage{hyperref}
 \usepackage{libertine}
@@ -13,6 +14,23 @@
 
 \hypersetup{colorlinks=true, linkcolor=black, urlcolor=black, citecolor=black}
 \setcounter{tocdepth}{1}
+
+% Allow more floats per page and reduce the minimum text fraction
+\setcounter{topnumber}{4}
+\setcounter{bottomnumber}{2}
+\setcounter{totalnumber}{6}
+\renewcommand{\topfraction}{0.90}
+\renewcommand{\bottomfraction}{0.50}
+\renewcommand{\textfraction}{0.07}
+\renewcommand{\floatpagefraction}{0.70}
+% Tighten float spacing and pack floats to the top on float-only pages
+\setlength{\floatsep}{6pt plus 2pt minus 2pt}
+\setlength{\textfloatsep}{10pt plus 2pt minus 4pt}
+\makeatletter
+\setlength{\@fptop}{0pt}
+\setlength{\@fpsep}{8pt}
+\setlength{\@fpbot}{0pt plus 1fil}
+\makeatother
 
 \newcommand{\lrumid}{$LRU_\text{mid}$}
 
@@ -79,7 +97,7 @@ that the liveness data could be used to perform replacement in the STLB too, but
     we have seen $m>N$ evictions as DoA or mostly-dead, where $N$ is a parameter to be set empirically. 
 \end{enumerate}
 
-\begin{figure}[tp]
+\begin{figure}[htbp]
   \centering
   \begin{minipage}[t]{0.48\linewidth}
     \centering
@@ -97,14 +115,12 @@ that the liveness data could be used to perform replacement in the STLB too, but
 \end{figure}
 
 % ─────────────────────────────────────────────────────────────────────────────
-\section{Results}
+\section{Liveness Characterisation}
 % ─────────────────────────────────────────────────────────────────────────────
 
-\subsection{Liveness Characterisation}
+\subsection{Aggregate liveness}
 
-\subsubsection{Aggregate liveness}
-
-\begin{figure}[tp]
+\begin{figure}[htbp]
   \centering
   \includegraphics[width=\linewidth]{../../plots/liveness/liveness_bar_LLC_STLB.png}
   \caption{Geometric mean of DoA, mostly-dead, and mostly-alive evictions
@@ -119,19 +135,19 @@ blocks are hot and the rest are not. Qualcomm and Google have slightly fewer
 DoA entries but more mostly-dead ones. Overall the picture is that most of
 what we insert never gets touched again both for the LLC and STLB.
 
-\subsubsection{Per-workload liveness --- Google and Qualcomm}
+\subsection{Per-workload liveness --- Google and Qualcomm}
 
-\begin{figure}[tp]
+\begin{figure}[htbp]
   \centering
-  \includegraphics[width=\linewidth,height=0.38\textheight,keepaspectratio]{../../plots/liveness/google_liveness_all.png}
+  \includegraphics[width=\linewidth,height=0.40\textheight,keepaspectratio]{../../plots/liveness/google_liveness_all.png}
   \caption{Per-workload liveness breakdown for Google (STLB top, LLC bottom).
            Rightmost bar is the equal-weight geomean over all 43 workloads.}
   \label{fig:liveness_google}
 \end{figure}
 
-\begin{figure}[tp]
+\begin{figure}[htbp]
   \centering
-  \includegraphics[width=\linewidth,height=0.38\textheight,keepaspectratio]{../../plots/liveness/qmm_liveness_all.png}
+  \includegraphics[width=\linewidth,height=0.40\textheight,keepaspectratio]{../../plots/liveness/qmm_liveness_all.png}
   \caption{Per-workload liveness breakdown for Qualcomm (STLB top, LLC
            bottom). Rightmost bar is the equal-weight geomean over all 45.}
   \label{fig:liveness_qmm}
@@ -143,9 +159,9 @@ have more mostly-dead entries in the STLB than in the LLC. We find that Google h
 about half as many mostly-alive entries in the STLB than Qualcomm, but it doubtful
 that this would have any real significance.
 
-\subsubsection{Per-workload liveness --- SPEC}
+\subsection{Per-workload liveness --- SPEC}
 
-\begin{figure}[tp]
+\begin{figure}[htbp]
   \centering
   \includegraphics[width=0.85\linewidth]{../../plots/liveness/spec_liveness_all.png}
   \caption{Per-workload liveness breakdown for SPEC (STLB top, LLC bottom).
@@ -153,7 +169,44 @@ that this would have any real significance.
   \label{fig:liveness_spec}
 \end{figure}
 
-\begin{figure}[tp]
+In Figure \ref{fig:liveness_spec}, we find that the per-workload distribution
+in SPEC is much more uneven --- some workloads are almost entirely DoA while others
+have a more mixed profile, or are almost entirely mostly-dead. This variance is much
+larger than what we see in the other two suites, which makes the geomean less
+representative here.
+
+\subsection{Per-PC Lorenz curves}
+
+Figures~\ref{fig:lorenz_llc} and~\ref{fig:lorenz_stlb} ask whether a small
+number of entries contribute disproportionately to DoA and mostly-dead
+evictions, or whether the contribution is more uniform. For SPEC and Google
+in the LLC, the concentration of DoA and mostly-dead entries appears slightly
+higher among blocks that are evicted fewer times --- this seems to suggest
+more reuse for hot blocks and pages. The distribution looks more even for
+Google and Qualcomm in the STLB. Overall there is some concentration but it
+is not dramatic.
+
+\begin{figure}[htbp]
+  \centering
+  \includegraphics[width=\linewidth,height=0.40\textheight,keepaspectratio]{../../plots/liveness/liveness_pc_lorenz_LLC.png}
+  \caption{Per-PC Lorenz curves for LLC DoA (top) and mostly-dead (bottom)
+           evictions. PCs are sorted by eviction count on the x-axis; the
+           y-axis shows the cumulative fraction of DoA or mostly-dead
+           evictions they account for. The thick line is the per-suite mean
+           across workloads; the dashed line is the pooled result.}
+  \label{fig:lorenz_llc}
+\end{figure}
+
+\begin{figure}[htbp]
+  \centering
+  \includegraphics[width=\linewidth,height=0.40\textheight,keepaspectratio]{../../plots/liveness/liveness_pc_lorenz_STLB.png}
+  \caption{Same as Figure~\ref{fig:lorenz_llc} but for the STLB.}
+  \label{fig:lorenz_stlb}
+\end{figure}
+
+\subsection{DoA correlation}
+
+\begin{figure}[htbp]
   \centering
   \includegraphics[width=0.85\linewidth]{../../plots/liveness/liveness_corr_strip.png}
   \caption{Percentage of DoA blocks and pages in the LLC and STLB, and the
@@ -163,14 +216,6 @@ that this would have any real significance.
   \label{fig:liveness_corr}
 \end{figure}
 
-In Figure \ref{fig:liveness_spec}, we find that the per-workload distribution
-in SPEC is much more uneven --- some workloads are almost entirely DoA while others
-have a more mixed profile, or are almost entirely mostly-dead. This variance is much
-larger than what we see in the other two suites, which makes the geomean less
-representative here.
-
-\subsubsection{DoA correlation}
-
 Figure \ref{fig:liveness_corr} adds a third metric. Namely, what fraction of DoA
 LLC blocks map to a STLB page that is also DoA (where ``DoA'' for the STLB
 page means the Accessed bit is unset at check time, following the same
@@ -179,34 +224,119 @@ weak for Google and Qualcomm. This should mean that the predictor is less
 well-guided in the LLC for those two suites since the STLB signal it relies
 on does not track LLC behaviour there.
 
-\subsubsection{Per-PC Lorenz curves}
+% ─────────────────────────────────────────────────────────────────────────────
+\section{Bypass Predictor Study}
+\label{sec:bypass_pred}
+% ─────────────────────────────────────────────────────────────────────────────
 
-\begin{figure}[tp]
+\subsection{Predictor performance under the current configuration}
+\label{subsec:fixed_thd}
+
+Three predictor configurations were swept across all three suites under the
+current cache configuration (L2C~256\,KB, 11\,cy; LLC~2\,MB, 40\,cy, aligned
+to Mazumdar~2021 Table~I): plain LRU (no bypass), dpPred only
+(STLB bypass, CBPRED$=0$), and the full dpPred+cbPred system (STLB and LLC
+bypass, $\text{pconf}=\text{bconf}=6$).
+
+\begin{figure}[htbp]
   \centering
-  \includegraphics[width=\linewidth,height=0.38\textheight,keepaspectratio]{../../plots/liveness/liveness_pc_lorenz_LLC.png}
-  \caption{Per-PC Lorenz curves for LLC DoA (top) and mostly-dead (bottom)
-           evictions. PCs are sorted by eviction count on the x-axis; the
-           y-axis shows the cumulative fraction of DoA or mostly-dead
-           evictions they account for. The thick line is the per-suite mean
-           across workloads; the dashed line is the pooled result.}
-  \label{fig:lorenz_llc}
+  \includegraphics[width=\linewidth]{../../plots/dp_cbpred_study/speedup_pfq_correlation.png}
+  \caption{Top left: LLC DoA-on-DoA-STLB-page rate from the LRU baseline
+           (motivation: how often do LLC misses land on pages already flagged DoA?).
+           Top right: PFQ hit rate per trace (cbPred only; fraction of LLC fills
+           whose page frame was found in the PFQ).
+           Bottom: IPC speedup over LRU for dpPred alone and dpPred+cbPred
+           ($\text{pconf}=\text{bconf}=6$).
+           Dots are individual traces; diamonds are benchmark-weighted geomeans.}
+  \label{fig:bypass_pred}
 \end{figure}
 
-\begin{figure}[tp]
+Figure~\ref{fig:bypass_pred} shows the results.
+For SPEC, the PFQ hit rate is moderate at $23.3\%$, consistent with the
+moderate DoA correlation of $35.0\%$ seen in Figure~\ref{fig:liveness_corr}.
+cbPred adds $+0.17\%$ geomean IPC over dpPred alone on SPEC, the largest
+marginal gain of any suite.
+For Google and Qualcomm the DoA correlation is near zero ($4.7\%$ and $1.8\%$
+respectively), the PFQ hit rate drops to roughly $4\%$, and cbPred provides
+essentially no additional benefit ($<0.03\%$ marginal geomean IPC gain).
+Across suites, the marginal benefit of cbPred is nearly perfectly correlated
+with the PFQ hit rate ($r=0.99$), confirming that cbPred's effectiveness is
+directly gated by how well dpPred's bypassed-page set predicts which LLC blocks
+will also be dead on arrival.
+The overall speedups are small in absolute terms (at most $0.17\%$ geomean),
+for reasons that are explored in the next section.
+
+\subsection{Impact of cache hierarchy configuration}
+\label{subsec:cfg_comparison}
+
+The modest gains in Section~\ref{subsec:fixed_thd} stand in contrast to what
+the predictor can achieve under a different hardware configuration.
+Figure~\ref{fig:cfg_comparison} shows why: the results depend strongly on the
+underlying cache hierarchy.
+
+\begin{figure}[htbp]
   \centering
-  \includegraphics[width=\linewidth,height=0.38\textheight,keepaspectratio]{../../plots/liveness/liveness_pc_lorenz_STLB.png}
-  \caption{Same as Figure~\ref{fig:lorenz_llc} but for the STLB.}
-  \label{fig:lorenz_stlb}
+  \includegraphics[width=\linewidth]{../../plots/cfg_comparison/cfg_comparison.png}
+  \caption{IPC speedup of dpPred+cbPred ($\text{pconf}=\text{bconf}=6$) vs.\
+           LRU baseline for the old and current cache configurations across all
+           three benchmark suites.
+           Dots are individual traces; diamonds are geomeans.}
+  \label{fig:cfg_comparison}
 \end{figure}
 
-Figures~\ref{fig:lorenz_llc} and~\ref{fig:lorenz_stlb} ask whether a small
-number of entries contribute disproportionately to DoA and mostly-dead
-evictions, or whether the contribution is more uniform. For SPEC and Google
-in the LLC, the concentration of DoA and mostly-dead entries appears slightly
-higher among blocks that are evicted fewer times --- this  seems to suggest
-more reuse for hot blocks and pages. The distribution looks more even for
-Google and Qualcomm in the STLB. Overall there is some concentration but it
-is not dramatic.
+Under the old configuration the predictor gains up to $+1.31\%$ geomean on
+Qualcomm.  Under the current configuration the gain collapses to near zero
+for all suites ($\leq 0.17\%$).
+The key difference is effective LLC capacity: the larger L2C in the old
+configuration forces the inclusive LLC to shadow more L2C data, leaving fewer
+unique lines and substantially raising the LLC miss rate.
+The bypass predictor has far more dead-on-arrival LLC traffic to eliminate
+under the old configuration, which explains the discrepancy.
+
+\subsection{Threshold sensitivity (old configuration)}
+
+To see how aggressiveness of bypassing affects the larger gains available under
+the old configuration, Figure~\ref{fig:thd_heatmap_qmm} shows the geomean IPC
+speedup as both thresholds are swept from~0 (most aggressive, bypass on any
+prediction) to~6 (most conservative) for Qualcomm.
+Figures~\ref{fig:thd_heatmap_dpc3} and~\ref{fig:thd_heatmap_google} show the
+same for SPEC and Google.
+
+\begin{figure}[htbp]
+  \centering
+  \includegraphics[width=\linewidth]{../../plots/dp_cbpred_study/qmm_threshold_heatmap.png}
+  \caption{IPC speedup vs.\ LRU baseline as a function of dpPred threshold
+           (pthd, rows) and cbPred threshold (bthd, columns) for Qualcomm
+           traces under the old cache configuration.
+           Geomean across all 45 traces.}
+  \label{fig:thd_heatmap_qmm}
+\end{figure}
+
+\IfFileExists{../../plots/dp_cbpred_study/dpc3_threshold_heatmap.png}{%
+\begin{figure}[htbp]
+  \centering
+  \includegraphics[width=\linewidth]{../../plots/dp_cbpred_study/dpc3_threshold_heatmap.png}
+  \caption{Same as Figure~\ref{fig:thd_heatmap_qmm} for SPEC (DPC3) traces.}
+  \label{fig:thd_heatmap_dpc3}
+\end{figure}
+}{}
+
+\IfFileExists{../../plots/dp_cbpred_study/google_threshold_heatmap.png}{%
+\begin{figure}[htbp]
+  \centering
+  \includegraphics[width=\linewidth]{../../plots/dp_cbpred_study/google_threshold_heatmap.png}
+  \caption{Same as Figure~\ref{fig:thd_heatmap_qmm} for Google traces.}
+  \label{fig:thd_heatmap_google}
+\end{figure}
+}{}
+
+The Qualcomm heatmap shows a clear gradient: the peak of $+8.64\%$ at
+$(0,0)$ degrades monotonically to $+1.31\%$ at $(6,6)$, confirming that
+aggressiveness of bypassing directly controls the benefit.
+
+% ─────────────────────────────────────────────────────────────────────────────
+\section{Liveness-Guided Insertion Policy}
+% ─────────────────────────────────────────────────────────────────────────────
 
 \subsection{Modified LRU Insertion Policy}
 
@@ -219,27 +349,30 @@ a mid-recency-stack insertion.
 
 \subsubsection{Effect of threshold $N$}
 
-\begin{figure}[tp]
+\begin{figure}[htbp]
   \centering
   \includegraphics[width=\linewidth]{../../plots/mid_lru/mid_thd.png}
-  \caption{IPC speedup over LRU as a function of the mid-insertion threshold
-           $N$ (number of consecutive DoA or mostly-dead evictions before
-           inserting at the mid-point), for all four combinations of key 
-           and promotion approaches across all three suites.}
+  \caption{IPC speedup over LRU as a function of mid-insertion threshold $N$,
+           comparing the four design choices: addr-keyed vs.\ PC-keyed eviction
+           history, and promoting on hit vs.\ keeping the mid-recency position.
+           Each panel is one benchmark suite.}
   \label{fig:mid_thd}
 \end{figure}
 
-In Figure \ref{fig:mid_thd} we find that a higher threshold is generally better
-for PC-based insertion decisions. The picture is less clear for address-based
-decisions --- there is no consistent trend there. Google does very poorly
-with address-based insertion regardless of threshold, which is strange
-because Qualcomm does not show the same sensitivity. It is not clear why. 
+Figure~\ref{fig:mid_thd} isolates the effect of the two binary design choices
+--- key type and promotion --- across all values of $N$.
+PC-keyed history consistently outperforms addr-keyed history, and enabling
+promotion is generally better.
+A higher threshold $N$ is generally better for PC-based decisions, while the
+trend is less consistent for addr-keyed ones.
+Google does poorly with addr-keyed insertion regardless of threshold, a
+sensitivity not shared by Qualcomm.
 
 \subsubsection{Best-threshold summary}
 
-\begin{figure}[tp]
+\begin{figure}[htbp]
   \centering
-  \includegraphics[width=0.7\linewidth]{../../plots/mid_lru/addr_vs_pc_summary.png}
+  \includegraphics[width=\linewidth]{../../plots/mid_lru/addr_vs_pc_summary.png}
   \caption{IPC speedup at the optimal $N$ for each of the four configurations,
            per suite.}
   \label{fig:addr_vs_pc_summary}
@@ -253,7 +386,7 @@ mostly-dead history to inform the insertion policy.
 
 \subsubsection{Per-workload breakdown}
 
-\begin{figure}[tp]
+\begin{figure}[htbp]
   \centering
   \includegraphics[width=\linewidth]{../../plots/mid_lru/addr_vs_pc_all.png}
   \caption{Per-workload IPC speedup at the optimal $N$ for each configuration.}
@@ -271,12 +404,68 @@ per-PC eviction statistics gives a much higher speedup compared to the per-addre
 insertion policy compared to Qualcomm.
 
 
+\subsection{Threshold Study by Scope}
+\label{sec:scope_mid_thd}
+
+To understand where the \lrumid policy has the most leverage, three separate
+threshold sweeps were run: one with \lrumid applied only in the STLB (LLC locked
+to LRU), one only in the LLC (STLB locked to LRU), and one in both caches
+simultaneously.  All three sweeps cover $N=1$--$10$.  Both addr-keyed and
+PC-keyed insertion histories are tested.
+
+\begin{figure}[htbp]
+  \centering
+  \includegraphics[width=\linewidth]{../../plots/scope_comparison/combined.png}
+  \caption{IPC speedup vs.\ LRU as a function of mid-insertion threshold $N$
+           for all three scopes.  Each row is one benchmark suite; left
+           column: addr-keyed history, right column: PC-keyed history.}
+  \label{fig:scope_cmp}
+\end{figure}
+
+Figure~\ref{fig:scope_cmp} shows the geomean speedup at each fixed $N$.
+To understand how much headroom exists if $N$ were tuned per workload,
+Figure~\ref{fig:oracle_threshold} reports the speedup each trace achieves at
+its own best $N$ (the oracle threshold), together with the distribution of
+those optimal $N$ values across the suite.
+
+\begin{figure}[htbp]
+  \centering
+  \includegraphics[width=\linewidth]{../../plots/optimal_threshold/optimal_speedup.png}
+  \caption{Top: per-trace IPC speedup at each trace's oracle threshold $N$,
+           for all three scopes (addr-keyed).
+           Dots are individual traces; diamonds are benchmark-weighted geomeans.
+           Bottom: distribution of optimal $N$ values per suite within each scope.}
+  \label{fig:oracle_threshold}
+\end{figure}
+
+The oracle analysis reveals two distinct regimes.
+For SPEC and Qualcomm, the optimal $N$ is concentrated at low values ($N=1$--$2$),
+meaning that mid-insertion should be triggered aggressively.
+Google is the exception: its optimal $N$ is spread across higher values,
+indicating that its workloads require more evidence of dead-on-arrival behaviour
+before mid-insertion improves performance.
+Across all three scopes, the LLC+STLB configuration consistently achieves the
+highest geomean oracle speedup, confirming that the two caches provide
+complementary benefits rather than redundant ones.
+
+Figure~\ref{fig:oracle_threshold_pc} repeats the same analysis for PC-keyed
+insertion history.
+
+\begin{figure}[htbp]
+  \centering
+  \includegraphics[width=\linewidth]{../../plots/optimal_threshold/optimal_speedup_pc.png}
+  \caption{Same as Figure~\ref{fig:oracle_threshold} but with PC-keyed eviction
+           history.}
+  \label{fig:oracle_threshold_pc}
+\end{figure}
+
+
 \subsection{Policy Comparison Without Prefetcher}
 \label{sec:policy_no_pref}
 
 \subsubsection{Suite-level IPC speedup}
 
-\begin{figure}[tp]
+\begin{figure}[htbp]
   \centering
   \includegraphics[width=\linewidth]{../../plots/ipc_mpki/suite_ipc.png}
   \caption{IPC speedup over LRU for all policies, grouped by suite. LLC and
@@ -302,7 +491,7 @@ The rest of the LLC-only results are found in the appendix. The only impact that
 change in the STLB has here is that SRRIP probably will perform worse as it was designed
 with the LLC in mind.
 
-\begin{figure}[tp]
+\begin{figure}[htbp]
   \centering
   \includegraphics[width=\linewidth]{../../plots/ipc_mpki_llc_only/suite_ipc.png}
   \caption{The same as Figure \ref{fig:suite_ipc} but only changing replacement
@@ -320,7 +509,7 @@ by around 1.5\%, while LLC+STLB gives a gain of around 2\%. This suggests that t
 liveness signal is more actionable at the page level in the STLB than at the block
 level in the LLC, but we would need to study the STLB in isolation to be entirely sure.
 
-\begin{figure}[tp]
+\begin{figure}[htbp]
   \centering
   \includegraphics[width=\linewidth]{../../plots/stlb_llc_comparison/suite_ipc.png}
   \caption{IPC speedup of \lrumid and $LRU_\text{mid}+\text{pred}$
@@ -329,7 +518,7 @@ level in the LLC, but we would need to study the STLB in isolation to be entirel
   \label{fig:stlb_llc_ipc}
 \end{figure}
 
-\begin{figure}[tp]
+\begin{figure}[htbp]
   \centering
   \includegraphics[width=\linewidth]{../../plots/stlb_llc_comparison/suite_mpki.png}
   \caption{STLB MPKI (left) and LLC MPKI (right) for \lrumid and
@@ -347,7 +536,7 @@ Qualcomm. This might be an indication that the liveness data is a better help fo
 
 \subsubsection{Suite-level MPKI}
 
-\begin{figure}[tp]
+\begin{figure}[htbp]
   \centering
   \includegraphics[width=\linewidth]{../../plots/ipc_mpki/suite_mpki.png}
   \caption{STLB and LLC MPKI reduction vs.\ LRU, per suite (cf.\ Figure~\ref{fig:suite_mpki_llc_only}).}
@@ -362,14 +551,14 @@ target them.
 
 \subsubsection{Per-workload IPC and MPKI}
 
-\begin{figure}[tp]
+\begin{figure}[htbp]
   \centering
   \includegraphics[width=\linewidth]{../../plots/ipc_mpki/dpc3_policy_ipc.png}
   \caption{Per-workload IPC speedup for SPEC (no prefetcher) (cf.\ Figure~\ref{fig:dpc3_ipc_llc_only}).}
   \label{fig:dpc3_ipc}
 \end{figure}
 
-\begin{figure}[tp]
+\begin{figure}[htbp]
   \centering
   \includegraphics[width=\linewidth]{../../plots/ipc_mpki/dpc3_policy_mpki.png}
   \caption{Per-workload STLB and LLC MPKI for SPEC (cf.\ Figure~\ref{fig:dpc3_mpki_llc_only}).}
@@ -382,14 +571,14 @@ near zero. The overall performance is not impressive. Perhaps \texttt{mcf} can o
 us some insights into what \lrumid can help us improve. The corresponding
 MPKIs barely changes, which probably warrants further investigation.
 
-\begin{figure}[tp]
+\begin{figure}[htbp]
   \centering
   \includegraphics[width=\linewidth]{../../plots/ipc_mpki/google_policy_ipc.png}
   \caption{Per-workload IPC speedup for Google (no prefetcher) (cf.\ Figure~\ref{fig:google_ipc_llc_only}).}
   \label{fig:google_ipc}
 \end{figure}
 
-\begin{figure}[tp]
+\begin{figure}[htbp]
   \centering
   \includegraphics[width=\linewidth]{../../plots/ipc_mpki/google_policy_mpki.png}
   \caption{Per-workload STLB and LLC MPKI for Google (cf.\ Figure~\ref{fig:google_mpki_llc_only}).}
@@ -404,14 +593,14 @@ The STLB MPKI reduction is noticeable for Qualcomm (Figure \ref{fig:qmm_mpki}), 
 the other suites (Figure \ref{fig:google_mpki} and \ref{fig:dpc3_mpki}). 
 
 
-\begin{figure}[tp]
+\begin{figure}[htbp]
   \centering
   \includegraphics[width=\linewidth]{../../plots/ipc_mpki/qmm_policy_ipc.png}
   \caption{Per-workload IPC speedup for Qualcomm (no prefetcher) (cf.\ Figure~\ref{fig:qmm_ipc_llc_only}).}
   \label{fig:qmm_ipc}
 \end{figure}
 
-\begin{figure}[tp]
+\begin{figure}[htbp]
   \centering
   \includegraphics[width=\linewidth]{../../plots/ipc_mpki/qmm_policy_mpki.png}
   \caption{Per-workload STLB and LLC MPKI for Qualcomm (cf.\ Figure~\ref{fig:qmm_mpki_llc_only}).}
@@ -423,7 +612,7 @@ the other suites (Figure \ref{fig:google_mpki} and \ref{fig:dpc3_mpki}).
 
 \subsubsection{Suite-level IPC speedup and MPKI}
 
-\begin{figure}[tp]
+\begin{figure}[htbp]
   \centering
   \includegraphics[width=\linewidth]{../../plots/ipc_mpki_pref/suite_ipc_pref.png}
   \caption{IPC speedup vs.\ LRU with Berti (L1D), EPI (L1I), and next-line
@@ -431,7 +620,7 @@ the other suites (Figure \ref{fig:google_mpki} and \ref{fig:dpc3_mpki}).
   \label{fig:suite_ipc_pref}
 \end{figure}
 
-\begin{figure}[tp]
+\begin{figure}[htbp]
   \centering
   \includegraphics[width=\linewidth]{../../plots/ipc_mpki_pref/suite_mpki_pref.png}
   \caption{STLB and LLC MPKI reduction vs.\ LRU with prefetchers enabled (cf.\ Figure~\ref{fig:suite_mpki_pref_llc_only}).}
@@ -450,14 +639,14 @@ in the LLC it hurts performance for SPEC and is roughly neutral elsewhere.
 
 \subsubsection{Per-workload IPC and MPKI}
 
-\begin{figure}[tp]
+\begin{figure}[htbp]
   \centering
   \includegraphics[width=\linewidth]{../../plots/ipc_mpki_pref/dpc3_policy_pref_ipc.png}
   \caption{Per-workload IPC speedup for SPEC with prefetcher (cf.\ Figure~\ref{fig:dpc3_pref_ipc_llc_only}).}
   \label{fig:dpc3_pref_ipc}
 \end{figure}
 
-\begin{figure}[tp]
+\begin{figure}[htbp]
   \centering
   \includegraphics[width=\linewidth]{../../plots/ipc_mpki_pref/dpc3_policy_pref_mpki.png}
   \caption{Per-workload STLB and LLC MPKI for SPEC with prefetcher (cf.\ Figure~\ref{fig:dpc3_pref_mpki_llc_only}).}
@@ -469,14 +658,14 @@ the prefetcher hurts \lrumid relative to the no-prefetcher case
 on several workloads while SRRIP benefits --- the interaction between
 prefetching and insertion policy is not-yet clear.
 
-\begin{figure}[tp]
+\begin{figure}[htbp]
   \centering
   \includegraphics[width=\linewidth]{../../plots/ipc_mpki_pref/google_policy_pref_ipc.png}
   \caption{Per-workload IPC speedup for Google with prefetcher (cf.\ Figure~\ref{fig:google_pref_ipc_llc_only}).}
   \label{fig:google_pref_ipc}
 \end{figure}
 
-\begin{figure}[tp]
+\begin{figure}[htbp]
   \centering
   \includegraphics[width=\linewidth]{../../plots/ipc_mpki_pref/google_policy_pref_mpki.png}
   \caption{Per-workload STLB and LLC MPKI for Google with prefetcher (cf.\ Figure~\ref{fig:google_pref_mpki_llc_only}).}
@@ -487,14 +676,14 @@ For Google (Figure \ref{fig:google_pref_ipc} and \ref{fig:google_pref_mpki}),
 SRRIP now outperforms \lrumid on most workloads when
 the prefetcher is enabled, reversing the no-prefetcher result.
 
-\begin{figure}[tp]
+\begin{figure}[htbp]
   \centering
   \includegraphics[width=\linewidth]{../../plots/ipc_mpki_pref/qmm_policy_pref_ipc.png}
   \caption{Per-workload IPC speedup for Qualcomm with prefetcher (cf.\ Figure~\ref{fig:qmm_pref_ipc_llc_only}).}
   \label{fig:qmm_pref_ipc}
 \end{figure}
 
-\begin{figure}[tp]
+\begin{figure}[htbp]
   \centering
   \includegraphics[width=\linewidth]{../../plots/ipc_mpki_pref/qmm_policy_pref_mpki.png}
   \caption{Per-workload STLB and LLC MPKI for Qualcomm with prefetcher (cf.\ Figure~\ref{fig:qmm_pref_mpki_llc_only}).}
@@ -540,6 +729,10 @@ Figure~\ref{fig:suite_ipc}. Interestingly, SRRIP still benefits from the predict
 on Google and Qualcomm --- this might be because the STLB predictor helps within
 the STLB independently of the LLC correlation, but there is no data yet to support
 this belief.
+This correlation--effectiveness link is directly confirmed in
+Figure~\ref{fig:bypass_pred}: the PFQ hit rate tracks the DoA correlation
+across suites, and cbPred's marginal IPC gain tracks the PFQ hit rate with
+$r=0.99$.
 
 \paragraph{SPEC is harder to optimise than the server suites.}
 As seen in Figure~\ref{fig:liveness_spec}, the per-workload liveness distribution
@@ -547,7 +740,7 @@ in SPEC is highly uneven, with some workloads almost entirely DoA and others mix
 This variance makes the geomean less representative and limits how much a single
 threshold can help. As seen in Figure~\ref{fig:suite_mpki}, the MPKI reduction on
 SPEC is also much lower than on Qualcomm, which may reflect the DoA blocks being
-more scattered across PCs. The SRRIP and DRRIP results on some SPEC workloads in
+more scattered across PCs. The SRRIP results on some SPEC workloads in
 Figure~\ref{fig:dpc3_ipc} look unexpectedly large while the corresponding MPKI in
 Figure~\ref{fig:dpc3_mpki} barely changes --- I want to double-check those numbers
 before drawing strong conclusions from them.
@@ -581,8 +774,7 @@ is better under realistic workload conditions.
 \subsection{Remarks}
 % ─────────────────────────────────────────────────────────────────────────────
 \begin{enumerate}
-  \item For some reason, DRRIP performs uniformly worse, which needs to be investigated.
-  \item We are currently lacking references to \lrumid as we only compare to 
+  \item We are currently lacking references to \lrumid as we only compare to
     LRU itself and SRRIP. We should compare to more replacement policies to get deeper insights.
 \end{enumerate}
 
