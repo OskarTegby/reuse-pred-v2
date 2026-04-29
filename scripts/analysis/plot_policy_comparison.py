@@ -240,6 +240,12 @@ def benchmark_geomean(values_by_wl: dict, weights: "dict | None" = None) -> "flo
     return geomean(per_bench)
 
 
+def _arith_mean(values_by_wl: dict, weights=None) -> "float | None":
+    """Arithmetic mean across workloads — used for MPKI reduction percentages."""
+    vals = [v for v in values_by_wl.values() if v is not None and np.isfinite(v)]
+    return float(np.mean(vals)) if vals else None
+
+
 # ── Plot helpers ──────────────────────────────────────────────────────────────
 
 def _iqr_ylim(vals, ref=None, pad=0.08):
@@ -285,7 +291,7 @@ def _annotate_clipped(ax, y_lo, y_hi, fmt="%.3f"):
 
 def _bar_group(ax, workloads, policy_names, matrix, ylabel, title,
                baseline_val=1.0, ref_line=True, weights=None, clip_fmt="%.3f",
-               policy_keys=None):
+               policy_keys=None, agg_fn=None):
     """Draw a grouped bar chart.
 
     matrix[p][w] = value for policy p, workload w (None = missing).
@@ -300,10 +306,11 @@ def _bar_group(ax, workloads, policy_names, matrix, ylabel, title,
     n_wl = len(workloads)
 
     # Benchmark-weighted geomean column (uses simpoint weights when available)
+    _agg = agg_fn or benchmark_geomean
     gm = []
     for p in range(n_policies):
         by_wl = {workloads[w]: matrix[p][w] for w in range(n_wl)}
-        gm.append(benchmark_geomean(by_wl, weights))
+        gm.append(_agg(by_wl, weights))
 
     gap = 1.5
     group_w = 0.8
@@ -497,7 +504,7 @@ def main():
     print(f"Saved: {ipc_out}")
 
     # ── MPKI ──────────────────────────────────────────────────────────────────
-    # Two sub-matrices: STLB MPKI and LLC MPKI (absolute values)
+    # Relative MPKI reduction vs LRU baseline: (base - policy) / base * 100
     def mpki(stats, key):
         instrs = stats.get("instrs")
         misses = stats.get(key)
@@ -505,18 +512,23 @@ def main():
             return misses / (instrs / 1000)
         return None
 
+    base_stlb = {wl: mpki(data[args.baseline].get(wl, {}), "stlb_miss") for wl in workloads}
+    base_llc  = {wl: mpki(data[args.baseline].get(wl, {}), "llc_miss")  for wl in workloads}
+
     stlb_matrix_raw = []
     llc_matrix_raw  = []
     for policy in present:
         stlb_row, llc_row = [], []
         for wl in workloads:
             s = data[policy].get(wl, {})
-            stlb_row.append(mpki(s, "stlb_miss"))
-            llc_row.append(mpki(s, "llc_miss"))
+            b_s = base_stlb[wl];  p_s = mpki(s, "stlb_miss")
+            b_l = base_llc[wl];   p_l = mpki(s, "llc_miss")
+            stlb_row.append((b_s - p_s) / b_s * 100 if (b_s and b_s > 0 and p_s is not None) else None)
+            llc_row.append( (b_l - p_l) / b_l * 100 if (b_l and b_l > 0 and p_l is not None) else None)
         stlb_matrix_raw.append(stlb_row)
         llc_matrix_raw.append(llc_row)
 
-    # Aggregate to benchmarks (arithmetic mean for absolute MPKI)
+    # Aggregate to benchmarks (arithmetic mean of reduction percentages)
     _, stlb_matrix_agg = aggregate_to_benchmarks(
         workloads, stlb_matrix_raw, weights, use_geomean=False)
     _, llc_matrix_agg  = aggregate_to_benchmarks(
@@ -528,18 +540,20 @@ def main():
 
     fig, axes = plt.subplots(2, 1, figsize=(fig_w, 9))
     _bar_group(axes[0], workloads_sorted, policy_labels, stlb_matrix,
-               ylabel="STLB MPKI",
-               title=(f"STLB MPKI — {suite_label}\n"
+               ylabel="STLB MPKI reduction vs LRU (%)",
+               title=(f"STLB MPKI reduction vs LRU — {suite_label}\n"
                       f"({n_shown} most diverse of {n_total})"),
-               ref_line=False, weights=weights, policy_keys=present)
-    axes[0].yaxis.set_major_formatter(mticker.FormatStrFormatter("%.2f"))
+               baseline_val=0.0, ref_line=True, weights=weights,
+               policy_keys=present, agg_fn=_arith_mean)
+    axes[0].yaxis.set_major_formatter(mticker.FormatStrFormatter("%.1f%%"))
 
     _bar_group(axes[1], workloads_sorted, policy_labels, llc_matrix,
-               ylabel="LLC MPKI",
-               title=(f"LLC MPKI — {suite_label}\n"
+               ylabel="LLC MPKI reduction vs LRU (%)",
+               title=(f"LLC MPKI reduction vs LRU — {suite_label}\n"
                       f"({n_shown} most diverse of {n_total})"),
-               ref_line=False, weights=weights, policy_keys=present)
-    axes[1].yaxis.set_major_formatter(mticker.FormatStrFormatter("%.2f"))
+               baseline_val=0.0, ref_line=True, weights=weights,
+               policy_keys=present, agg_fn=_arith_mean)
+    axes[1].yaxis.set_major_formatter(mticker.FormatStrFormatter("%.1f%%"))
 
     fig.tight_layout()
     mpki_out = str(out_dir / f"{out_stem}_mpki.png")
