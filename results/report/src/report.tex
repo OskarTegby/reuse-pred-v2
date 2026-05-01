@@ -296,43 +296,112 @@ under the old configuration, which explains the discrepancy.
 \subsection{Threshold sensitivity (old configuration)}
 
 To see how aggressiveness of bypassing affects the larger gains available under
-the old configuration, Figure~\ref{fig:thd_heatmap_qmm} shows the geomean IPC
-speedup as both thresholds are swept from~0 (most aggressive, bypass on any
-prediction) to~6 (most conservative) for Qualcomm.
-Figures~\ref{fig:thd_heatmap_dpc3} and~\ref{fig:thd_heatmap_google} show the
-same for SPEC and Google.
+the old configuration, Figure~\ref{fig:thd_heatmaps} sweeps both thresholds
+from~0 (most aggressive) to~6 (most conservative) and shows the geomean IPC
+speedup for each suite.
 
 \begin{figure}[htbp]
   \centering
-  \includegraphics[width=\linewidth]{../../plots/dp_cbpred_study/qmm_threshold_heatmap.png}
-  \caption{IPC speedup vs.\ LRU baseline as a function of dpPred threshold
-           (pthd, rows) and cbPred threshold (bthd, columns) for Qualcomm
-           traces under the old cache configuration.
-           Geomean across all 45 traces.}
-  \label{fig:thd_heatmap_qmm}
+  \includegraphics[width=\linewidth]{../../plots/dp_cbpred_study/threshold_heatmaps_combined.png}
+  \caption{Geomean IPC speedup vs.\ LRU baseline as a function of dpPred
+           threshold (pthd, rows 0--6) and cbPred threshold (bthd, columns
+           0--6) under the old cache configuration, for
+           \textbf{(a)}~Qualcomm (45 traces),
+           \textbf{(b)}~SPEC CPU2006 (95 traces), and
+           \textbf{(c)}~Google (43 traces).
+           All three panels share a single colour scale driven by Qualcomm's
+           range ($\pm8.64\%$): the near-uniform shade of SPEC and Google
+           immediately shows that their threshold sensitivity is negligible
+           by comparison (peaks below $+0.57\%$ and $+0.12\%$, respectively).
+           All three suites benefit most from aggressive dpPred (low pthd);
+           Qualcomm and SPEC also prefer aggressive cbPred (low bthd),
+           whereas Google is best served by a conservative cbPred ($\text{bthd}=0$)
+           paired with a more conservative dpPred ($\text{pthd}=5$--$6$).}
+  \label{fig:thd_heatmaps}
 \end{figure}
 
-\IfFileExists{../../plots/dp_cbpred_study/dpc3_threshold_heatmap.png}{%
+The Qualcomm heatmap (Figure~\ref{fig:thd_heatmaps}a) shows a strong monotonic
+gradient: the peak of $+8.64\%$ at $(0,0)$ degrades to $+1.31\%$ at $(6,6)$,
+confirming that aggressiveness directly controls the benefit.
+SPEC (Figure~\ref{fig:thd_heatmaps}b) follows a similar but far shallower
+gradient, with absolute gains an order of magnitude smaller.
+Google (Figure~\ref{fig:thd_heatmaps}c) shows a qualitatively different
+pattern: the best configurations sit at intermediate-to-high pthd values and
+aggressive cbPred ($\text{bthd}=0$), and fully aggressive bypassing
+($\text{pthd}=0$) can slightly hurt performance.
+
+Figures~\ref{fig:opt_dpc3}--\ref{fig:opt_qmm} show, for each benchmark or
+workload family, the individually optimal threshold and the resulting speedup.
+Each figure has two panels: the top panel shows the dpPred-only result (pthd
+optimised, cbPred off), and the bottom panel adds cbPred (both pthd and bthd
+optimised jointly).  In every panel the coloured bar is the speedup at the
+optimal threshold — annotated with the threshold value inside the bar and the
+percentage gain over the default printed in black above the tip — while the
+grey bar shows the speedup at the default setting.  Bar colour encodes the
+optimal pthd on the green (aggressive, pthd$=0$) to red (conservative,
+pthd$=6$) scale.  Figure~\ref{fig:cbpred_dist} collects the (pthd,~bthd)
+distribution heatmaps for all three suites.
+
+For SPEC (Figure~\ref{fig:opt_dpc3}), only 8 of 20 benchmarks respond
+meaningfully ($\geq 0.2\,\%$); the remainder are omitted for clarity while the
+geomean lines still cover all 20.  Adding cbPred to dpPred-only barely moves
+the bars, confirming that LLC bypass contributes little on top of STLB bypass
+for SPEC.  The distribution heatmap (Figure~\ref{fig:cbpred_dist}a) shows the
+majority of SPEC benchmarks preferring $(0,0)$, while the default $(6,6)$
+attracts none.
+
+For Google (Figure~\ref{fig:opt_google}), the cbPred panel adds noticeable
+gain over dpPred-only: optimal pairs concentrate at high pthd and low bthd,
+meaning a conservative STLB predictor paired with an aggressive LLC predictor
+is best.  The default $(6,6)$ lies outside this cluster, and the default bars
+are systematically lower than the optimal bars.
+
+For Qualcomm (Figure~\ref{fig:opt_qmm}), both panels show that full
+aggression is best: 42 of 45 traces prefer $(0,0)$ for the combined
+optimum, confirming the large gradient visible in Figure~\ref{fig:thd_heatmaps}a.
+The top-10 most-responsive traces are shown.
+
 \begin{figure}[htbp]
   \centering
-  \includegraphics[width=\linewidth]{../../plots/dp_cbpred_study/dpc3_threshold_heatmap.png}
-  \caption{Same as Figure~\ref{fig:thd_heatmap_qmm} for SPEC (DPC3) traces.}
-  \label{fig:thd_heatmap_dpc3}
+  \includegraphics[width=\linewidth]{../../plots/dp_cbpred_study/dpc3_both_optimal.png}
+  \caption{SPEC CPU2006: per-benchmark dpPred-only (top) and dpPred+cbPred
+           (bottom) optimal threshold analysis.  Benchmarks with optimal
+           speedup $<0.2\,\%$ are omitted from the bars; geomean lines
+           cover all 20 benchmarks.  Threshold annotated as pthd (top) or
+           \texttt{(pthd,bthd)} (bottom) inside each bar.}
+  \label{fig:opt_dpc3}
 \end{figure}
-}{}
 
-\IfFileExists{../../plots/dp_cbpred_study/google_threshold_heatmap.png}{%
 \begin{figure}[htbp]
   \centering
-  \includegraphics[width=\linewidth]{../../plots/dp_cbpred_study/google_threshold_heatmap.png}
-  \caption{Same as Figure~\ref{fig:thd_heatmap_qmm} for Google traces.}
-  \label{fig:thd_heatmap_google}
+  \includegraphics[width=\linewidth]{../../plots/dp_cbpred_study/google_both_optimal.png}
+  \caption{Google Warehouse: same layout as Figure~\ref{fig:opt_dpc3} for
+           the 9 workload families (each bar is the geomean of its traces).}
+  \label{fig:opt_google}
 \end{figure}
-}{}
 
-The Qualcomm heatmap shows a clear gradient: the peak of $+8.64\%$ at
-$(0,0)$ degrades monotonically to $+1.31\%$ at $(6,6)$, confirming that
-aggressiveness of bypassing directly controls the benefit.
+\begin{figure}[htbp]
+  \centering
+  \includegraphics[width=\linewidth]{../../plots/dp_cbpred_study/qmm_both_optimal.png}
+  \caption{Qualcomm Mobile: same layout as Figure~\ref{fig:opt_dpc3}.
+           Top 10 traces by optimal speedup are shown (of 45 total).}
+  \label{fig:opt_qmm}
+\end{figure}
+
+\begin{figure}[htbp]
+  \centering
+  \includegraphics[width=\linewidth]{../../plots/dp_cbpred_study/cbpred_dist_combined.png}
+  \caption{Distribution of the optimal (pthd, bthd) pair across benchmarks for
+           \textbf{(a)}~SPEC CPU2006 (all 20 benchmarks),
+           \textbf{(b)}~Google (all 43 individual traces), and
+           \textbf{(c)}~Qualcomm (all 45 traces).
+           Cell value = number of benchmarks/traces that prefer that pair;
+           red border marks the default $(6,6)$.
+           SPEC and Qualcomm cluster strongly at $(0,0)$; Google concentrates
+           at high pthd and low bthd, reflecting its distinct memory access
+           pattern.}
+  \label{fig:cbpred_dist}
+\end{figure}
 
 % ─────────────────────────────────────────────────────────────────────────────
 \section{Liveness-Guided Insertion Policy}
