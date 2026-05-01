@@ -254,9 +254,9 @@ def _heatmap(fig, ax, data, cmap, norm, cell_fmt, xlabel, ylabel, title, cbar_la
             if not np.isnan(v):
                 ax.text(bthd, pthd, cell_fmt(v), ha="center", va="center", fontsize=9)
     ax.set_xticks(range(7))
-    ax.set_xticklabels([f"bthd{i}" for i in range(7)])
+    ax.set_xticklabels([str(i) for i in range(7)])
     ax.set_yticks(range(7))
-    ax.set_yticklabels([f"pthd{i}" for i in range(7)])
+    ax.set_yticklabels([str(i) for i in range(7)])
     ax.set_xlabel(xlabel, fontsize=11)
     ax.set_ylabel(ylabel, fontsize=11)
     ax.set_title(title, fontsize=12)
@@ -288,7 +288,14 @@ def main():
         args.dppred = True
 
     base        = args.results_dir.rstrip("/")
-    label       = os.path.basename(base)
+    _raw        = os.path.basename(base).lower()
+    _SUITE_NAMES = {
+        "dpc3":   "SPEC CPU2006 (DPC3)",
+        "google": "Google Warehouse",
+        "qmm":    "Qualcomm Mobile",
+    }
+    label = next((v for k, v in _SUITE_NAMES.items() if _raw.startswith(k)),
+                 os.path.basename(base))
     metric      = args.metric
     dppred_mode = args.dppred
 
@@ -350,6 +357,8 @@ def main():
         if metric in ("ipc", "speedup_range"):
             return (val / baselines[trace] - 1.0) * 100.0
         elif metric == "mpki":
+            if val == 0:
+                return None
             return (baselines[trace] / val - 1.0) * 100.0
         else:  # mpki_abs, bypass_pct — absolute
             return val
