@@ -174,6 +174,12 @@ class CACHE : public champsim::operable, public MemoryRequestConsumer, public Me
     uint64_t mostly_dead = 0;
   };
 
+  struct phist_key_t {
+    uint64_t pc, vpn;
+    bool operator<(const phist_key_t& o) const { if (pc != o.pc) return pc < o.pc; return vpn < o.vpn; }
+    bool operator==(const phist_key_t& o) const { return pc == o.pc && vpn == o.vpn; }
+  };
+
 
   // Shared physical-frame queue: dpPred fills it; cbPred reads it.
   inline static std::deque<uint64_t> pfq{};
@@ -191,9 +197,11 @@ class CACHE : public champsim::operable, public MemoryRequestConsumer, public Me
   // Set by cpu0_STLB at initialize(); used by LLC to scan for DoA page correlations.
   inline static const CACHE* stlb_ptr = nullptr;
 
-  std::map<uint64_t, std::map<uint64_t, hist_entry>> phist; // [vpn_hash][pc_hash] → entry
-  std::deque<std::pair<uint64_t, uint64_t>> shadow_table;   // recently bypassed (VPN, translation data)
-  std::map<uint64_t, hist_entry> bhist;                      // [block_hash] → entry
+  std::map<uint64_t, std::map<uint64_t,    hist_entry>> phist;      // [vpn_hash][pc_hash] → entry  (hashed)
+  std::map<uint64_t, std::map<phist_key_t, hist_entry>> phist_full; // [pc][{pc,vpn}] → entry       (full-key)
+  std::deque<std::pair<uint64_t, uint64_t>> shadow_table;           // recently bypassed (VPN, translation data)
+  std::map<uint64_t, hist_entry> bhist;      // [block_hash] → entry (hashed)
+  std::map<uint64_t, hist_entry> bhist_full; // [block_addr] → entry (full-key, LRU-bounded)
 
   // Selects which history signal drives needs_mid_insertion().
   // Controlled by the MID_KEY env var (0 = addr, 1 = pc; default 0).
@@ -223,6 +231,11 @@ class CACHE : public champsim::operable, public MemoryRequestConsumer, public Me
   bool bhist_hash = true;   // BHIST_HASH=0 disables XOR-folding, uses full block address as key
 
   uint64_t fold_xor(uint64_t val, unsigned bits) const;
+  bool        phist_entry_exists(uint64_t pc, uint64_t vpn) const;
+  hist_entry& get_phist_entry(uint64_t pc, uint64_t vpn);     // dispatches to phist or phist_full
+  void        phist_clear_vpn(uint64_t vpn);                  // invalidate all entries for a VPN
+  bool        bhist_entry_exists(uint64_t block_addr) const;
+  hist_entry& get_bhist_entry(uint64_t block_addr);           // dispatches to bhist or bhist_full
   void load_predictor_settings();                               // reads env vars to configure dpPred/cbPred at construction
   bool dppred_shadow_lookup(const PACKET& handle_pkt);          // true → shadow hit: history reset, data served, entry re-inserted into STLB, PTW skipped
   bool dppred_bypass(const PACKET& fill_mshr);                  // true → skip STLB fill

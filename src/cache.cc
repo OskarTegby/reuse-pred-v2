@@ -42,6 +42,50 @@ uint64_t CACHE::fold_xor(uint64_t val, unsigned bits) const
   return result;
 }
 
+
+bool CACHE::phist_entry_exists(uint64_t pc, uint64_t vpn) const
+{
+  if (phist_hash) {
+    const auto outer = phist.find(fold_xor(vpn, VPN_BITS));
+    return outer != phist.end() && outer->second.count(fold_xor(pc, PC_BITS));
+  }
+  const auto outer = phist_full.find(pc);
+  return outer != phist_full.end() && outer->second.count(phist_key_t{pc, vpn});
+}
+
+CACHE::hist_entry& CACHE::get_phist_entry(uint64_t pc, uint64_t vpn)
+{
+  if (phist_hash)
+    return phist[fold_xor(vpn, VPN_BITS)][fold_xor(pc, PC_BITS)];
+  return phist_full[pc][phist_key_t{pc, vpn}];
+}
+
+void CACHE::phist_clear_vpn(uint64_t vpn)
+{
+  if (phist_hash) {
+    phist[fold_xor(vpn, VPN_BITS)].clear();
+  } else {
+    for (auto& [set_key, inner] : phist_full) {
+      for (auto it = inner.begin(); it != inner.end(); )
+        if (it->first.vpn == vpn) it = inner.erase(it);
+        else                      ++it;
+    }
+  }
+}
+
+bool CACHE::bhist_entry_exists(uint64_t block_addr) const
+{
+  if (bhist_hash) return bhist.count(fold_xor(block_addr, BHT_BITS));
+  return bhist_full.count(block_addr);
+}
+
+CACHE::hist_entry& CACHE::get_bhist_entry(uint64_t block_addr)
+{
+  if (bhist_hash)
+    return bhist[fold_xor(block_addr, BHT_BITS)];
+  return bhist_full[block_addr];
+}
+
 // On a shadow table hit: reset the VPN's history row, serve the stored
 // translation to all requesters, and re-insert the entry into the STLB via
 // a synthetic handle_fill call (PTW is skipped entirely).
@@ -55,8 +99,7 @@ bool CACHE::dppred_shadow_lookup(const PACKET& handle_pkt)
     return false;
   sim_stats.back().st_hits++;
 
-  const auto vpn_key = phist_hash ? fold_xor(vpn, VPN_BITS) : vpn;
-  phist[vpn_key].clear();
+  phist_clear_vpn(vpn);
   const auto stored_data = it->second;
   shadow_table.erase(it);
 
@@ -82,15 +125,9 @@ bool CACHE::dppred_bypass(const PACKET& fill_mshr)
 {
   const auto vpn = fill_mshr.address >> OFFSET_BITS;
   const auto pc  = fill_mshr.ip;
-  const auto vkey = phist_hash ? fold_xor(vpn, VPN_BITS) : vpn;
-  const auto pkey = phist_hash ? fold_xor(pc,  PC_BITS)  : pc;
   sim_stats.back().phist_lookups++;
-  {
-    const auto outer = phist.find(vkey);
-    if (outer != phist.end() && outer->second.count(pkey))
-      sim_stats.back().phist_hits++;
-  }
-  if (phist[vkey][pkey].doa <= pconf_thd)
+  if (phist_entry_exists(pc, vpn)) sim_stats.back().phist_hits++;
+  if (get_phist_entry(pc, vpn).doa <= pconf_thd)
     return false;
 
   // Push physical frame into the shared queue for cbPred (FIFO)
@@ -113,7 +150,6 @@ bool CACHE::cbpred_bypass(const PACKET& fill_mshr)
 {
   const auto pfn        = fill_mshr.address >> LOG2_PAGE_SIZE;
   const auto block_addr = fill_mshr.address >> OFFSET_BITS;
-  const auto block_hash = bhist_hash ? fold_xor(block_addr, BHT_BITS) : block_addr;
   const bool in_pfq     = std::find(pfq.begin(), pfq.end(), pfn) != pfq.end();
 
   sim_stats.back().pfq_probes++;
@@ -122,11 +158,9 @@ bool CACHE::cbpred_bypass(const PACKET& fill_mshr)
 
   if (in_pfq) {
     sim_stats.back().bhist_lookups++;
-    if (bhist.count(block_hash))
-      sim_stats.back().bhist_hits++;
+    if (bhist_entry_exists(block_addr)) sim_stats.back().bhist_hits++;
   }
-
-  if (!in_pfq || bhist[block_hash].doa <= bconf_thd)
+  if (!in_pfq || get_bhist_entry(block_addr).doa <= bconf_thd)
     return false;
 
   sim_stats.back().llc_bypasses++;
@@ -264,15 +298,9 @@ void CACHE::update_eviction_counters(const BLOCK& victim, liveness_class lv)
 
   // Predictor tables: keep existing gated update rules unchanged.
   if (dppred && NAME == "cpu0_STLB") {
-    const auto vpn  = victim.address >> OFFSET_BITS;
-    const auto pc   = victim.ip;
-    const auto vkey = phist_hash ? fold_xor(vpn, VPN_BITS) : vpn;
-    const auto pkey = phist_hash ? fold_xor(pc,  PC_BITS)  : pc;
-    update(phist[vkey][pkey]);
+    update(get_phist_entry(victim.ip, victim.address >> OFFSET_BITS));
   } else if (cbpred && NAME == "LLC" && victim.dp) {
-    const auto block_addr = victim.address >> OFFSET_BITS;
-    const auto bkey = bhist_hash ? fold_xor(block_addr, BHT_BITS) : block_addr;
-    update(bhist[bkey]);
+    update(get_bhist_entry(victim.address >> OFFSET_BITS));
   }
 
   // Insertion-policy tables: always updated for LLC and STLB, no hashing.
