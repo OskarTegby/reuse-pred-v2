@@ -55,7 +55,8 @@ bool CACHE::dppred_shadow_lookup(const PACKET& handle_pkt)
     return false;
   sim_stats.back().st_hits++;
 
-  phist[fold_xor(vpn, VPN_BITS)].clear();
+  const auto vpn_key = phist_hash ? fold_xor(vpn, VPN_BITS) : vpn;
+  phist[vpn_key].clear();
   const auto stored_data = it->second;
   shadow_table.erase(it);
 
@@ -79,15 +80,17 @@ bool CACHE::dppred_shadow_lookup(const PACKET& handle_pkt)
 // Only called when the set is full (otherwise there is nothing to bypass).
 bool CACHE::dppred_bypass(const PACKET& fill_mshr)
 {
-  const auto vpn_hash = fold_xor(fill_mshr.address >> OFFSET_BITS, VPN_BITS);
-  const auto pc_hash  = fold_xor(fill_mshr.ip,                     PC_BITS);
+  const auto vpn = fill_mshr.address >> OFFSET_BITS;
+  const auto pc  = fill_mshr.ip;
+  const auto vkey = phist_hash ? fold_xor(vpn, VPN_BITS) : vpn;
+  const auto pkey = phist_hash ? fold_xor(pc,  PC_BITS)  : pc;
   sim_stats.back().phist_lookups++;
   {
-    const auto outer = phist.find(vpn_hash);
-    if (outer != phist.end() && outer->second.count(pc_hash))
+    const auto outer = phist.find(vkey);
+    if (outer != phist.end() && outer->second.count(pkey))
       sim_stats.back().phist_hits++;
   }
-  if (phist[vpn_hash][pc_hash].doa <= pconf_thd)
+  if (phist[vkey][pkey].doa <= pconf_thd)
     return false;
 
   // Push physical frame into the shared queue for cbPred (FIFO)
@@ -109,7 +112,8 @@ bool CACHE::dppred_bypass(const PACKET& fill_mshr)
 bool CACHE::cbpred_bypass(const PACKET& fill_mshr)
 {
   const auto pfn        = fill_mshr.address >> LOG2_PAGE_SIZE;
-  const auto block_hash = fold_xor(fill_mshr.address >> OFFSET_BITS, BHT_BITS);
+  const auto block_addr = fill_mshr.address >> OFFSET_BITS;
+  const auto block_hash = bhist_hash ? fold_xor(block_addr, BHT_BITS) : block_addr;
   const bool in_pfq     = std::find(pfq.begin(), pfq.end(), pfn) != pfq.end();
 
   sim_stats.back().pfq_probes++;
@@ -260,11 +264,15 @@ void CACHE::update_eviction_counters(const BLOCK& victim, liveness_class lv)
 
   // Predictor tables: keep existing gated update rules unchanged.
   if (dppred && NAME == "cpu0_STLB") {
-    const auto vpn_hash = fold_xor(victim.address >> OFFSET_BITS, VPN_BITS);
-    const auto pc_hash  = fold_xor(victim.ip,                     PC_BITS);
-    update(phist[vpn_hash][pc_hash]);
+    const auto vpn  = victim.address >> OFFSET_BITS;
+    const auto pc   = victim.ip;
+    const auto vkey = phist_hash ? fold_xor(vpn, VPN_BITS) : vpn;
+    const auto pkey = phist_hash ? fold_xor(pc,  PC_BITS)  : pc;
+    update(phist[vkey][pkey]);
   } else if (cbpred && NAME == "LLC" && victim.dp) {
-    update(bhist[fold_xor(victim.address >> OFFSET_BITS, BHT_BITS)]);
+    const auto block_addr = victim.address >> OFFSET_BITS;
+    const auto bkey = bhist_hash ? fold_xor(block_addr, BHT_BITS) : block_addr;
+    update(bhist[bkey]);
   }
 
   // Insertion-policy tables: always updated for LLC and STLB, no hashing.
@@ -306,6 +314,8 @@ bool CACHE::needs_mid_insertion(uint64_t full_addr, uint64_t ip) const
 //   MID_PROMOTE=<0|1>  promote mid-inserted blocks to MRU on hit (default 0 = no promotion)
 //   ST_SIZE=<n>        shadow-table capacity (default 2)
 //   PFQ_CAP=<n>        shared PFQ capacity (default 8)
+//   PHIST_HASH=<0|1>   XOR-fold VPN+PC before phist lookup (default 1 = hash)
+//   BHIST_HASH=<0|1>   XOR-fold block address before bhist lookup (default 1 = hash)
 void CACHE::load_predictor_settings()
 {
   auto getenv_uint64 = [](const char* var, uint64_t fallback) -> uint64_t {
@@ -325,6 +335,9 @@ void CACHE::load_predictor_settings()
   pfq_cap   = getenv_uint64("PFQ_CAP",   pfq_cap);
   mid_key          = (getenv_uint64("MID_KEY",     0) == 1) ? mid_key_t::pc : mid_key_t::addr;
   mid_promote_on_hit = (getenv_uint64("MID_PROMOTE", 0) == 1);
+
+  phist_hash = (getenv_uint64("PHIST_HASH", 1) != 0);
+  bhist_hash = (getenv_uint64("BHIST_HASH", 1) != 0);
 }
 
 bool CACHE::handle_fill(const PACKET& fill_mshr)
