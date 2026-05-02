@@ -215,13 +215,12 @@ class CACHE : public champsim::operable, public MemoryRequestConsumer, public Me
   std::map<uint64_t, hist_entry> stlb_mid_hist_addr;
   std::map<uint64_t, hist_entry> stlb_mid_hist_pc;
 
-  static constexpr unsigned  VPN_BITS = 4;
-  static constexpr unsigned  PC_BITS  = 6;
-  static constexpr unsigned  BHT_BITS = 12;
-  // No MAX_COUNTER cap: hardware would use a fixed-width saturating counter
-  // (e.g. 4 bits → 0-15), but in the simulator the counters live in std::map
-  // as uint64_t, so capping loses information without saving any memory.
-  // The bypass threshold (pconf_thd / bconf_thd) is the only meaningful limit.
+  static constexpr unsigned VPN_BITS = 4;
+  static constexpr unsigned PC_BITS  = 6;
+  static constexpr unsigned BHT_BITS = 12;
+
+  bool phist_hash = true;   // PHIST_HASH=0 disables XOR-folding, uses full VPN+PC as key
+  bool bhist_hash = true;   // BHIST_HASH=0 disables XOR-folding, uses full block address as key
 
   uint64_t fold_xor(uint64_t val, unsigned bits) const;
   void load_predictor_settings();                               // reads env vars to configure dpPred/cbPred at construction
