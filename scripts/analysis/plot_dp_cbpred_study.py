@@ -115,13 +115,13 @@ def _parse_ipc(path: Path):
 
 
 def _parse_pfq_hit_rate(path: Path):
-    """Return PFQ hit rate (%) from 'LLC PFQ PROBES: N  HITS: M  HIT RATE: X.XX%'."""
+    """Return PFQ hit rate (%) computed from 'LLC PFQ PROBES: N  HITS: M'."""
     try:
         for line in path.read_text(errors="replace").splitlines():
-            m = re.search(r"LLC PFQ PROBES:\s+\d+\s+HITS:\s+\d+\s+HIT RATE:\s+([0-9.]+)%",
-                          line)
+            m = re.search(r"LLC PFQ PROBES:\s+(\d+)\s+HITS:\s+(\d+)", line)
             if m:
-                return float(m.group(1))
+                probes, hits = int(m.group(1)), int(m.group(2))
+                return 100.0 * hits / probes if probes > 0 else 0.0
     except OSError:
         pass
     return None
