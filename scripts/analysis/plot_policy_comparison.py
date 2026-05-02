@@ -29,18 +29,21 @@ import matplotlib.pyplot as plt
 import matplotlib.ticker as mticker
 import numpy as np
 
-# ── Colours: one per policy slot (baselines solid, pred variants hatched) ─────
-POLICY_COLORS = [
-    "#5B7FA6",  # lru         — steel blue
-    "#E8A87C",  # srrip       — soft peach
-    "#7CB9A8",  # drrip       — soft teal
-    "#A67CB9",  # lru_mid     — muted purple
-    "#2C5F8A",  # lru+pred    — deep blue
-    "#C46A30",  # srrip+pred  — burnt orange
-    "#3D8A78",  # drrip+pred  — deep teal
-    "#6A3D8A",  # lru_mid+pred — deep purple
-]
-POLICY_HATCHES = ["", "", "", "", "//", "//", "//", "//"]
+# ── Colours: fixed per policy name — never shift with absent policies ─────────
+POLICY_COLORS = {
+    "srrip":        "#E8A87C",  # soft peach
+    "lru_mid":      "#A67CB9",  # muted purple
+    "lru_pred":     "#2C5F8A",  # deep blue
+    "srrip_pred":   "#C46A30",  # burnt orange
+    "lru_mid_pred": "#6A3D8A",  # deep purple
+}
+POLICY_HATCHES = {
+    "srrip":        "",
+    "lru_mid":      "",
+    "lru_pred":     "//",
+    "srrip_pred":   "//",
+    "lru_mid_pred": "//",
+}
 
 
 # ── Parsing ───────────────────────────────────────────────────────────────────
@@ -101,25 +104,213 @@ def geomean(vals):
     return float(np.exp(np.mean(np.log(v))))
 
 
+def benchmark_name(wl: str) -> str:
+    """Strip the slice suffix from a trace name to get the benchmark name.
+
+    SPEC CPU2017:  602.gcc_s-734B  -> 602.gcc_s   (strip -<digits><letters>)
+    All other suites (Google, QMM, …) are left unchanged — we only group traces
+    when we have real simpoint weights to go with the grouping.
+    """
+    m = re.match(r'^(.+)-\d+[A-Z]+$', wl)
+    if m:
+        return m.group(1)
+    return wl
+
+
+def load_spec_weights(weights_dir: "Path") -> "dict[str, float]":
+    """Load simpoint weights; returns {trace_name: weight} or {} if dir missing."""
+    result: dict = {}
+    if not weights_dir.is_dir():
+        return result
+    for bm_dir in sorted(weights_dir.iterdir()):
+        if not bm_dir.is_dir():
+            continue
+        w_file = bm_dir / "weights.out"
+        s_file = bm_dir / "simpoints.out"
+        if not (w_file.exists() and s_file.exists()):
+            continue
+        w_vals = [float(x) for x in w_file.read_text().split()]
+        s_ids  = [int(x)   for x in s_file.read_text().split()]
+        bm_name = bm_dir.name
+        for sp_id, w in zip(s_ids, w_vals):
+            result[f"{bm_name}-{sp_id}B"] = w
+    return result
+
+
+MAX_WORKLOADS = 15   # maximum per-workload groups shown in the chart
+
+
+def _diverse_select(items, feature_fn, k):
+    """Greedy farthest-point sampling in normalised feature space.  Returns indices."""
+    n = len(items)
+    if n <= k:
+        return list(range(n))
+    vecs = np.array([feature_fn(item) for item in items], dtype=float)
+    lo, hi = vecs.min(axis=0), vecs.max(axis=0)
+    span = np.where(hi > lo, hi - lo, 1.0)
+    v = (vecs - lo) / span
+    centroid = v.mean(axis=0)
+    selected = [int(np.argmin(np.linalg.norm(v - centroid, axis=1)))]
+    min_d = np.full(n, np.inf)
+    while len(selected) < k:
+        d = np.linalg.norm(v - v[selected[-1]], axis=1)
+        min_d = np.minimum(min_d, d)
+        min_d[selected] = -1.0
+        selected.append(int(np.argmax(min_d)))
+    return selected
+
+
+def aggregate_to_benchmarks(workloads, matrices, weights, use_geomean=True):
+    """Aggregate SPEC simpoints into parent benchmarks across all policy matrices.
+
+    For SPEC traces: weighted geomean (IPC ratios) or weighted arithmetic mean
+    (absolute MPKI) within each benchmark.  Non-SPEC traces: kept as-is.
+    Returns (new_workload_names, new_matrices).
+    """
+    groups: dict = {}
+    for wi, wl in enumerate(workloads):
+        groups.setdefault(benchmark_name(wl), []).append((wi, wl))
+
+    new_workloads = []
+    new_matrices = [[] for _ in matrices]
+    for bm_name in sorted(groups.keys()):
+        items = groups[bm_name]
+        new_workloads.append(bm_name)
+        for pi, matrix in enumerate(matrices):
+            if len(items) == 1:
+                new_matrices[pi].append(matrix[items[0][0]])
+                continue
+            raw_pairs = [(matrix[wi], weights.get(wl) if weights else None)
+                         for wi, wl in items]
+            valid = [(v, w) for v, w in raw_pairs if v is not None]
+            if not valid:
+                new_matrices[pi].append(None)
+                continue
+            if use_geomean:
+                pos = [(v, w) for v, w in valid if v > 0]
+                if not pos:
+                    new_matrices[pi].append(None)
+                    continue
+                w_pos = [(v, w) for v, w in pos if w is not None]
+                if w_pos and weights:
+                    total_w = sum(w for _, w in w_pos)
+                    if total_w > 0:
+                        new_matrices[pi].append(float(np.exp(
+                            sum(w / total_w * np.log(v) for v, w in w_pos))))
+                        continue
+                new_matrices[pi].append(float(np.exp(
+                    np.mean(np.log([v for v, _ in pos])))))
+            else:
+                w_all = [(v, w) for v, w in valid if w is not None]
+                if w_all and weights:
+                    total_w = sum(w for _, w in w_all)
+                    if total_w > 0:
+                        new_matrices[pi].append(
+                            sum(w / total_w * v for v, w in w_all))
+                        continue
+                new_matrices[pi].append(
+                    sum(v for v, _ in valid) / len(valid))
+    return new_workloads, new_matrices
+
+
+def benchmark_geomean(values_by_wl: dict, weights: "dict | None" = None) -> "float | None":
+    """Benchmark-weighted geomean using simpoint weights when available.
+
+    Within each benchmark: weighted geometric mean (re-normalised for missing
+    simpoints).  Falls back to equal weights.  Across benchmarks: equal-weight
+    geometric mean.
+    """
+    groups: dict = {}
+    for wl, v in values_by_wl.items():
+        if v is not None and v > 0:
+            groups.setdefault(benchmark_name(wl), []).append(wl)
+    if not groups:
+        return None
+    per_bench = []
+    for wl_list in groups.values():
+        if weights:
+            pairs = [(values_by_wl[wl], weights.get(wl)) for wl in wl_list]
+            if any(w is not None for _, w in pairs):
+                pairs = [(v, w) for v, w in pairs if v is not None and v > 0 and w is not None]
+                total_w = sum(w for _, w in pairs)
+                if total_w > 0:
+                    per_bench.append(float(np.exp(sum((w / total_w) * np.log(v) for v, w in pairs))))
+                    continue
+        per_bench.append(geomean([values_by_wl[wl] for wl in wl_list]))
+    return geomean(per_bench)
+
+
+def _arith_mean(values_by_wl: dict, weights=None) -> "float | None":
+    """Arithmetic mean across workloads — used for MPKI reduction percentages."""
+    vals = [v for v in values_by_wl.values() if v is not None and np.isfinite(v)]
+    return float(np.mean(vals)) if vals else None
+
+
 # ── Plot helpers ──────────────────────────────────────────────────────────────
 
+def _iqr_ylim(vals, ref=None, pad=0.08):
+    """Tight y-limits via IQR outlier clipping.  ref value is always included."""
+    clean = sorted(v for v in vals if v is not None and np.isfinite(v))
+    if not clean:
+        return None, None
+    q1, q3 = np.percentile(clean, 25), np.percentile(clean, 75)
+    iqr = q3 - q1
+    if iqr > 1e-8:
+        inner = [v for v in clean if q1 - 1.5 * iqr <= v <= q3 + 1.5 * iqr]
+    else:
+        inner = clean
+    if ref is not None:
+        inner = inner + [ref]
+    if not inner:
+        inner = clean
+    lo, hi = min(inner), max(inner)
+    span = max(hi - lo, 1e-8)
+    return lo - pad * span, hi + pad * span
+
+
+def _annotate_clipped(ax, y_lo, y_hi, fmt="%.3f"):
+    """For every bar patch clipped by [y_lo, y_hi], write the actual value in plain
+    horizontal text just outside the axis edge — no slashes, clean like Fig 9 style."""
+    span = y_hi - y_lo
+    for patch in ax.patches:
+        h = patch.get_height()
+        if h <= 0:
+            continue
+        b = patch.get_y()
+        top = b + h
+        x = patch.get_x() + patch.get_width() / 2
+        if top > y_hi:
+            ax.text(x, y_hi + 0.02 * span, fmt % top,
+                    ha="center", va="bottom", fontsize=8,
+                    fontweight="bold", color="black", clip_on=False)
+        elif b < y_lo:
+            ax.text(x, y_lo - 0.02 * span, fmt % b,
+                    ha="center", va="top", fontsize=8,
+                    fontweight="bold", color="black", clip_on=False)
+
+
 def _bar_group(ax, workloads, policy_names, matrix, ylabel, title,
-               baseline_val=1.0, ref_line=True):
+               baseline_val=1.0, ref_line=True, weights=None, clip_fmt="%.3f",
+               policy_keys=None, agg_fn=None):
     """Draw a grouped bar chart.
 
     matrix[p][w] = value for policy p, workload w (None = missing).
     A geomean bar is appended after a small gap.
     The y-axis is zoomed in to the actual data range so small differences
     between policies are visible.
+    policy_keys: canonical policy names for color/hatch lookup (defaults to policy_names).
     """
+    if policy_keys is None:
+        policy_keys = policy_names
     n_policies = len(policy_names)
     n_wl = len(workloads)
 
-    # Geomean column
+    # Benchmark-weighted geomean column (uses simpoint weights when available)
+    _agg = agg_fn or benchmark_geomean
     gm = []
     for p in range(n_policies):
-        vals = [matrix[p][w] for w in range(n_wl) if matrix[p][w] is not None]
-        gm.append(geomean(vals))
+        by_wl = {workloads[w]: matrix[p][w] for w in range(n_wl)}
+        gm.append(_agg(by_wl, weights))
 
     gap = 1.5
     group_w = 0.8
@@ -127,14 +318,14 @@ def _bar_group(ax, workloads, policy_names, matrix, ylabel, title,
     x_wl = np.arange(n_wl)
     x_gm = n_wl + gap
 
-    colors = POLICY_COLORS[:n_policies]
-    hatches = POLICY_HATCHES[:n_policies]
-
-    for pi, (pname, color, hatch) in enumerate(zip(policy_names, colors, hatches)):
+    _fallback_colors = ["#888888", "#AAAAAA", "#CCCCCC", "#444444", "#666666"]
+    for pi, (pname, pkey) in enumerate(zip(policy_names, policy_keys)):
         offsets = (np.arange(n_policies) - (n_policies - 1) / 2) * bar_w
         x_pos_wl = x_wl + offsets[pi]
         x_pos_gm = x_gm + offsets[pi]
 
+        color  = POLICY_COLORS.get(pkey, _fallback_colors[pi % len(_fallback_colors)])
+        hatch  = POLICY_HATCHES.get(pkey, "")
         heights_wl = [matrix[pi][w] if matrix[pi][w] is not None else 0
                       for w in range(n_wl)]
         ax.bar(x_pos_wl, heights_wl, bar_w * 0.95,
@@ -157,8 +348,7 @@ def _bar_group(ax, workloads, policy_names, matrix, ylabel, title,
         if lbl == "Geomean":
             tick.set_fontweight("bold")
 
-    # Zoom y-axis to the actual data range with 20% padding on each side.
-    # Include the reference line value so it stays visible.
+    # Full-range y-limits with moderate padding
     all_vals = [v for row in matrix for v in row if v is not None]
     all_vals += [g for g in gm if g is not None]
     if ref_line:
@@ -166,12 +356,12 @@ def _bar_group(ax, workloads, policy_names, matrix, ylabel, title,
     if all_vals:
         lo, hi = min(all_vals), max(all_vals)
         span = max(hi - lo, 1e-6)
-        ax.set_ylim(lo - 0.2 * span, hi + 0.2 * span)
+        ax.set_ylim(lo - 0.15 * span, hi + 0.15 * span)
 
     ax.set_ylabel(ylabel, fontsize=10)
-    ax.set_title(title, fontsize=11)
+    ax.set_title(title, fontsize=13)
     ax.set_xlim(-0.7, x_gm + 0.7)
-    ax.legend(loc="upper right", fontsize=7, framealpha=0.8, ncol=2)
+    ax.legend(loc="upper right", fontsize=8, framealpha=0.85, ncol=2)
     ax.grid(axis="y", alpha=0.3, linewidth=0.5)
 
 
@@ -187,39 +377,67 @@ def main():
                     help="Policy subdirectory to normalise against (default: lru)")
     ap.add_argument("--out", default="policy_comparison",
                     help="Output path prefix (default: policy_comparison)")
+    ap.add_argument("--label", default=None,
+                    help="Human-readable suite label for plot titles (e.g. 'SPEC (DPC3)')")
+    ap.add_argument("--suffix", default="",
+                    help="Suffix appended to every policy dir name (e.g. '_paper_pref')")
+    ap.add_argument("--exclude", nargs="*", default=[],
+                    help="Exclude policies whose name contains any of these substrings (e.g. --exclude drrip)")
+    ap.add_argument("--weights-dir", default=None,
+                    help="Directory with per-benchmark simpoint weight files. "
+                         "Default: auto-detected from known location.")
     args = ap.parse_args()
 
     results_dir = Path(args.results_dir)
     if not results_dir.is_dir():
         sys.exit(f"ERROR: not a directory: {results_dir}")
+    suite_label = args.label or results_dir.name
 
     # Discover policies in a fixed display order
-    ordered = ["lru", "srrip", "drrip", "lru_mid",
-               "lru_pred", "srrip_pred", "drrip_pred", "lru_mid_pred"]
+    # lru is the baseline — shown as a reference line, not as a redundant bar
+    sfx = args.suffix  # e.g. "" or "_paper_pref"
+    ordered = ["lru_mid", "lru_mid_pred", "lru_pred",
+               "srrip", "srrip_pred"]
     display_labels = {
-        "lru": "lru", "srrip": "srrip", "drrip": "drrip", "lru_mid": "lru_mid",
+        "srrip": "srrip", "lru_mid": "lru_mid",
         "lru_pred": "lru+pred", "srrip_pred": "srrip+pred",
-        "drrip_pred": "drrip+pred", "lru_mid_pred": "lru_mid+pred",
+        "lru_mid_pred": "lru_mid+pred",
     }
 
-    present = [p for p in ordered if (results_dir / p).is_dir()]
+    present = [p for p in ordered
+               if (results_dir / (p + sfx)).is_dir()
+               and not any(s in p for s in args.exclude)]
     if not present:
         sys.exit(f"ERROR: no recognised policy subdirs found in {results_dir}")
-    if args.baseline not in present:
-        sys.exit(f"ERROR: baseline policy '{args.baseline}' not found in {results_dir}")
+    baseline_dir = results_dir / (args.baseline + sfx)
+    if not baseline_dir.is_dir():
+        sys.exit(f"ERROR: baseline policy '{args.baseline}{sfx}' not found in {results_dir}")
 
     print(f"Policies found: {present}")
 
-    # Load all data
+    # Load simpoint weights
+    _default_weights = Path(__file__).parents[2] / ".." / "ChampSim-dev" / "trace-files" / "SPEC2006_weights"
+    weights_dir = Path(args.weights_dir) if args.weights_dir else _default_weights.resolve()
+    weights = load_spec_weights(weights_dir)
+    if weights:
+        print(f"Loaded simpoint weights for "
+              f"{len(set(benchmark_name(k) for k in weights))} benchmarks")
+    else:
+        print(f"WARNING: no simpoint weights found — using equal weights")
+
+    # Load all data (baseline always loaded, even though it's not plotted as a bar)
     data = {}
+    if args.baseline not in present:
+        print(f"  Loading {args.baseline}{sfx} (baseline) ...")
+        data[args.baseline] = load_policy(baseline_dir)
     for policy in present:
-        print(f"  Loading {policy} ...")
-        data[policy] = load_policy(results_dir / policy)
+        print(f"  Loading {policy}{sfx} ...")
+        data[policy] = load_policy(results_dir / (policy + sfx))
 
     # Union of workloads present in the baseline
     workloads = sorted(data[args.baseline].keys())
     if not workloads:
-        sys.exit(f"ERROR: no workloads found under {results_dir / args.baseline}")
+        sys.exit(f"ERROR: no workloads found under {baseline_dir}")
     print(f"  {len(workloads)} workloads from baseline '{args.baseline}'")
 
     policy_labels = [display_labels.get(p, p) for p in present]
@@ -240,27 +458,44 @@ def main():
                 row.append(None)
         ipc_matrix.append(row)
 
-    # Sort workloads by descending geomean IPC speedup of the best pred policy
+    # Aggregate SPEC simpoints into parent benchmarks (weighted geomean of ratios)
+    workloads_agg, ipc_matrix_agg = aggregate_to_benchmarks(
+        workloads, ipc_matrix, weights, use_geomean=True)
+    print(f"  {len(workloads_agg)} benchmarks/workloads after simpoint aggregation")
+
+    n_total = len(workloads_agg)
+
+    # Select diverse subset: feature = IPC speedup vector across all policies
+    if n_total > MAX_WORKLOADS:
+        items_agg = list(range(n_total))
+        def _fvec(wi):
+            return [ipc_matrix_agg[pi][wi] or 1.0 for pi in range(len(present))]
+        sel = _diverse_select(items_agg, _fvec, MAX_WORKLOADS)
+    else:
+        sel = list(range(n_total))
+
+    # Sort selected by descending IPC speedup of the best pred policy for readability
     pred_present = [p for p in present if p.endswith("_pred")]
     if pred_present:
         best_pred_idx = present.index(pred_present[-1])
-        sort_key = [ipc_matrix[best_pred_idx][wi] or 0 for wi in range(len(workloads))]
-        order = sorted(range(len(workloads)), key=lambda i: sort_key[i], reverse=True)
-    else:
-        order = list(range(len(workloads)))
-    workloads_sorted = [workloads[i] for i in order]
-    ipc_matrix_sorted = [[row[i] for i in order] for row in ipc_matrix]
+        sel.sort(key=lambda i: ipc_matrix_agg[best_pred_idx][i] or 0, reverse=True)
+    workloads_sorted = [workloads_agg[i] for i in sel]
+    ipc_matrix_sorted = [[row[i] for i in sel] for row in ipc_matrix_agg]
+    order = sel  # used below for MPKI alignment
 
     out_obj = Path(args.out)
     out_dir = out_obj.parent
     out_stem = out_obj.stem
 
-    fig_w = max(10, len(workloads) * 0.7 + 3)
+    n_shown = len(workloads_sorted)
+    fig_w = max(10, n_shown * 0.75 + 3)
     fig, ax = plt.subplots(figsize=(fig_w, 5))
     _bar_group(ax, workloads_sorted, policy_labels, ipc_matrix_sorted,
                ylabel=f"IPC speedup vs {args.baseline}",
-               title=f"IPC speedup vs {args.baseline} — {results_dir.name}",
-               baseline_val=1.0, ref_line=True)
+               title=(f"IPC speedup vs {args.baseline} — {suite_label}\n"
+                      f"({n_shown} most diverse of {n_total}; geomean over all)"),
+               baseline_val=1.0, ref_line=True, weights=weights,
+               policy_keys=present)
     ax.yaxis.set_major_formatter(mticker.FormatStrFormatter("%.2f"))
     fig.tight_layout()
     ipc_out = str(out_dir / f"{out_stem}_ipc.png")
@@ -269,7 +504,7 @@ def main():
     print(f"Saved: {ipc_out}")
 
     # ── MPKI ──────────────────────────────────────────────────────────────────
-    # Two sub-matrices: STLB MPKI and LLC MPKI
+    # Relative MPKI reduction vs LRU baseline: (base - policy) / base * 100
     def mpki(stats, key):
         instrs = stats.get("instrs")
         misses = stats.get(key)
@@ -277,29 +512,48 @@ def main():
             return misses / (instrs / 1000)
         return None
 
-    stlb_matrix = []
-    llc_matrix  = []
+    base_stlb = {wl: mpki(data[args.baseline].get(wl, {}), "stlb_miss") for wl in workloads}
+    base_llc  = {wl: mpki(data[args.baseline].get(wl, {}), "llc_miss")  for wl in workloads}
+
+    stlb_matrix_raw = []
+    llc_matrix_raw  = []
     for policy in present:
         stlb_row, llc_row = [], []
-        for wl in workloads_sorted:
+        for wl in workloads:
             s = data[policy].get(wl, {})
-            stlb_row.append(mpki(s, "stlb_miss"))
-            llc_row.append(mpki(s, "llc_miss"))
-        stlb_matrix.append(stlb_row)
-        llc_matrix.append(llc_row)
+            b_s = base_stlb[wl];  p_s = mpki(s, "stlb_miss")
+            b_l = base_llc[wl];   p_l = mpki(s, "llc_miss")
+            stlb_row.append((b_s - p_s) / b_s * 100 if (b_s and b_s > 0 and p_s is not None) else None)
+            llc_row.append( (b_l - p_l) / b_l * 100 if (b_l and b_l > 0 and p_l is not None) else None)
+        stlb_matrix_raw.append(stlb_row)
+        llc_matrix_raw.append(llc_row)
+
+    # Aggregate to benchmarks (arithmetic mean of reduction percentages)
+    _, stlb_matrix_agg = aggregate_to_benchmarks(
+        workloads, stlb_matrix_raw, weights, use_geomean=False)
+    _, llc_matrix_agg  = aggregate_to_benchmarks(
+        workloads, llc_matrix_raw, weights, use_geomean=False)
+
+    # Apply same selection and sort order as IPC
+    stlb_matrix = [[row[i] for i in order] for row in stlb_matrix_agg]
+    llc_matrix  = [[row[i] for i in order] for row in llc_matrix_agg]
 
     fig, axes = plt.subplots(2, 1, figsize=(fig_w, 9))
     _bar_group(axes[0], workloads_sorted, policy_labels, stlb_matrix,
-               ylabel="STLB MPKI",
-               title=f"STLB MPKI — {results_dir.name}",
-               ref_line=False)
-    axes[0].yaxis.set_major_formatter(mticker.FormatStrFormatter("%.2f"))
+               ylabel="STLB MPKI reduction vs LRU (%)",
+               title=(f"STLB MPKI reduction vs LRU — {suite_label}\n"
+                      f"({n_shown} most diverse of {n_total})"),
+               baseline_val=0.0, ref_line=True, weights=weights,
+               policy_keys=present, agg_fn=_arith_mean)
+    axes[0].yaxis.set_major_formatter(mticker.FormatStrFormatter("%.1f%%"))
 
     _bar_group(axes[1], workloads_sorted, policy_labels, llc_matrix,
-               ylabel="LLC MPKI",
-               title=f"LLC MPKI — {results_dir.name}",
-               ref_line=False)
-    axes[1].yaxis.set_major_formatter(mticker.FormatStrFormatter("%.2f"))
+               ylabel="LLC MPKI reduction vs LRU (%)",
+               title=(f"LLC MPKI reduction vs LRU — {suite_label}\n"
+                      f"({n_shown} most diverse of {n_total})"),
+               baseline_val=0.0, ref_line=True, weights=weights,
+               policy_keys=present, agg_fn=_arith_mean)
+    axes[1].yaxis.set_major_formatter(mticker.FormatStrFormatter("%.1f%%"))
 
     fig.tight_layout()
     mpki_out = str(out_dir / f"{out_stem}_mpki.png")

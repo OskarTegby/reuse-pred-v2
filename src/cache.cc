@@ -104,6 +104,10 @@ bool CACHE::cbpred_bypass(const PACKET& fill_mshr)
   const auto block_hash = fold_xor(fill_mshr.address >> OFFSET_BITS, BHT_BITS);
   const bool in_pfq     = std::find(pfq.begin(), pfq.end(), pfn) != pfq.end();
 
+  sim_stats.back().pfq_probes++;
+  if (in_pfq)
+    sim_stats.back().pfq_hits++;
+
   if (!in_pfq || bhist[block_hash].doa <= bconf_thd)
     return false;
 
@@ -285,6 +289,7 @@ bool CACHE::needs_mid_insertion(uint64_t full_addr, uint64_t ip) const
 //   PCONF_THD=<n>      dpPred confidence threshold (default 6)
 //   BCONF_THD=<n>      cbPred confidence threshold (default 6)
 //   MID_THD=<n>        min DoA-or-mostly-dead evictions before mid-insertion triggers (default 1)
+//   MID_PROMOTE=<0|1>  promote mid-inserted blocks to MRU on hit (default 0 = no promotion)
 //   ST_SIZE=<n>        shadow-table capacity (default 2)
 //   PFQ_CAP=<n>        shared PFQ capacity (default 8)
 void CACHE::load_predictor_settings()
@@ -304,7 +309,8 @@ void CACHE::load_predictor_settings()
   mid_thd   = getenv_uint64("MID_THD",   mid_thd);
   st_size   = getenv_uint64("ST_SIZE",   st_size);
   pfq_cap   = getenv_uint64("PFQ_CAP",   pfq_cap);
-  mid_key   = (getenv_uint64("MID_KEY", 0) == 1) ? mid_key_t::pc : mid_key_t::addr;
+  mid_key          = (getenv_uint64("MID_KEY",     0) == 1) ? mid_key_t::pc : mid_key_t::addr;
+  mid_promote_on_hit = (getenv_uint64("MID_PROMOTE", 0) == 1);
 }
 
 bool CACHE::handle_fill(const PACKET& fill_mshr)
@@ -853,6 +859,8 @@ void CACHE::end_phase(unsigned finished_cpu)
 
   roi_stats.back().llt_bypasses = sim_stats.back().llt_bypasses;
   roi_stats.back().llc_bypasses = sim_stats.back().llc_bypasses;
+  roi_stats.back().pfq_probes   = sim_stats.back().pfq_probes;
+  roi_stats.back().pfq_hits     = sim_stats.back().pfq_hits;
 
   roi_stats.back().evict_total        = sim_stats.back().evict_total;
   roi_stats.back().evict_doa          = sim_stats.back().evict_doa;

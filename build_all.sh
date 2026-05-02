@@ -5,23 +5,29 @@
 # STLB and LLC, and optionally prefetchers for L1I/L1D/L2C (--pref variants).
 #
 # Usage:
-#   ./build_all.sh                  # Build all eight binaries (default: nopref + pref)
-#   ./build_all.sh --nopref         # Build only the 4 no-prefetch variants
-#   ./build_all.sh --pref           # Build only the 4 prefetch variants (L1I=next_line_instr, L1D=ip_stride, L2C=spp_dev)
-#   ./build_all.sh --paper-pref     # Build only the 4 paper-prefetch variants (L1I=epi_instr, L1D=berti, L2C=next_line)
-#   ./build_all.sh lru lru_mid      # Build specific policies (both pref and no-pref variants)
+#   ./build_all.sh                        # Build all eight binaries (default: nopref + pref)
+#   ./build_all.sh --nopref               # Build only the 4 no-prefetch variants
+#   ./build_all.sh --pref                 # Build only the 4 prefetch variants (L1I=next_line_instr, L1D=ip_stride, L2C=spp_dev)
+#   ./build_all.sh --paper-pref           # Build only the 4 paper-prefetch variants (L1I=epi_instr, L1D=berti, L2C=next_line)
+#   ./build_all.sh lru lru_mid            # Build specific policies (both pref and no-pref variants)
+#   ./build_all.sh --nopref stlb_lru_mid   # Build STLB-only mid-insertion binary (lru_mid STLB, LRU LLC)
+#   ./build_all.sh --nopref lru_mid_both   # Build LLC+STLB mid-insertion binary (lru_mid in both caches)
 #
 # Outputs (in ./bin/):
 #   No-prefetch:
-#     champsim_lru      — vanilla LRU for STLB and LLC
-#     champsim_lru_mid  — mid-insertion LRU for STLB and LLC
-#     champsim_srrip    — SRRIP for STLB and LLC
-#     champsim_drrip    — DRRIP for STLB and LLC
+#     champsim_lru           — LRU for STLB and LLC
+#     champsim_lru_mid       — LRU for STLB, mid-insertion LRU for LLC
+#     champsim_srrip         — LRU for STLB, SRRIP for LLC
+#     champsim_drrip         — LRU for STLB, DRRIP for LLC
+#   STLB-only (built with --nopref stlb_lru_mid):
+#     champsim_stlb_lru_mid  — mid-insertion LRU for STLB, LRU for LLC
+#   LLC+STLB (built with --nopref lru_mid_both):
+#     champsim_lru_mid_both  — mid-insertion LRU for both STLB and LLC
 #   With-prefetch (L1I=next_line_instr, L1D=ip_stride, L2C=spp_dev):
-#     champsim_lru_pref      — LRU + next_line_instr/ip_stride/spp_dev
-#     champsim_lru_mid_pref  — lru_mid + next_line_instr/ip_stride/spp_dev
-#     champsim_srrip_pref    — SRRIP + next_line_instr/ip_stride/spp_dev
-#     champsim_drrip_pref    — DRRIP + next_line_instr/ip_stride/spp_dev
+#     champsim_lru_pref      — LRU (STLB+LLC) + next_line_instr/ip_stride/spp_dev
+#     champsim_lru_mid_pref  — LRU STLB, lru_mid LLC + next_line_instr/ip_stride/spp_dev
+#     champsim_srrip_pref    — LRU STLB, SRRIP LLC + next_line_instr/ip_stride/spp_dev
+#     champsim_drrip_pref    — LRU STLB, DRRIP LLC + next_line_instr/ip_stride/spp_dev
 #   With-paper-prefetch (L1I=epi_instr, L1D=berti, L2C=next_line — matches PACIPV ISCA'25):
 #     champsim_lru_paper_pref      — LRU + epi_instr/berti/next_line
 #     champsim_lru_mid_paper_pref  — lru_mid + epi_instr/berti/next_line
