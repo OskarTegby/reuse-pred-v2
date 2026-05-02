@@ -86,16 +86,23 @@ void champsim::plain_printer::print(CACHE::stats_type stats)
 
     stream << stats.name << " AVERAGE MISS LATENCY: " << std::ceil(stats.total_miss_latency) / std::ceil(TOTAL_MISS) << " cycles" << std::endl;
 
-    if (stats.name == "cpu0_STLB")
+    if (stats.name == "cpu0_STLB") {
       stream << stats.name << " BYPASSES: " << std::setw(10) << stats.llt_bypasses << std::endl;
+      if (stats.phist_lookups > 0)
+        stream << stats.name << " PHIST LOOKUPS: " << std::setw(10) << stats.phist_lookups
+               << "  HITS: " << std::setw(10) << stats.phist_hits << std::endl;
+      if (stats.st_lookups > 0)
+        stream << stats.name << " SHADOW TABLE LOOKUPS: " << std::setw(10) << stats.st_lookups
+               << "  HITS: " << std::setw(10) << stats.st_hits << std::endl;
+    }
     if (stats.name == "LLC") {
       stream << stats.name << " BYPASSES: " << std::setw(10) << stats.llc_bypasses << std::endl;
-      if (stats.pfq_probes > 0) {
+      if (stats.pfq_probes > 0)
         stream << stats.name << " PFQ PROBES: " << std::setw(10) << stats.pfq_probes
-               << "  HITS: " << std::setw(10) << stats.pfq_hits
-               << "  HIT RATE: " << std::fixed << std::setprecision(2)
-               << 100.0 * stats.pfq_hits / stats.pfq_probes << "%" << std::endl;
-      }
+               << "  HITS: " << std::setw(10) << stats.pfq_hits << std::endl;
+      if (stats.bhist_lookups > 0)
+        stream << stats.name << " BHIST LOOKUPS: " << std::setw(10) << stats.bhist_lookups
+               << "  HITS: " << std::setw(10) << stats.bhist_hits << std::endl;
     }
 
     if (stats.name == "cpu0_STLB" || stats.name == "LLC") {

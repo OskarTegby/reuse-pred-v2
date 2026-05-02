@@ -60,6 +60,10 @@ struct cache_stats {
   uint64_t pfq_probes   = 0;   // LLC fills checked against PFQ (CBPRED=1 only)
   uint64_t pfq_hits     = 0;   // subset of pfq_probes whose page was in PFQ
 
+  uint64_t phist_lookups = 0, phist_hits = 0;  // dpPred prediction queries (DPPRED=1 only)
+  uint64_t bhist_lookups = 0, bhist_hits = 0;  // cbPred prediction queries (CBPRED=1 only)
+  uint64_t st_lookups    = 0, st_hits    = 0;  // shadow-table lookups (DPPRED=1 only)
+
   // ── Block/page liveness stats (LLC and STLB only) ─────────────────────────
   // Recorded at every valid eviction during the ROI.
   //   DoA        – hit_count == 0 (never referenced after insertion)

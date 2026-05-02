@@ -49,9 +49,11 @@ uint64_t CACHE::fold_xor(uint64_t val, unsigned bits) const
 bool CACHE::dppred_shadow_lookup(const PACKET& handle_pkt)
 {
   const auto vpn = handle_pkt.address >> OFFSET_BITS;
+  sim_stats.back().st_lookups++;
   auto it = std::find_if(shadow_table.begin(), shadow_table.end(), [vpn](const auto& e) { return e.first == vpn; });
   if (it == shadow_table.end())
     return false;
+  sim_stats.back().st_hits++;
 
   phist[fold_xor(vpn, VPN_BITS)].clear();
   const auto stored_data = it->second;
@@ -79,6 +81,12 @@ bool CACHE::dppred_bypass(const PACKET& fill_mshr)
 {
   const auto vpn_hash = fold_xor(fill_mshr.address >> OFFSET_BITS, VPN_BITS);
   const auto pc_hash  = fold_xor(fill_mshr.ip,                     PC_BITS);
+  sim_stats.back().phist_lookups++;
+  {
+    const auto outer = phist.find(vpn_hash);
+    if (outer != phist.end() && outer->second.count(pc_hash))
+      sim_stats.back().phist_hits++;
+  }
   if (phist[vpn_hash][pc_hash].doa <= pconf_thd)
     return false;
 
@@ -107,6 +115,12 @@ bool CACHE::cbpred_bypass(const PACKET& fill_mshr)
   sim_stats.back().pfq_probes++;
   if (in_pfq)
     sim_stats.back().pfq_hits++;
+
+  if (in_pfq) {
+    sim_stats.back().bhist_lookups++;
+    if (bhist.count(block_hash))
+      sim_stats.back().bhist_hits++;
+  }
 
   if (!in_pfq || bhist[block_hash].doa <= bconf_thd)
     return false;
@@ -861,6 +875,13 @@ void CACHE::end_phase(unsigned finished_cpu)
   roi_stats.back().llc_bypasses = sim_stats.back().llc_bypasses;
   roi_stats.back().pfq_probes   = sim_stats.back().pfq_probes;
   roi_stats.back().pfq_hits     = sim_stats.back().pfq_hits;
+
+  roi_stats.back().phist_lookups = sim_stats.back().phist_lookups;
+  roi_stats.back().phist_hits    = sim_stats.back().phist_hits;
+  roi_stats.back().bhist_lookups = sim_stats.back().bhist_lookups;
+  roi_stats.back().bhist_hits    = sim_stats.back().bhist_hits;
+  roi_stats.back().st_lookups    = sim_stats.back().st_lookups;
+  roi_stats.back().st_hits       = sim_stats.back().st_hits;
 
   roi_stats.back().evict_total        = sim_stats.back().evict_total;
   roi_stats.back().evict_doa          = sim_stats.back().evict_doa;
