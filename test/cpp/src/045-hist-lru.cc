@@ -7,6 +7,7 @@
 namespace {
   struct entry_t {
     uint64_t last_access = 0;
+    uint64_t freq        = 0;
     uint64_t full_addr   = 0;
   };
 }
@@ -244,4 +245,36 @@ TEST_CASE("set-associative: full_addr round-trips through set and tag") {
     e.full_addr = addr;
     REQUIRE(addr_reconstruct(addr_set(addr, sets), addr_tag(addr, sets), sets) == e.full_addr);
   }
+}
+
+// lfu_access counter mechanics
+
+TEST_CASE("lfu_access inserts a new entry with freq=1") {
+  std::map<uint64_t, entry_t> m;
+
+  auto& e = lfu_access(m, uint64_t{1});
+
+  REQUIRE(m.size() == 1);
+  REQUIRE(e.freq == 1);
+}
+
+TEST_CASE("lfu_access increments freq on each re-access") {
+  std::map<uint64_t, entry_t> m;
+
+  lfu_access(m, uint64_t{1});
+  lfu_access(m, uint64_t{1});
+  auto& e = lfu_access(m, uint64_t{1});
+
+  REQUIRE(e.freq == 3);
+}
+
+TEST_CASE("lfu_access resets freq to 1 when a key is re-inserted after erasure") {
+  std::map<uint64_t, entry_t> m;
+
+  lfu_access(m, uint64_t{1});
+  lfu_access(m, uint64_t{1});  // freq=2
+  m.erase(1);
+
+  auto& e = lfu_access(m, uint64_t{1});  // fresh insertion
+  REQUIRE(e.freq == 1);
 }

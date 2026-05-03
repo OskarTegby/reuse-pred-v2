@@ -57,4 +57,14 @@ typename Map::mapped_type& lru_access(Map& map, const Key& key, std::size_t capa
   return e;
 }
 
+// Accesses or inserts key in map.  Increments the accessed entry's freq
+// counter and returns a reference.  Eviction is handled separately.
+template <typename Map, typename Key>
+typename Map::mapped_type& lfu_access(Map& map, const Key& key)
+{
+  auto& e = map[key];
+  ++e.freq;
+  return e;
+}
+
 #endif
