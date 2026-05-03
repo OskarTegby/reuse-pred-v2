@@ -1,17 +1,21 @@
 #!/usr/bin/env bash
-# sweep_hist_size.sh — history-table size and associativity study.
+# sweep_hist_size.sh — independent pHIST × bHIST size scaling study.
 #
-# Sweeps the joint capacity of phist and bhist (both set to the same N = sets×ways)
-# from 64 to 16384 entries (2^6 to 2^14), at every power-of-2 associativity from
-# direct-mapped (ways=1) to fully associative (sets=1).  Runs both LRU and LFU
-# replacement policies.  All configs use full-key mode (PHIST_HASH=0, BHIST_HASH=0).
+# Sweeps all combinations of pHIST and bHIST capacity where each ranges
+# over powers of 2 from 64 to 16384 entries (9 values each → 81 pairs).
+# All tables are run fully associative (sets=1) so only capacity effects
+# are measured; associativity effects are studied separately in sweep_assoc.sh.
+# Runs both LRU and LFU replacement policies.
 #
-# References submitted alongside the sweep:
+# Config naming: {pol}_p{phist_N}_b{bhist_N}
+#   e.g. lru_p256_b1024, lfu_p4096_b512
+#
+# References:
 #   baseline  — no predictor, hashed tables (IPC floor)
-#   hash_pred — predictor on, hashed tables (comparison baseline for full-key mode)
-#   inf       — full-key, fully associative, 2^20 ways (no evictions; policy irrelevant)
+#   hash_pred — predictor on, hashed tables (comparison baseline)
+#   inf       — both tables FA with 2^20 ways (no evictions; policy irrelevant)
 #
-# Total configs: 3 references + 2 × Σ(k+1, k=6..14) = 3 + 2×99 = 201
+# Total configs: 3 refs + 9×9 pairs × 2 pols = 3 + 162 = 165
 #
 # Usage: ./sweep_hist_size.sh {qmm|dpc3|google|test} [--debug] [--warmup N] [--sim N]
 
@@ -88,28 +92,28 @@ LOG_DIR="${PROJECT_ROOT}/logs/${BASE_LABEL}"
 mkdir -p "$LOG_DIR"
 
 # Config format: exp_name binary dppred cbpred pconf_thd bconf_thd phist_hash bhist_hash phist_sets phist_ways bhist_sets bhist_ways repl_pol
-# PFQ_CAP and ST_SIZE are kept at their defaults (8 and 2) throughout this study.
+# PFQ_CAP and ST_SIZE kept at defaults (8 and 2) throughout this study.
 configs=()
 
 # References
-configs+=("baseline  champsim_lru     0 0 6 6 1 1 1  64      1  64      lru")
-configs+=("hash_pred champsim_lru_mid 1 1 6 6 1 1 1  64      1  64      lru")
-configs+=("inf       champsim_lru_mid 1 1 6 6 0 0 1  1048576 1  1048576 lru")
+configs+=("baseline  champsim_lru     0 0 6 6 1 1 1 64      1 64      lru")
+configs+=("hash_pred champsim_lru_mid 1 1 6 6 1 1 1 64      1 64      lru")
+configs+=("inf       champsim_lru_mid 1 1 6 6 0 0 1 1048576 1 1048576 lru")
 
-# Sweep: N = 2^log_n, ways = 2^log_ways, sets = N/ways
-for log_n in 6 7 8 9 10 11 12 13 14; do
-  N=$((1 << log_n))
-  for log_ways in $(seq 0 "$log_n"); do
-    ways=$((1 << log_ways))
-    sets=$((N / ways))
+# 2D sweep: all (phist_N, bhist_N) combinations, fully associative (sets=1)
+sizes=(64 128 256 512 1024 2048 4096 8192 16384)
+for phist_n in "${sizes[@]}"; do
+  for bhist_n in "${sizes[@]}"; do
     for pol in lru lfu; do
-      name="${pol}_N${N}_s${sets}_w${ways}"
-      configs+=("${name} champsim_lru_mid 1 1 6 6 0 0 ${sets} ${ways} ${sets} ${ways} ${pol}")
+      name="${pol}_p${phist_n}_b${bhist_n}"
+      configs+=("${name} champsim_lru_mid 1 1 6 6 0 0 1 ${phist_n} 1 ${bhist_n} ${pol}")
     done
   done
 done
 
 echo "Submitting ${#configs[@]} configurations × ${N_TRACES} traces (tasks ${TASK_RANGE})"
+echo "pHIST sizes  : ${sizes[*]}"
+echo "bHIST sizes  : ${sizes[*]}"
 echo "Warmup / Sim : ${WARMUP} / ${SIM}"
 echo "Results base : results/${BASE_LABEL}/"
 echo "Logs         : logs/${BASE_LABEL}/"
