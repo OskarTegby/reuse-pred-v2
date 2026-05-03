@@ -7,6 +7,7 @@
 namespace {
   struct entry_t {
     uint64_t last_access = 0;
+    uint64_t freq        = 0;
     uint64_t full_addr   = 0;
   };
 }
@@ -244,4 +245,132 @@ TEST_CASE("set-associative: full_addr round-trips through set and tag") {
     e.full_addr = addr;
     REQUIRE(addr_reconstruct(addr_set(addr, sets), addr_tag(addr, sets), sets) == e.full_addr);
   }
+}
+
+// lfu_access counter mechanics
+
+TEST_CASE("lfu_access inserts a new entry with freq=1") {
+  std::map<uint64_t, entry_t> m;
+  uint64_t clock = 0;
+
+  auto& e = lfu_access(m, uint64_t{1}, std::size_t{4}, clock);
+
+  REQUIRE(m.size() == 1);
+  REQUIRE(e.freq == 1);
+}
+
+TEST_CASE("lfu_access increments freq on each re-access") {
+  std::map<uint64_t, entry_t> m;
+  uint64_t clock = 0;
+
+  lfu_access(m, uint64_t{1}, std::size_t{4}, clock);
+  lfu_access(m, uint64_t{1}, std::size_t{4}, clock);
+  auto& e = lfu_access(m, uint64_t{1}, std::size_t{4}, clock);
+
+  REQUIRE(e.freq == 3);
+}
+
+TEST_CASE("lfu_access resets freq to 1 when a key is re-inserted after erasure") {
+  std::map<uint64_t, entry_t> m;
+  uint64_t clock = 0;
+
+  lfu_access(m, uint64_t{1}, std::size_t{4}, clock);
+  lfu_access(m, uint64_t{1}, std::size_t{4}, clock);  // freq=2
+  m.erase(1);
+
+  auto& e = lfu_access(m, uint64_t{1}, std::size_t{4}, clock);  // fresh insertion
+  REQUIRE(e.freq == 1);
+}
+
+// evict_lfu / lfu_access eviction
+
+TEST_CASE("evict_lfu removes the entry with the smallest freq") {
+  std::map<uint64_t, entry_t> m;
+  m[1].freq = 10;
+  m[2].freq = 30;
+  m[3].freq = 20;
+
+  evict_lfu(m);
+
+  REQUIRE(m.size() == 2);
+  REQUIRE(m.count(1) == 0);
+  REQUIRE(m.count(2) == 1);
+  REQUIRE(m.count(3) == 1);
+}
+
+TEST_CASE("evict_lfu on a single-entry map leaves it empty") {
+  std::map<uint64_t, entry_t> m;
+  m[42].freq = 5;
+
+  evict_lfu(m);
+
+  REQUIRE(m.empty());
+}
+
+TEST_CASE("evict_lfu tie-breaks consistently on equal freq") {
+  std::map<uint64_t, entry_t> m;
+  m[10].freq = 5;
+  m[20].freq = 5;
+  m[30].freq = 5;
+
+  evict_lfu(m);
+
+  // std::min_element picks the first minimum — map iteration is by key,
+  // so key 10 (smallest) is evicted.
+  REQUIRE(m.size() == 2);
+  REQUIRE(m.count(10) == 0);
+}
+
+TEST_CASE("lfu_access does not evict when below capacity") {
+  std::map<uint64_t, entry_t> m;
+  uint64_t clock = 0;
+
+  lfu_access(m, uint64_t{1}, std::size_t{2}, clock);
+  lfu_access(m, uint64_t{2}, std::size_t{2}, clock);
+
+  REQUIRE(m.size() == 2);
+}
+
+TEST_CASE("lfu_access evicts the LFU entry when at capacity") {
+  std::map<uint64_t, entry_t> m;
+  uint64_t clock = 0;
+
+  lfu_access(m, uint64_t{1}, std::size_t{2}, clock);
+  lfu_access(m, uint64_t{2}, std::size_t{2}, clock);
+  lfu_access(m, uint64_t{2}, std::size_t{2}, clock);  // key 2 freq=2, key 1 is LFU
+  lfu_access(m, uint64_t{3}, std::size_t{2}, clock);  // key 1 (freq=1) evicted
+
+  REQUIRE(m.size() == 2);
+  REQUIRE(m.count(1) == 0);
+  REQUIRE(m.count(2) == 1);
+  REQUIRE(m.count(3) == 1);
+}
+
+TEST_CASE("lfu_access re-access promotes entry above a cold one") {
+  std::map<uint64_t, entry_t> m;
+  uint64_t clock = 0;
+
+  lfu_access(m, uint64_t{1}, std::size_t{2}, clock);
+  lfu_access(m, uint64_t{2}, std::size_t{2}, clock);
+  lfu_access(m, uint64_t{1}, std::size_t{2}, clock);  // key 1 freq=2, key 2 is LFU
+  lfu_access(m, uint64_t{3}, std::size_t{2}, clock);  // key 2 (freq=1) evicted
+
+  REQUIRE(m.size() == 2);
+  REQUIRE(m.count(1) == 1);
+  REQUIRE(m.count(2) == 0);
+  REQUIRE(m.count(3) == 1);
+}
+
+TEST_CASE("lfu_access evicts LRU entry when freq is tied") {
+  std::map<uint64_t, entry_t> m;
+  uint64_t clock = 0;
+
+  lfu_access(m, uint64_t{1}, std::size_t{2}, clock);  // key 1: freq=1, last_access=1
+  lfu_access(m, uint64_t{2}, std::size_t{2}, clock);  // key 2: freq=1, last_access=2
+  lfu_access(m, uint64_t{3}, std::size_t{2}, clock);  // freq tied: key 1 is LRU, evicted
+
+  REQUIRE(m.size() == 2);
+  REQUIRE(m.count(1) == 0);
+  REQUIRE(m.count(2) == 1);
+  REQUIRE(m.count(3) == 1);
 }

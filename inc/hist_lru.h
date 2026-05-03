@@ -57,4 +57,34 @@ typename Map::mapped_type& lru_access(Map& map, const Key& key, std::size_t capa
   return e;
 }
 
+// Evicts the entry with the smallest freq counter from map, using last_access
+// as a tie-breaker (LRU among equally frequent entries).
+// Map must be a std::map<Key, Value> where Value has uint64_t freq and last_access fields.
+// Assumes map is non-empty.
+template <typename Map>
+void evict_lfu(Map& map)
+{
+  assert(!map.empty());
+  auto lfu = std::min_element(map.begin(), map.end(),
+    [](const auto& a, const auto& b) {
+      if (a.second.freq != b.second.freq) return a.second.freq < b.second.freq;
+      return a.second.last_access < b.second.last_access;
+    });
+  map.erase(lfu);
+}
+
+// Accesses or inserts key in map, evicting the LFU entry first if the map is
+// at capacity.  Increments the accessed entry's freq, stamps last_access with
+// ++clock (for LRU tie-breaking in evict_lfu), and returns a reference.
+template <typename Map, typename Key>
+typename Map::mapped_type& lfu_access(Map& map, const Key& key, std::size_t capacity, uint64_t& clock)
+{
+  if (!map.count(key) && map.size() >= capacity)
+    evict_lfu(map);
+  auto& e = map[key];
+  ++e.freq;
+  e.last_access = ++clock;
+  return e;
+}
+
 #endif

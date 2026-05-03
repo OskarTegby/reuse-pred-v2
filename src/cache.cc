@@ -20,6 +20,7 @@
 #include <algorithm>
 #include <cassert>
 #include <climits>
+#include <cstring>
 #include <cstdlib>
 #include <iomanip>
 #include <iterator>
@@ -61,7 +62,10 @@ CACHE::hist_entry& CACHE::get_phist_entry(uint64_t pc, uint64_t vpn)
   const uint64_t set = addr_set(pc, phist_sets);
   const uint64_t tag = addr_tag(pc, phist_sets);
   assert(addr_reconstruct(set, tag, phist_sets) == pc);
-  auto& e = lru_access(phist_full[set], phist_key_t{tag, vpn}, phist_ways, lru_clock);
+  const phist_key_t key{tag, vpn};
+  hist_entry& e = (repl_pol == repl_pol_t::lfu)
+    ? lfu_access(phist_full[set], key, phist_ways, lru_clock)
+    : lru_access(phist_full[set], key, phist_ways, lru_clock);
   e.full_addr = pc;
   return e;
 }
@@ -93,7 +97,9 @@ CACHE::hist_entry& CACHE::get_bhist_entry(uint64_t block_addr)
   const uint64_t set = addr_set(block_addr, bhist_sets);
   const uint64_t tag = addr_tag(block_addr, bhist_sets);
   assert(addr_reconstruct(set, tag, bhist_sets) == block_addr);
-  auto& e = lru_access(bhist_full[set], tag, bhist_ways, lru_clock);
+  hist_entry& e = (repl_pol == repl_pol_t::lfu)
+    ? lfu_access(bhist_full[set], tag, bhist_ways, lru_clock)
+    : lru_access(bhist_full[set], tag, bhist_ways, lru_clock);
   e.full_addr = block_addr;
   return e;
 }
@@ -360,6 +366,7 @@ bool CACHE::needs_mid_insertion(uint64_t full_addr, uint64_t ip) const
 //   PHIST_WAYS=<n>     ways per set in phist_full; total = sets × ways (default 64, full-key mode only)
 //   BHIST_SETS=<n>     number of sets in bhist_full (default 1 = fully associative, full-key mode only)
 //   BHIST_WAYS=<n>     ways per set in bhist_full; total = sets × ways (default 64, full-key mode only)
+//   REPL_POL=<pol>     replacement policy for full-key tables: "lru" (default) | "lfu"
 void CACHE::load_predictor_settings()
 {
   auto getenv_uint64 = [](const char* var, uint64_t fallback) -> uint64_t {
@@ -386,6 +393,8 @@ void CACHE::load_predictor_settings()
   phist_ways = getenv_uint64("PHIST_WAYS", phist_ways);
   bhist_sets = getenv_uint64("BHIST_SETS", bhist_sets);
   bhist_ways = getenv_uint64("BHIST_WAYS", bhist_ways);
+  if (const char* pol = std::getenv("REPL_POL"))
+    repl_pol = (std::strcmp(pol, "lfu") == 0) ? repl_pol_t::lfu : repl_pol_t::lru;
 }
 
 bool CACHE::handle_fill(const PACKET& fill_mshr)
