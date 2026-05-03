@@ -1,33 +1,31 @@
 #!/usr/bin/env bash
-# sweep_assoc.sh — associativity isolation study at a fixed table capacity.
+# sweep_assoc.sh — associativity isolation study at the target table capacities.
 #
-# Fixes both history tables at N entries total (default N=256) and sweeps the
-# set/way split independently for pHIST and bHIST:
+# Fixes pHIST at PHIST_SIZE entries (default 1024) and bHIST at BHIST_SIZE entries
+# (default 4096), then sweeps the set/way split independently for each table:
 #
-#   phist sweep: ways ∈ {1, 2, 4, …, N}, sets = N/ways; BHIST fixed at FA (sets=1, ways=N)
-#   bhist sweep: ways ∈ {1, 2, 4, …, N}, sets = N/ways; PHIST fixed at FA (sets=1, ways=N)
+#   phist sweep: ways ∈ {1,2,4,…,PHIST_SIZE}, sets=PHIST_SIZE/ways
+#                BHIST held at FA (sets=1, ways=BHIST_SIZE)
+#   bhist sweep: ways ∈ {1,2,4,…,BHIST_SIZE}, sets=BHIST_SIZE/ways
+#                PHIST held at FA (sets=1, ways=PHIST_SIZE)
 #
-# There are log2(N)+1 associativity levels per table per policy, ranging from
-# direct-mapped (ways=1, sets=N) to fully associative (ways=N, sets=1).
+# Associativity levels:
+#   pHIST (default 1024): log2(1024)+1 = 11  (1-way DM … 1024-way FA)
+#   bHIST (default 4096): log2(4096)+1 = 13  (1-way DM … 4096-way FA)
 #
-# Runs both LRU and LFU.  At FA (sets=1) there are no conflict misses, only
-# capacity evictions; the policy still matters and fa_lru vs fa_lfu are distinct.
-# Results answer: does conflict-miss rate fall as associativity increases, and
-# does IPC converge toward the FA ceiling?
+# Runs both LRU and LFU.  At FA (sets=1) only capacity evictions occur;
+# the replacement policy still distinguishes fa_lru from fa_lfu.
 #
 # References:
 #   baseline  — no predictor, hashed tables (IPC floor)
 #   hash_pred — predictor on, hashed tables (comparison baseline)
-#   fa_lru    — both tables fully associative at N, LRU  (upper bound for this N)
-#   fa_lfu    — both tables fully associative at N, LFU
+#   fa_lru    — both tables fully associative at their target sizes, LRU
+#   fa_lfu    — same with LFU
 #
-# Total configs: 4 refs + 2 tables × (log2(N)+1) × 2 pols
-#   N=256  → 4 + 2×9×2  = 40
-#   N=1024 → 4 + 2×11×2 = 48
-#   N=4096 → 4 + 2×13×2 = 56
+# Total configs (defaults): 4 refs + 11×2 (phist) + 13×2 (bhist) = 52
 #
-# Usage: ./sweep_assoc.sh {qmm|dpc3|google|test} [--size N] [--debug] [--warmup N] [--sim N]
-#   --size N  total entries per table (must be a power of 2; default 256)
+# Usage: ./sweep_assoc.sh {qmm|dpc3|google|test} [--phist-size N] [--bhist-size N]
+#                         [--debug] [--warmup N] [--sim N]
 
 set -euo pipefail
 
@@ -38,30 +36,31 @@ token=""
 DEBUG=0
 WARMUP_OVERRIDE=""
 SIM_OVERRIDE=""
-TABLE_SIZE=256
+PHIST_SIZE=1024
+BHIST_SIZE=4096
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
     qmm|dpc3|google|test) token="${1,,}"; shift ;;
-    --debug)   DEBUG=1; shift ;;
-    --size)    TABLE_SIZE="$2"; shift 2 ;;
-    --warmup)  WARMUP_OVERRIDE="$2"; shift 2 ;;
-    --sim)     SIM_OVERRIDE="$2"; shift 2 ;;
+    --debug)        DEBUG=1; shift ;;
+    --phist-size)   PHIST_SIZE="$2"; shift 2 ;;
+    --bhist-size)   BHIST_SIZE="$2"; shift 2 ;;
+    --warmup)       WARMUP_OVERRIDE="$2"; shift 2 ;;
+    --sim)          SIM_OVERRIDE="$2"; shift 2 ;;
     *) echo "Unknown argument: $1" >&2
-       echo "Usage: $0 {qmm|dpc3|google|test} [--size N] [--debug] [--warmup N] [--sim N]" >&2
+       echo "Usage: $0 {qmm|dpc3|google|test} [--phist-size N] [--bhist-size N] [--debug] [--warmup N] [--sim N]" >&2
        exit 2 ;;
   esac
 done
 
 if [ -z "$token" ]; then
-  echo "Usage: $0 {qmm|dpc3|google|test} [--size N] [--debug] [--warmup N] [--sim N]" >&2
+  echo "Usage: $0 {qmm|dpc3|google|test} [--phist-size N] [--bhist-size N] [--debug] [--warmup N] [--sim N]" >&2
   exit 2
 fi
 
-# Validate TABLE_SIZE is a power of two
-if (( TABLE_SIZE <= 0 )) || (( TABLE_SIZE & (TABLE_SIZE - 1) )); then
-  echo "ERROR: --size must be a power of 2 (got ${TABLE_SIZE})" >&2; exit 2
-fi
+is_power_of_two() { (( $1 > 0 )) && (( ($1 & ($1 - 1)) == 0 )); }
+is_power_of_two "$PHIST_SIZE" || { echo "ERROR: --phist-size must be a power of 2 (got ${PHIST_SIZE})" >&2; exit 2; }
+is_power_of_two "$BHIST_SIZE" || { echo "ERROR: --bhist-size must be a power of 2 (got ${BHIST_SIZE})" >&2; exit 2; }
 
 SHARED_TRACES=/home/users/shared/traces
 
@@ -104,7 +103,7 @@ else
 fi
 
 DATE=$(date +%Y%m%d_%H%M)
-BASE_LABEL="${token}_assoc_N${TABLE_SIZE}_${DATE}${MODE_TAG}"
+BASE_LABEL="${token}_assoc_p${PHIST_SIZE}_b${BHIST_SIZE}_${DATE}${MODE_TAG}"
 LOG_DIR="${PROJECT_ROOT}/logs/${BASE_LABEL}"
 mkdir -p "$LOG_DIR"
 
@@ -112,35 +111,40 @@ mkdir -p "$LOG_DIR"
 configs=()
 
 # References
-configs+=("baseline  champsim_lru     0 0 6 6 1 1 1 ${TABLE_SIZE} 1 ${TABLE_SIZE} lru")
-configs+=("hash_pred champsim_lru_mid 1 1 6 6 1 1 1 ${TABLE_SIZE} 1 ${TABLE_SIZE} lru")
-configs+=("fa_lru    champsim_lru_mid 1 1 6 6 0 0 1 ${TABLE_SIZE} 1 ${TABLE_SIZE} lru")
-configs+=("fa_lfu    champsim_lru_mid 1 1 6 6 0 0 1 ${TABLE_SIZE} 1 ${TABLE_SIZE} lfu")
+configs+=("baseline  champsim_lru     0 0 6 6 1 1 1 ${PHIST_SIZE} 1 ${BHIST_SIZE} lru")
+configs+=("hash_pred champsim_lru_mid 1 1 6 6 1 1 1 ${PHIST_SIZE} 1 ${BHIST_SIZE} lru")
+configs+=("fa_lru    champsim_lru_mid 1 1 6 6 0 0 1 ${PHIST_SIZE} 1 ${BHIST_SIZE} lru")
+configs+=("fa_lfu    champsim_lru_mid 1 1 6 6 0 0 1 ${PHIST_SIZE} 1 ${BHIST_SIZE} lfu")
 
-# pHIST associativity sweep: vary PHIST_SETS, hold BHIST at FA
-sets=$TABLE_SIZE
+# pHIST associativity sweep: vary PHIST sets/ways, hold BHIST at FA
+sets=$PHIST_SIZE
 while (( sets >= 1 )); do
-  ways=$(( TABLE_SIZE / sets ))
+  ways=$(( PHIST_SIZE / sets ))
   for pol in lru lfu; do
     name="phist_s${sets}_w${ways}_${pol}"
-    configs+=("${name} champsim_lru_mid 1 1 6 6 0 0 ${sets} ${ways} 1 ${TABLE_SIZE} ${pol}")
-  done
-  (( sets /= 2 )) || true   # /= 2; stops after sets=1
-done
-
-# bHIST associativity sweep: vary BHIST_SETS, hold PHIST at FA
-sets=$TABLE_SIZE
-while (( sets >= 1 )); do
-  ways=$(( TABLE_SIZE / sets ))
-  for pol in lru lfu; do
-    name="bhist_s${sets}_w${ways}_${pol}"
-    configs+=("${name} champsim_lru_mid 1 1 6 6 0 0 1 ${TABLE_SIZE} ${sets} ${ways} ${pol}")
+    configs+=("${name} champsim_lru_mid 1 1 6 6 0 0 ${sets} ${ways} 1 ${BHIST_SIZE} ${pol}")
   done
   (( sets /= 2 )) || true
 done
 
+# bHIST associativity sweep: vary BHIST sets/ways, hold PHIST at FA
+sets=$BHIST_SIZE
+while (( sets >= 1 )); do
+  ways=$(( BHIST_SIZE / sets ))
+  for pol in lru lfu; do
+    name="bhist_s${sets}_w${ways}_${pol}"
+    configs+=("${name} champsim_lru_mid 1 1 6 6 0 0 1 ${PHIST_SIZE} ${sets} ${ways} ${pol}")
+  done
+  (( sets /= 2 )) || true
+done
+
+log2() { local n=$1 r=0; while (( n > 1 )); do (( n /= 2, r++ )); done; echo $r; }
+PHIST_LEVELS=$(( $(log2 "$PHIST_SIZE") + 1 ))
+BHIST_LEVELS=$(( $(log2 "$BHIST_SIZE") + 1 ))
+
 echo "Submitting ${#configs[@]} configurations × ${N_TRACES} traces (tasks ${TASK_RANGE})"
-echo "Table size   : N=${TABLE_SIZE} ($(( TABLE_SIZE / 1 )) entries per table)"
+echo "pHIST size   : ${PHIST_SIZE} entries  (${PHIST_LEVELS} assoc levels)"
+echo "bHIST size   : ${BHIST_SIZE} entries  (${BHIST_LEVELS} assoc levels)"
 echo "Warmup / Sim : ${WARMUP} / ${SIM}"
 echo "Results base : results/${BASE_LABEL}/"
 echo "Logs         : logs/${BASE_LABEL}/"
