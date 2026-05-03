@@ -172,6 +172,7 @@ class CACHE : public champsim::operable, public MemoryRequestConsumer, public Me
   struct hist_entry {
     uint64_t doa         = 0;
     uint64_t mostly_dead = 0;
+    uint64_t last_access = 0;  // recency timestamp for LRU eviction (full-key mode only)
   };
 
   struct phist_key_t {
@@ -192,7 +193,10 @@ class CACHE : public champsim::operable, public MemoryRequestConsumer, public Me
   uint64_t bconf_thd = 6; // bhist confidence threshold
   uint64_t mid_thd        = 1;     // min DoA-or-mostly-dead evictions before mid-insertion triggers
   bool     mid_promote_on_hit = false; // promote mid-inserted blocks to MRU on hit (MID_PROMOTE=1)
-  uint64_t st_size = 2;   // shadow table capacity
+  uint64_t st_size    = 2;    // shadow table capacity
+  uint64_t phist_ways = 64;   // max entries per PC set in phist_full (full-key mode)
+  uint64_t bhist_ways = 64;   // max entries in bhist_full (full-key mode)
+  uint64_t lru_clock  = 0;    // monotonic counter for LRU timestamps
 
   // Set by cpu0_STLB at initialize(); used by LLC to scan for DoA page correlations.
   inline static const CACHE* stlb_ptr = nullptr;

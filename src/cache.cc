@@ -15,6 +15,7 @@
  */
 
 #include "cache.h"
+#include "hist_lru.h"
 
 #include <algorithm>
 #include <cassert>
@@ -57,7 +58,7 @@ CACHE::hist_entry& CACHE::get_phist_entry(uint64_t pc, uint64_t vpn)
 {
   if (phist_hash)
     return phist[fold_xor(vpn, VPN_BITS)][fold_xor(pc, PC_BITS)];
-  return phist_full[pc][phist_key_t{pc, vpn}];
+  return lru_access(phist_full[pc], phist_key_t{pc, vpn}, phist_ways, lru_clock);
 }
 
 void CACHE::phist_clear_vpn(uint64_t vpn)
@@ -83,7 +84,7 @@ CACHE::hist_entry& CACHE::get_bhist_entry(uint64_t block_addr)
 {
   if (bhist_hash)
     return bhist[fold_xor(block_addr, BHT_BITS)];
-  return bhist_full[block_addr];
+  return lru_access(bhist_full, block_addr, bhist_ways, lru_clock);
 }
 
 // On a shadow table hit: reset the VPN's history row, serve the stored
@@ -344,6 +345,8 @@ bool CACHE::needs_mid_insertion(uint64_t full_addr, uint64_t ip) const
 //   PFQ_CAP=<n>        shared PFQ capacity (default 8)
 //   PHIST_HASH=<0|1>   XOR-fold VPN+PC before phist lookup (default 1 = hash)
 //   BHIST_HASH=<0|1>   XOR-fold block address before bhist lookup (default 1 = hash)
+//   PHIST_WAYS=<n>     max entries per PC set in phist_full (default 64, full-key mode only)
+//   BHIST_WAYS=<n>     max total entries in bhist_full (default 4096, full-key mode only)
 void CACHE::load_predictor_settings()
 {
   auto getenv_uint64 = [](const char* var, uint64_t fallback) -> uint64_t {
@@ -366,6 +369,8 @@ void CACHE::load_predictor_settings()
 
   phist_hash = (getenv_uint64("PHIST_HASH", 1) != 0);
   bhist_hash = (getenv_uint64("BHIST_HASH", 1) != 0);
+  phist_ways = getenv_uint64("PHIST_WAYS", phist_ways);
+  bhist_ways = getenv_uint64("BHIST_WAYS", bhist_ways);
 }
 
 bool CACHE::handle_fill(const PACKET& fill_mshr)
