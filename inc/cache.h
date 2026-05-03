@@ -173,12 +173,15 @@ class CACHE : public champsim::operable, public MemoryRequestConsumer, public Me
     uint64_t doa         = 0;
     uint64_t mostly_dead = 0;
     uint64_t last_access = 0;  // recency timestamp for LRU eviction (full-key mode only)
+    uint64_t full_addr   = 0;  // original PC (phist) or block address (bhist) before set/tag split
   };
 
+  // Inner key for phist_full.  pc_tag stores the high bits of the PC after
+  // stripping the set-index bits (addr_tag(pc, phist_sets)); vpn is unsplit.
   struct phist_key_t {
-    uint64_t pc, vpn;
-    bool operator<(const phist_key_t& o) const { if (pc != o.pc) return pc < o.pc; return vpn < o.vpn; }
-    bool operator==(const phist_key_t& o) const { return pc == o.pc && vpn == o.vpn; }
+    uint64_t pc_tag, vpn;
+    bool operator<(const phist_key_t& o) const { if (pc_tag != o.pc_tag) return pc_tag < o.pc_tag; return vpn < o.vpn; }
+    bool operator==(const phist_key_t& o) const { return pc_tag == o.pc_tag && vpn == o.vpn; }
   };
 
 
@@ -204,10 +207,10 @@ class CACHE : public champsim::operable, public MemoryRequestConsumer, public Me
   inline static const CACHE* stlb_ptr = nullptr;
 
   std::map<uint64_t, std::map<uint64_t,    hist_entry>> phist;      // [vpn_hash][pc_hash] → entry  (hashed)
-  std::map<uint64_t, std::map<phist_key_t, hist_entry>> phist_full; // [pc%sets][{pc,vpn}] → entry  (full-key)
+  std::map<uint64_t, std::map<phist_key_t, hist_entry>> phist_full; // [pc_set][{pc_tag,vpn}] → entry (full-key)
   std::deque<std::pair<uint64_t, uint64_t>> shadow_table;           // recently bypassed (VPN, translation data)
-  std::map<uint64_t, hist_entry> bhist;                             // [block_hash] → entry         (hashed)
-  std::map<uint64_t, std::map<uint64_t, hist_entry>> bhist_full;   // [addr%sets][block_addr] → entry (full-key)
+  std::map<uint64_t, hist_entry> bhist;                             // [block_hash] → entry           (hashed)
+  std::map<uint64_t, std::map<uint64_t, hist_entry>> bhist_full;   // [addr_set][addr_tag] → entry   (full-key)
 
   // Selects which history signal drives needs_mid_insertion().
   // Controlled by the MID_KEY env var (0 = addr, 1 = pc; default 0).
