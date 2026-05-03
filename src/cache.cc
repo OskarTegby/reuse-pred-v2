@@ -50,15 +50,20 @@ bool CACHE::phist_entry_exists(uint64_t pc, uint64_t vpn) const
     const auto outer = phist.find(fold_xor(vpn, VPN_BITS));
     return outer != phist.end() && outer->second.count(fold_xor(pc, PC_BITS));
   }
-  const auto outer = phist_full.find(pc % phist_sets);
-  return outer != phist_full.end() && outer->second.count(phist_key_t{pc, vpn});
+  const auto outer = phist_full.find(addr_set(pc, phist_sets));
+  return outer != phist_full.end() && outer->second.count(phist_key_t{addr_tag(pc, phist_sets), vpn});
 }
 
 CACHE::hist_entry& CACHE::get_phist_entry(uint64_t pc, uint64_t vpn)
 {
   if (phist_hash)
     return phist[fold_xor(vpn, VPN_BITS)][fold_xor(pc, PC_BITS)];
-  return lru_access(phist_full[pc % phist_sets], phist_key_t{pc, vpn}, phist_ways, lru_clock);
+  const uint64_t set = addr_set(pc, phist_sets);
+  const uint64_t tag = addr_tag(pc, phist_sets);
+  assert(addr_reconstruct(set, tag, phist_sets) == pc);
+  auto& e = lru_access(phist_full[set], phist_key_t{tag, vpn}, phist_ways, lru_clock);
+  e.full_addr = pc;
+  return e;
 }
 
 void CACHE::phist_clear_vpn(uint64_t vpn)
@@ -77,15 +82,20 @@ void CACHE::phist_clear_vpn(uint64_t vpn)
 bool CACHE::bhist_entry_exists(uint64_t block_addr) const
 {
   if (bhist_hash) return bhist.count(fold_xor(block_addr, BHT_BITS));
-  const auto outer = bhist_full.find(block_addr % bhist_sets);
-  return outer != bhist_full.end() && outer->second.count(block_addr);
+  const auto outer = bhist_full.find(addr_set(block_addr, bhist_sets));
+  return outer != bhist_full.end() && outer->second.count(addr_tag(block_addr, bhist_sets));
 }
 
 CACHE::hist_entry& CACHE::get_bhist_entry(uint64_t block_addr)
 {
   if (bhist_hash)
     return bhist[fold_xor(block_addr, BHT_BITS)];
-  return lru_access(bhist_full[block_addr % bhist_sets], block_addr, bhist_ways, lru_clock);
+  const uint64_t set = addr_set(block_addr, bhist_sets);
+  const uint64_t tag = addr_tag(block_addr, bhist_sets);
+  assert(addr_reconstruct(set, tag, bhist_sets) == block_addr);
+  auto& e = lru_access(bhist_full[set], tag, bhist_ways, lru_clock);
+  e.full_addr = block_addr;
+  return e;
 }
 
 // On a shadow table hit: reset the VPN's history row, serve the stored
