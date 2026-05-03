@@ -204,6 +204,11 @@ class CACHE : public champsim::operable, public MemoryRequestConsumer, public Me
   uint64_t bhist_ways = 64;   // ways per set in bhist_full; total capacity = sets × ways
   uint64_t lru_clock  = 0;    // monotonic counter for LRU timestamps
 
+  // Replacement policy for the full-key history tables (no effect in hashed mode).
+  // Controlled by the REPL_POL env var ("lru" (default) | "lfu").
+  enum class repl_pol_t : uint8_t { lru, lfu };
+  repl_pol_t repl_pol = repl_pol_t::lru;
+
   // Set by cpu0_STLB at initialize(); used by LLC to scan for DoA page correlations.
   inline static const CACHE* stlb_ptr = nullptr;
 
