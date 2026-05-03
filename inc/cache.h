@@ -172,12 +172,16 @@ class CACHE : public champsim::operable, public MemoryRequestConsumer, public Me
   struct hist_entry {
     uint64_t doa         = 0;
     uint64_t mostly_dead = 0;
+    uint64_t last_access = 0;  // recency timestamp for LRU eviction (full-key mode only)
+    uint64_t full_addr   = 0;  // original PC (phist) or block address (bhist) before set/tag split
   };
 
+  // Inner key for phist_full.  pc_tag stores the high bits of the PC after
+  // stripping the set-index bits (addr_tag(pc, phist_sets)); vpn is unsplit.
   struct phist_key_t {
-    uint64_t pc, vpn;
-    bool operator<(const phist_key_t& o) const { if (pc != o.pc) return pc < o.pc; return vpn < o.vpn; }
-    bool operator==(const phist_key_t& o) const { return pc == o.pc && vpn == o.vpn; }
+    uint64_t pc_tag, vpn;
+    bool operator<(const phist_key_t& o) const { if (pc_tag != o.pc_tag) return pc_tag < o.pc_tag; return vpn < o.vpn; }
+    bool operator==(const phist_key_t& o) const { return pc_tag == o.pc_tag && vpn == o.vpn; }
   };
 
 
@@ -192,16 +196,21 @@ class CACHE : public champsim::operable, public MemoryRequestConsumer, public Me
   uint64_t bconf_thd = 6; // bhist confidence threshold
   uint64_t mid_thd        = 1;     // min DoA-or-mostly-dead evictions before mid-insertion triggers
   bool     mid_promote_on_hit = false; // promote mid-inserted blocks to MRU on hit (MID_PROMOTE=1)
-  uint64_t st_size = 2;   // shadow table capacity
+  uint64_t st_size    = 2;    // shadow table capacity
+  uint64_t phist_sets = 1;    // number of sets in phist_full (1 = fully associative)
+  uint64_t phist_ways = 64;   // ways per set in phist_full; total capacity = sets × ways
+  uint64_t bhist_sets = 1;    // number of sets in bhist_full (1 = fully associative)
+  uint64_t bhist_ways = 64;   // ways per set in bhist_full; total capacity = sets × ways
+  uint64_t lru_clock  = 0;    // monotonic counter for LRU timestamps
 
   // Set by cpu0_STLB at initialize(); used by LLC to scan for DoA page correlations.
   inline static const CACHE* stlb_ptr = nullptr;
 
   std::map<uint64_t, std::map<uint64_t,    hist_entry>> phist;      // [vpn_hash][pc_hash] → entry  (hashed)
-  std::map<uint64_t, std::map<phist_key_t, hist_entry>> phist_full; // [pc][{pc,vpn}] → entry       (full-key)
+  std::map<uint64_t, std::map<phist_key_t, hist_entry>> phist_full; // [pc_set][{pc_tag,vpn}] → entry (full-key)
   std::deque<std::pair<uint64_t, uint64_t>> shadow_table;           // recently bypassed (VPN, translation data)
-  std::map<uint64_t, hist_entry> bhist;      // [block_hash] → entry (hashed)
-  std::map<uint64_t, hist_entry> bhist_full; // [block_addr] → entry (full-key, LRU-bounded)
+  std::map<uint64_t, hist_entry> bhist;                             // [block_hash] → entry           (hashed)
+  std::map<uint64_t, std::map<uint64_t, hist_entry>> bhist_full;   // [addr_set][addr_tag] → entry   (full-key)
 
   // Selects which history signal drives needs_mid_insertion().
   // Controlled by the MID_KEY env var (0 = addr, 1 = pc; default 0).

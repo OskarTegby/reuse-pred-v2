@@ -15,6 +15,7 @@
  */
 
 #include "cache.h"
+#include "hist_lru.h"
 
 #include <algorithm>
 #include <cassert>
@@ -49,15 +50,20 @@ bool CACHE::phist_entry_exists(uint64_t pc, uint64_t vpn) const
     const auto outer = phist.find(fold_xor(vpn, VPN_BITS));
     return outer != phist.end() && outer->second.count(fold_xor(pc, PC_BITS));
   }
-  const auto outer = phist_full.find(pc);
-  return outer != phist_full.end() && outer->second.count(phist_key_t{pc, vpn});
+  const auto outer = phist_full.find(addr_set(pc, phist_sets));
+  return outer != phist_full.end() && outer->second.count(phist_key_t{addr_tag(pc, phist_sets), vpn});
 }
 
 CACHE::hist_entry& CACHE::get_phist_entry(uint64_t pc, uint64_t vpn)
 {
   if (phist_hash)
     return phist[fold_xor(vpn, VPN_BITS)][fold_xor(pc, PC_BITS)];
-  return phist_full[pc][phist_key_t{pc, vpn}];
+  const uint64_t set = addr_set(pc, phist_sets);
+  const uint64_t tag = addr_tag(pc, phist_sets);
+  assert(addr_reconstruct(set, tag, phist_sets) == pc);
+  auto& e = lru_access(phist_full[set], phist_key_t{tag, vpn}, phist_ways, lru_clock);
+  e.full_addr = pc;
+  return e;
 }
 
 void CACHE::phist_clear_vpn(uint64_t vpn)
@@ -76,14 +82,20 @@ void CACHE::phist_clear_vpn(uint64_t vpn)
 bool CACHE::bhist_entry_exists(uint64_t block_addr) const
 {
   if (bhist_hash) return bhist.count(fold_xor(block_addr, BHT_BITS));
-  return bhist_full.count(block_addr);
+  const auto outer = bhist_full.find(addr_set(block_addr, bhist_sets));
+  return outer != bhist_full.end() && outer->second.count(addr_tag(block_addr, bhist_sets));
 }
 
 CACHE::hist_entry& CACHE::get_bhist_entry(uint64_t block_addr)
 {
   if (bhist_hash)
     return bhist[fold_xor(block_addr, BHT_BITS)];
-  return bhist_full[block_addr];
+  const uint64_t set = addr_set(block_addr, bhist_sets);
+  const uint64_t tag = addr_tag(block_addr, bhist_sets);
+  assert(addr_reconstruct(set, tag, bhist_sets) == block_addr);
+  auto& e = lru_access(bhist_full[set], tag, bhist_ways, lru_clock);
+  e.full_addr = block_addr;
+  return e;
 }
 
 // On a shadow table hit: reset the VPN's history row, serve the stored
@@ -344,6 +356,10 @@ bool CACHE::needs_mid_insertion(uint64_t full_addr, uint64_t ip) const
 //   PFQ_CAP=<n>        shared PFQ capacity (default 8)
 //   PHIST_HASH=<0|1>   XOR-fold VPN+PC before phist lookup (default 1 = hash)
 //   BHIST_HASH=<0|1>   XOR-fold block address before bhist lookup (default 1 = hash)
+//   PHIST_SETS=<n>     number of sets in phist_full (default 1 = fully associative, full-key mode only)
+//   PHIST_WAYS=<n>     ways per set in phist_full; total = sets × ways (default 64, full-key mode only)
+//   BHIST_SETS=<n>     number of sets in bhist_full (default 1 = fully associative, full-key mode only)
+//   BHIST_WAYS=<n>     ways per set in bhist_full; total = sets × ways (default 64, full-key mode only)
 void CACHE::load_predictor_settings()
 {
   auto getenv_uint64 = [](const char* var, uint64_t fallback) -> uint64_t {
@@ -366,6 +382,10 @@ void CACHE::load_predictor_settings()
 
   phist_hash = (getenv_uint64("PHIST_HASH", 1) != 0);
   bhist_hash = (getenv_uint64("BHIST_HASH", 1) != 0);
+  phist_sets = getenv_uint64("PHIST_SETS", phist_sets);
+  phist_ways = getenv_uint64("PHIST_WAYS", phist_ways);
+  bhist_sets = getenv_uint64("BHIST_SETS", bhist_sets);
+  bhist_ways = getenv_uint64("BHIST_WAYS", bhist_ways);
 }
 
 bool CACHE::handle_fill(const PACKET& fill_mshr)
