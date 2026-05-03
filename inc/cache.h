@@ -173,6 +173,7 @@ class CACHE : public champsim::operable, public MemoryRequestConsumer, public Me
     uint64_t doa         = 0;
     uint64_t mostly_dead = 0;
     uint64_t last_access = 0;  // recency timestamp for LRU eviction (full-key mode only)
+    uint64_t freq        = 0;  // access frequency for LFU eviction (full-key mode only)
     uint64_t full_addr   = 0;  // original PC (phist) or block address (bhist) before set/tag split
   };
 
