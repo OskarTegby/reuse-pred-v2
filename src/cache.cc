@@ -64,7 +64,7 @@ CACHE::hist_entry& CACHE::get_phist_entry(uint64_t pc, uint64_t vpn)
   assert(addr_reconstruct(set, tag, phist_sets) == pc);
   const phist_key_t key{tag, vpn};
   hist_entry& e = (repl_pol == repl_pol_t::lfu)
-    ? lfu_access(phist_full[set], key)
+    ? lfu_access(phist_full[set], key, phist_ways)
     : lru_access(phist_full[set], key, phist_ways, lru_clock);
   e.full_addr = pc;
   return e;
@@ -98,7 +98,7 @@ CACHE::hist_entry& CACHE::get_bhist_entry(uint64_t block_addr)
   const uint64_t tag = addr_tag(block_addr, bhist_sets);
   assert(addr_reconstruct(set, tag, bhist_sets) == block_addr);
   hist_entry& e = (repl_pol == repl_pol_t::lfu)
-    ? lfu_access(bhist_full[set], tag)
+    ? lfu_access(bhist_full[set], tag, bhist_ways)
     : lru_access(bhist_full[set], tag, bhist_ways, lru_clock);
   e.full_addr = block_addr;
   return e;

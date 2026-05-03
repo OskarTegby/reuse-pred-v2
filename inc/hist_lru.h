@@ -57,11 +57,25 @@ typename Map::mapped_type& lru_access(Map& map, const Key& key, std::size_t capa
   return e;
 }
 
-// Accesses or inserts key in map.  Increments the accessed entry's freq
-// counter and returns a reference.  Eviction is handled separately.
-template <typename Map, typename Key>
-typename Map::mapped_type& lfu_access(Map& map, const Key& key)
+// Evicts the entry with the smallest freq counter from map.
+// Map must be a std::map<Key, Value> where Value has a uint64_t freq field.
+// Assumes map is non-empty.
+template <typename Map>
+void evict_lfu(Map& map)
 {
+  assert(!map.empty());
+  auto lfu = std::min_element(map.begin(), map.end(),
+    [](const auto& a, const auto& b) { return a.second.freq < b.second.freq; });
+  map.erase(lfu);
+}
+
+// Accesses or inserts key in map, evicting the LFU entry first if the map is
+// at capacity.  Increments the accessed entry's freq and returns a reference.
+template <typename Map, typename Key>
+typename Map::mapped_type& lfu_access(Map& map, const Key& key, std::size_t capacity)
+{
+  if (!map.count(key) && map.size() >= capacity)
+    evict_lfu(map);
   auto& e = map[key];
   ++e.freq;
   return e;
