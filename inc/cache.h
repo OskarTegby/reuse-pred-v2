@@ -194,18 +194,20 @@ class CACHE : public champsim::operable, public MemoryRequestConsumer, public Me
   uint64_t mid_thd        = 1;     // min DoA-or-mostly-dead evictions before mid-insertion triggers
   bool     mid_promote_on_hit = false; // promote mid-inserted blocks to MRU on hit (MID_PROMOTE=1)
   uint64_t st_size    = 2;    // shadow table capacity
-  uint64_t phist_ways = 64;   // max entries per PC set in phist_full (full-key mode)
-  uint64_t bhist_ways = 64;   // max entries in bhist_full (full-key mode)
+  uint64_t phist_sets = 1;    // number of sets in phist_full (1 = fully associative)
+  uint64_t phist_ways = 64;   // ways per set in phist_full; total capacity = sets × ways
+  uint64_t bhist_sets = 1;    // number of sets in bhist_full (1 = fully associative)
+  uint64_t bhist_ways = 64;   // ways per set in bhist_full; total capacity = sets × ways
   uint64_t lru_clock  = 0;    // monotonic counter for LRU timestamps
 
   // Set by cpu0_STLB at initialize(); used by LLC to scan for DoA page correlations.
   inline static const CACHE* stlb_ptr = nullptr;
 
   std::map<uint64_t, std::map<uint64_t,    hist_entry>> phist;      // [vpn_hash][pc_hash] → entry  (hashed)
-  std::map<uint64_t, std::map<phist_key_t, hist_entry>> phist_full; // [pc][{pc,vpn}] → entry       (full-key)
+  std::map<uint64_t, std::map<phist_key_t, hist_entry>> phist_full; // [pc%sets][{pc,vpn}] → entry  (full-key)
   std::deque<std::pair<uint64_t, uint64_t>> shadow_table;           // recently bypassed (VPN, translation data)
-  std::map<uint64_t, hist_entry> bhist;      // [block_hash] → entry (hashed)
-  std::map<uint64_t, hist_entry> bhist_full; // [block_addr] → entry (full-key, LRU-bounded)
+  std::map<uint64_t, hist_entry> bhist;                             // [block_hash] → entry         (hashed)
+  std::map<uint64_t, std::map<uint64_t, hist_entry>> bhist_full;   // [addr%sets][block_addr] → entry (full-key)
 
   // Selects which history signal drives needs_mid_insertion().
   // Controlled by the MID_KEY env var (0 = addr, 1 = pc; default 0).

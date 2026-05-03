@@ -135,3 +135,70 @@ TEST_CASE("lru_access on an existing entry does not evict and updates its timest
   REQUIRE(m.count(2) == 0);
   REQUIRE(m.count(3) == 1);
 }
+
+// Set-associative tests.
+// The pattern under test mirrors get_bhist_entry:
+//   lru_access(outer[key % sets], key, ways, clock)
+
+TEST_CASE("set-associative: keys in different sets do not evict each other") {
+  std::map<uint64_t, std::map<uint64_t, entry_t>> m;
+  uint64_t clock = 0;
+  const uint64_t sets = 2;
+  const std::size_t ways = 1;
+
+  lru_access(m[0 % sets], uint64_t{0}, ways, clock);  // set 0
+  lru_access(m[1 % sets], uint64_t{1}, ways, clock);  // set 1
+
+  REQUIRE(m[0].size() == 1);
+  REQUIRE(m[1].size() == 1);
+}
+
+TEST_CASE("set-associative: keys in the same set cause a conflict eviction") {
+  std::map<uint64_t, std::map<uint64_t, entry_t>> m;
+  uint64_t clock = 0;
+  const uint64_t sets = 2;
+  const std::size_t ways = 1;
+
+  lru_access(m[0 % sets], uint64_t{0}, ways, clock);  // set 0
+  lru_access(m[2 % sets], uint64_t{2}, ways, clock);  // set 0 again (2%2==0), evicts key 0
+
+  REQUIRE(m[0].size() == 1);
+  REQUIRE(m[0].count(0) == 0);
+  REQUIRE(m[0].count(2) == 1);
+}
+
+TEST_CASE("set-associative: sets=1 eliminates conflict misses") {
+  std::map<uint64_t, std::map<uint64_t, entry_t>> m;
+  uint64_t clock = 0;
+  const uint64_t sets = 1;
+  const std::size_t ways = 2;
+
+  // Keys 0 and 2 would conflict under sets=2,ways=1 but coexist here
+  lru_access(m[0 % sets], uint64_t{0}, ways, clock);
+  lru_access(m[2 % sets], uint64_t{2}, ways, clock);
+
+  REQUIRE(m[0].size() == 2);
+  REQUIRE(m[0].count(0) == 1);
+  REQUIRE(m[0].count(2) == 1);
+}
+
+TEST_CASE("set-associative: total capacity is sets x ways") {
+  std::map<uint64_t, std::map<uint64_t, entry_t>> m;
+  uint64_t clock = 0;
+  const uint64_t sets = 2;
+  const std::size_t ways = 3;
+
+  // Fill exactly sets*ways entries with no evictions
+  for (uint64_t k = 0; k < sets * ways; ++k)
+    lru_access(m[k % sets], k, ways, clock);
+
+  std::size_t total = 0;
+  for (auto& [s, inner] : m) total += inner.size();
+  REQUIRE(total == sets * ways);
+
+  // One more entry triggers exactly one eviction
+  lru_access(m[(sets * ways) % sets], uint64_t{sets * ways}, ways, clock);
+  total = 0;
+  for (auto& [s, inner] : m) total += inner.size();
+  REQUIRE(total == sets * ways);
+}
