@@ -103,16 +103,16 @@ configs=()
 
 # References (both tables at FA)
 configs+=("baseline  champsim_lru     0 0 6 6 1 1 1 ${PHIST_SIZE} 1 ${BHIST_SIZE} lru")
-configs+=("hash_pred champsim_lru_mid 1 1 6 6 1 1 1 ${PHIST_SIZE} 1 ${BHIST_SIZE} lru")
-configs+=("fa_lru    champsim_lru_mid 1 1 6 6 0 0 1 ${PHIST_SIZE} 1 ${BHIST_SIZE} lru")
-configs+=("fa_lfu    champsim_lru_mid 1 1 6 6 0 0 1 ${PHIST_SIZE} 1 ${BHIST_SIZE} lfu")
+configs+=("hash_pred champsim_lru 1 1 6 6 1 1 1 ${PHIST_SIZE} 1 ${BHIST_SIZE} lru")
+configs+=("fa_lru    champsim_lru 1 1 6 6 0 0 1 ${PHIST_SIZE} 1 ${BHIST_SIZE} lru")
+configs+=("fa_lfu    champsim_lru 1 1 6 6 0 0 1 ${PHIST_SIZE} 1 ${BHIST_SIZE} lfu")
 
 # pHIST sweep: all power-of-2 levels, BHIST held at FA
 sets=$PHIST_SIZE
 while (( sets >= 1 )); do
   ways=$(( PHIST_SIZE / sets ))
   for pol in lru lfu; do
-    configs+=("phist_s${sets}_w${ways}_${pol} champsim_lru_mid 1 1 6 6 0 0 ${sets} ${ways} 1 ${BHIST_SIZE} ${pol}")
+    configs+=("phist_s${sets}_w${ways}_${pol} champsim_lru 1 1 6 6 0 0 ${sets} ${ways} 1 ${BHIST_SIZE} ${pol}")
   done
   (( sets /= 2 )) || true
 done
@@ -122,7 +122,7 @@ sets=$BHIST_SIZE
 while (( sets >= 1 )); do
   ways=$(( BHIST_SIZE / sets ))
   for pol in lru lfu; do
-    configs+=("bhist_s${sets}_w${ways}_${pol} champsim_lru_mid 1 1 6 6 0 0 1 ${PHIST_SIZE} ${sets} ${ways} ${pol}")
+    configs+=("bhist_s${sets}_w${ways}_${pol} champsim_lru 1 1 6 6 0 0 1 ${PHIST_SIZE} ${sets} ${ways} ${pol}")
   done
   (( sets /= 2 )) || true
 done

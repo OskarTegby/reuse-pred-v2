@@ -123,16 +123,16 @@ configs=()
 
 # References
 configs+=("baseline  champsim_lru     0 0 6 6 1 1 1 64      1 64      lru")
-configs+=("hash_pred champsim_lru_mid 1 1 6 6 1 1 1 64      1 64      lru")
-configs+=("inf       champsim_lru_mid 1 1 6 6 0 0 1 1048576 1 1048576 lru")
+configs+=("hash_pred champsim_lru 1 1 6 6 1 1 1 64      1 64      lru")
+configs+=("inf       champsim_lru 1 1 6 6 0 0 1 1048576 1 1048576 lru")
 
 # 2D sweep: all (phist_N, bhist_N) combinations in this range
 for phist_n in "${phist_sizes[@]}"; do
   for bhist_n in "${bhist_sizes[@]}"; do
     for pol in lru lfu; do
-      configs+=("${pol}_p${phist_n}_b${bhist_n} champsim_lru_mid 1 1 6 6 0 0 1 ${phist_n} 1 ${bhist_n} ${pol}")
+      configs+=("${pol}_p${phist_n}_b${bhist_n} champsim_lru 1 1 6 6 0 0 1 ${phist_n} 1 ${bhist_n} ${pol}")
     done
-    configs+=("hash_p${phist_n}_b${bhist_n} champsim_lru_mid 1 1 6 6 1 1 ${phist_n} 1 ${bhist_n} 1 lru")
+    configs+=("hash_p${phist_n}_b${bhist_n} champsim_lru 1 1 6 6 1 1 ${phist_n} 1 ${bhist_n} 1 lru")
   done
 done
 
