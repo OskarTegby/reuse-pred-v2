@@ -97,16 +97,16 @@ configs+=("baseline champsim_lru 0 0 6 6 8 2")
 # PFQ sweep: scale PFQ from original size (8) upward, keep ST at original (2)
 for log_pfq in 3 4 5 6 7 8 9; do
   pfq=$((1 << log_pfq))
-  configs+=("pfq_${pfq} champsim_lru_mid 1 1 6 6 ${pfq} 2")
+  configs+=("pfq_${pfq} champsim_lru 1 1 6 6 ${pfq} 2")
 done
-configs+=("pfq_inf champsim_lru_mid 1 1 6 6 1048576 2")
+configs+=("pfq_inf champsim_lru 1 1 6 6 1048576 2")
 
 # ST sweep: scale ST from original size (2) upward, keep PFQ at original (8)
 for log_st in 1 2 3 4 5 6 7 8 9; do
   st=$((1 << log_st))
-  configs+=("st_${st} champsim_lru_mid 1 1 6 6 8 ${st}")
+  configs+=("st_${st} champsim_lru 1 1 6 6 8 ${st}")
 done
-configs+=("st_inf champsim_lru_mid 1 1 6 6 8 1048576")
+configs+=("st_inf champsim_lru 1 1 6 6 8 1048576")
 
 echo "Submitting ${#configs[@]} configurations × ${N_TRACES} traces (tasks ${TASK_RANGE})"
 echo "Warmup / Sim : ${WARMUP} / ${SIM}"
