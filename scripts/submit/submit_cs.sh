@@ -63,10 +63,10 @@ _max_traces=0
 
 case "${token,,}" in
   test)
-    submit_one test_maz    1000000 5000000 "${PROJECT_ROOT}/trace-files/MAZUMDAR"  champsimtrace.xz 1
-    submit_one test_qmm    1000000 5000000 "${PROJECT_ROOT}/trace-files/QMM"       champsimtrace.xz 1
-    submit_one test_dpc3   1000000 5000000 "${SHARED_TRACES}/dpc3_traces"         champsimtrace.xz 1
-    submit_one test_google 1000000 5000000 "${SHARED_TRACES}/Google_Traces_v2"   champsim.gz      1
+    submit_one test_maz    25000000 50000000 "${PROJECT_ROOT}/trace-files/MAZUMDAR"  champsimtrace.xz 1
+    submit_one test_qmm    25000000 50000000 "${PROJECT_ROOT}/trace-files/QMM"       champsimtrace.xz 1
+    submit_one test_dpc3   25000000 50000000 "${SHARED_TRACES}/dpc3_traces"         champsimtrace.xz 1
+    submit_one test_google 25000000 50000000 "${SHARED_TRACES}/Google_Traces_v2"   champsim.gz      1
     ;;
   maz|mazumdar)
     submit_one maz 100000000 1000000000 "${PROJECT_ROOT}/trace-files/MAZUMDAR" champsimtrace.xz "$_max_traces"

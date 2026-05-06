@@ -58,7 +58,7 @@ case "$token" in
     TRACE_EXT="champsimtrace.xz" ;;
 esac
 
-[ "$TEST" -eq 1 ] && { WARMUP=5000000; SIM=10000000; DEBUG=1; }
+[ "$TEST" -eq 1 ] && { WARMUP=25000000; SIM=50000000; DEBUG=1; }
 
 mapfile -t TRACES < <(find "${TRACE_DIR}" -name "*.${TRACE_EXT}" | sort)
 N=${#TRACES[@]}
