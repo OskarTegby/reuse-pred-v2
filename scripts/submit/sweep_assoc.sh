@@ -82,8 +82,7 @@ esac
 
 [ -n "$WARMUP_OVERRIDE" ] && WARMUP="$WARMUP_OVERRIDE"
 [ -n "$SIM_OVERRIDE" ]    && SIM="$SIM_OVERRIDE"
-# --test: one trace, short warmup/sim, label gets _test suffix
-[ "$TEST" -eq 1 ] && { WARMUP=25000000; SIM=50000000; DEBUG=1; }
+[ "$TEST" -eq 1 ] && { WARMUP=25000000; SIM=50000000; }
 
 mapfile -t ALL_TRACES < <(find "${TRACE_DIR}" -name "*.${TRACE_EXT}" | sort)
 N_TRACES=${#ALL_TRACES[@]}
@@ -91,7 +90,13 @@ if [ "$N_TRACES" -eq 0 ]; then
   echo "ERROR: No traces found in ${TRACE_DIR}" >&2; exit 2
 fi
 
-if [ "$DEBUG" -eq 1 ]; then
+if [ "$TEST" -eq 1 ] && [ "$token" = "dpc3" ]; then
+  TASK_RANGE=$(printf '%s\n' "${ALL_TRACES[@]}" | awk -F/ '{name=$NF; sub(/-[0-9]+B\.champsimtrace\.xz$/,"",name); if(name!=prev){print NR; prev=name}}' | paste -sd,)
+elif [ "$TEST" -eq 1 ] && [ "$token" = "google" ]; then
+  TASK_RANGE=$(printf '%s\n' "${ALL_TRACES[@]}" | awk -F/ '{name=$(NF-1); if(name!=prev){print NR; prev=name}}' | paste -sd,)
+elif [ "$TEST" -eq 1 ]; then
+  TASK_RANGE="1-$(( N_TRACES < 10 ? N_TRACES : 10 ))"
+elif [ "$DEBUG" -eq 1 ]; then
   TASK_RANGE="1-1"
 else
   TASK_RANGE="1-${N_TRACES}"
