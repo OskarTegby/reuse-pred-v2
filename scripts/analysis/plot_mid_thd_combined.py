@@ -19,7 +19,7 @@ import matplotlib.ticker as mticker
 import numpy as np
 
 from spec_weights import benchmark_weighted_geomean_pct
-from champsim_utils import parse_ipc
+from champsim_utils import parse_ipc, load_baseline
 
 BASE = Path("results")
 
@@ -63,12 +63,7 @@ def geomean_speedup(sweep_dir: Path, n: int):
     equal-weight geomean across benchmarks.
     For all other traces: flat equal-weight geomean.
     """
-    lru_dir = sweep_dir / "lru"
-    baselines: dict = {}
-    for f in sorted(lru_dir.glob("*/champsim.out")):
-        v = parse_ipc(f)
-        if v is not None:
-            baselines[f.parent.name] = v
+    baselines = load_baseline(sweep_dir / "lru")
     if not baselines:
         return None
 

@@ -30,6 +30,7 @@ import matplotlib.ticker as mticker
 import matplotlib.pyplot as plt
 import numpy as np
 
+from colors import SUITE_COLORS
 from spec_weights import benchmark_weighted_geomean_pct
 from champsim_utils import parse_ipc
 
@@ -37,7 +38,6 @@ from champsim_utils import parse_ipc
 # Order: SPEC → Google → Qualcomm  (matches liveness_corr_strip ordering)
 SUITE_ORDER  = ["dpc3",   "google",  "qmm"]
 SUITE_LABELS = ["SPEC (DPC3)", "Google", "Qualcomm"]
-SUITE_COLORS = ["#2C7BB6",    "#D7191C", "#1A9641"]
 
 # Config colours — fixed per config across all suites (Panel 1)
 COLOR_DP   = "#4393C3"   # blue  — dpPred only

@@ -33,11 +33,9 @@ import matplotlib.ticker as mticker
 import matplotlib.pyplot as plt
 import numpy as np
 
+from colors import SUITE_COLORS
 from spec_weights import benchmark_weighted_geomean_pct
 from champsim_utils import parse_ipc
-
-# ── Suite colours — match plot_suite_liveness.py (SPEC / Google / Qualcomm) ──
-SUITE_COLORS = ["#2C7BB6", "#D7191C", "#1A9641"]
 
 # ── IPC parsing ───────────────────────────────────────────────────────────────
 

@@ -29,21 +29,7 @@ import matplotlib.pyplot as plt
 import matplotlib.ticker as mticker
 import numpy as np
 
-# ── Colours: fixed per policy name — never shift with absent policies ─────────
-POLICY_COLORS = {
-    "srrip":        "#E8A87C",  # soft peach
-    "lru_mid":      "#A67CB9",  # muted purple
-    "lru_pred":     "#2C5F8A",  # deep blue
-    "srrip_pred":   "#C46A30",  # burnt orange
-    "lru_mid_pred": "#6A3D8A",  # deep purple
-}
-POLICY_HATCHES = {
-    "srrip":        "",
-    "lru_mid":      "",
-    "lru_pred":     "//",
-    "srrip_pred":   "//",
-    "lru_mid_pred": "//",
-}
+from colors import POLICY_COLORS, POLICY_HATCHES
 
 
 # ── Parsing ───────────────────────────────────────────────────────────────────

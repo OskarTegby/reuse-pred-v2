@@ -30,6 +30,7 @@ import matplotlib.pyplot as plt
 import matplotlib.ticker as mticker
 import numpy as np
 
+from colors import SUITE_COLORS
 from spec_weights import benchmark_weighted_geomean_pct, SPEC_WEIGHTS, benchmark_name
 
 # ── Palette ───────────────────────────────────────────────────────────────────
@@ -37,8 +38,6 @@ from spec_weights import benchmark_weighted_geomean_pct, SPEC_WEIGHTS, benchmark
 COLOR_DOA = "#5B7FA6"   # steel blue
 COLOR_MD  = "#E8A87C"   # soft peach
 COLOR_MA  = "#7CB9A8"   # soft teal
-
-SUITE_COLORS = ["#2C7BB6", "#D7191C", "#1A9641"]   # blue / red / green
 
 CACHE_DISPLAY = {"cpu0_STLB": "STLB", "LLC": "LLC"}
 X_COMMON = np.linspace(0, 1, 1000)

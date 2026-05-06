@@ -34,13 +34,9 @@ import matplotlib.pyplot as plt
 import matplotlib.patches as mpatches
 import numpy as np
 
+from colors import LRU_COLOR, LFU_COLOR, HASH_COLOR
 from spec_weights import benchmark_weighted_geomean_pct
 from champsim_utils import find_test_dir, parse_ipc
-
-
-LRU_COLOR  = "#1a9850"
-LFU_COLOR  = "#4393c3"
-HASH_COLOR = "#d73027"
 
 
 # ── Parsing ───────────────────────────────────────────────────────────────────

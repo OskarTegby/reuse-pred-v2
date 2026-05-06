@@ -84,6 +84,22 @@ def geomean_speedup(exp_dir, baseline_dir) -> float:
     return benchmark_weighted_geomean_pct(ratios)
 
 
+def load_baseline(baseline_dir) -> "dict[str, float]":
+    """Return {workload_name: ipc} for every trace found in baseline_dir.
+
+    Supports both cluster layout (workload/champsim.out) and flat layout
+    (workload.out).  Silently skips files where IPC cannot be parsed.
+    """
+    base = Path(baseline_dir)
+    files = sorted(base.glob("*/champsim.out"))
+    if files:
+        return {f.parent.name: v
+                for f in files
+                if (v := parse_ipc(f)) is not None}
+    files = sorted(base.glob("*.out"))
+    return {f.stem: v for f in files if (v := parse_ipc(f)) is not None}
+
+
 def find_test_dir(suite: str, study: str) -> str:
     """Return the most recent results/{suite}_{study}_*_test directory."""
     pattern = os.path.join("results", f"{suite}_{study}_*_test")

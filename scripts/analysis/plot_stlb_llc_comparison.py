@@ -27,12 +27,12 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
 
+from colors import POLICY_COLORS
 from champsim_utils import parse_stats
 
 
 POLICIES       = ["lru_mid", "lru_mid_pred"]
 POLICY_LABELS  = ["lru_mid", "lru_mid+pred"]
-COLORS         = {"lru_mid": "#A67CB9", "lru_mid_pred": "#6A3D8A"}
 BASELINE       = "lru"
 
 
@@ -165,7 +165,7 @@ def plot_ipc(labels, llc_rows, both_rows, out_path: Path):
     x = np.arange(n)
 
     for pi, (pol, plabel) in enumerate(zip(POLICIES, POLICY_LABELS)):
-        color = COLORS[pol]
+        color = POLICY_COLORS[pol]
         llc_pct  = [(r.get(pol, 1) - 1) * 100 for r in llc_rows]
         both_pct = [(r.get(pol, 1) - 1) * 100 for r in both_rows]
         _draw_bars(ax, x, pi, bar_w, off_llc[pi], off_both[pi],
@@ -199,7 +199,7 @@ def plot_mpki(labels, llc_stlb_rows, both_stlb_rows, llc_llc_rows, both_llc_rows
     ):
         x = np.arange(n)
         for pi, (pol, plabel) in enumerate(zip(POLICIES, POLICY_LABELS)):
-            color = COLORS[pol]
+            color = POLICY_COLORS[pol]
             llc_vals  = [r.get(pol, 0) or 0 for r in stlb_l]
             both_vals = [r.get(pol, 0) or 0 for r in stlb_b]
             _draw_bars(ax, x, pi, bar_w, off_llc[pi], off_both[pi],

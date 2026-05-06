@@ -42,6 +42,7 @@ from spec_weights import (
     benchmark_weighted_geomean_pct,
     benchmark_weighted_geomean_abs,
     benchmark_weighted_mean_pct,
+    geomean_pct,
 )
 from champsim_utils import parse_ipc
 
@@ -191,13 +192,6 @@ METRIC_COLORS = {
 }
 
 # ── Aggregation helpers ───────────────────────────────────────────────────────
-
-def geomean_ratios(pct_list):
-    """Geomean of a list of % speedup values (kept for single-trace paths)."""
-    ratios = [v / 100.0 + 1.0 for v in pct_list if not np.isnan(v)]
-    if not ratios:
-        return float("nan")
-    return (np.exp(np.mean(np.log(ratios))) - 1.0) * 100.0
 
 
 # ── Plot helpers ──────────────────────────────────────────────────────────────

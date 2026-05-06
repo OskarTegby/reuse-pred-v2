@@ -35,7 +35,8 @@ import matplotlib.pyplot as plt
 import matplotlib.ticker as mticker
 import numpy as np
 
-from spec_weights import benchmark_weighted_geomean_pct, SPEC_WEIGHTS, benchmark_name
+from colors import LIVENESS_COLORS, LIVENESS_LABEL_COLORS, HIT_HIST_COLORS
+from spec_weights import benchmark_weighted_geomean_pct, SPEC_WEIGHTS, benchmark_name, aggregate_spec_liveness, benchmark_weighted_geomean_frac
 
 MAX_WORKLOADS = 25   # maximum per-workload bars shown in multi-workload plots
 
@@ -67,117 +68,9 @@ def _diverse_select(items, feature_fn, k):
     return selected
 
 
-def _aggregate_spec_benchmarks(rows):
-    """Collapse SPEC simpoints into parent benchmark rows.
-
-    For SPEC traces (identified by the -NNNb suffix), compute weighted-average
-    liveness fractions within each benchmark and return one synthetic row per
-    benchmark.  Non-SPEC rows are kept as-is.
-    rows = [(wl_name, {cache: {total, doa, mostly_dead, mostly_alive, ...}})]
-    """
-    groups: dict = {}
-    for wl, data in rows:
-        groups.setdefault(benchmark_name(wl), []).append((wl, data))
-
-    result = []
-    for bm_name in sorted(groups.keys()):
-        items = groups[bm_name]
-        # Non-SPEC: name didn't change → keep as-is
-        if len(items) == 1 and items[0][0] == bm_name:
-            result.append(items[0])
-            continue
-        # SPEC: aggregate simpoints into one benchmark row
-        all_caches: set = set()
-        for _, d in items:
-            all_caches |= set(d.keys())
-        agg_data: dict = {}
-        for cache in all_caches:
-            sp_fracs = []
-            for wl, data in items:
-                d = data.get(cache, {})
-                tot = d.get("total", 0)
-                if tot == 0:
-                    continue
-                w = SPEC_WEIGHTS.get(wl)
-                sp_fracs.append((d.get("doa", 0) / tot,
-                                 d.get("mostly_dead", 0) / tot,
-                                 d.get("mostly_alive", 0) / tot, w))
-            if not sp_fracs:
-                continue
-            w_valid = [(d, m, a, w) for d, m, a, w in sp_fracs if w is not None]
-            if w_valid and SPEC_WEIGHTS:
-                total_w = sum(w for _, _, _, w in w_valid)
-                if total_w > 0:
-                    avg_doa = sum(w / total_w * d for d, _, _, w in w_valid)
-                    avg_md  = sum(w / total_w * m for _, m, _, w in w_valid)
-                    avg_ma  = sum(w / total_w * a for _, _, a, w in w_valid)
-                else:
-                    avg_doa = sum(d for d, _, _, _ in sp_fracs) / len(sp_fracs)
-                    avg_md  = sum(m for _, m, _, _ in sp_fracs) / len(sp_fracs)
-                    avg_ma  = sum(a for _, _, a, _ in sp_fracs) / len(sp_fracs)
-            else:
-                avg_doa = sum(d for d, _, _, _ in sp_fracs) / len(sp_fracs)
-                avg_md  = sum(m for _, m, _, _ in sp_fracs) / len(sp_fracs)
-                avg_ma  = sum(a for _, _, a, _ in sp_fracs) / len(sp_fracs)
-            SCALE = 10000
-            agg_data[cache] = {
-                "total":        SCALE,
-                "doa":          int(avg_doa * SCALE),
-                "mostly_dead":  int(avg_md  * SCALE),
-                "mostly_alive": int(avg_ma  * SCALE),
-            }
-        if agg_data:
-            result.append((bm_name, agg_data))
-    return result
 
 
-def _benchmark_weighted_geomean_frac(trace_names, fracs) -> float:
-    """Benchmark-weighted geomean of a per-trace fraction list.
 
-    For SPEC traces (simpoint weights found): weighted geomean within each
-    benchmark (re-normalised for missing simpoints), then equal-weight geomean
-    across benchmarks.  For others: flat equal-weight geomean.
-    Clips fracs to a small epsilon before log so zero values don't collapse.
-    """
-    eps = 1e-6
-    by_wl = dict(zip(trace_names, fracs))
-    groups: dict = {}
-    for wl in by_wl:
-        groups.setdefault(benchmark_name(wl), []).append(wl)
-    per_bench = []
-    for wl_list in groups.values():
-        if SPEC_WEIGHTS:
-            pairs = [(by_wl[wl], SPEC_WEIGHTS.get(wl)) for wl in wl_list]
-            if any(w is not None for _, w in pairs):
-                pairs = [(v, w) for v, w in pairs if w is not None]
-                total_w = sum(w for _, w in pairs)
-                if total_w > 0:
-                    per_bench.append(float(np.exp(
-                        sum((w / total_w) * np.log(max(v, eps)) for v, w in pairs))))
-                    continue
-        vals = [by_wl[wl] for wl in wl_list]
-        per_bench.append(float(np.exp(np.mean(np.log(np.clip(vals, eps, None))))))
-    if not per_bench:
-        return 0.0
-    return float(np.exp(np.mean(np.log(np.clip(per_bench, eps, None)))))
-
-
-COLORS = {
-    "doa":          "#5B7FA6",   # steel blue
-    "mostly_dead":  "#E8A87C",   # soft peach
-    "mostly_alive": "#7CB9A8",   # soft teal
-}
-# Text contrast per segment color
-_LABEL_COLOR = {
-    "doa":          "white",
-    "mostly_dead":  "black",
-    "mostly_alive": "white",
-}
-
-HIT_HIST_COLORS = [
-    "#d73027", "#f46d43", "#fdae61", "#fee08b",
-    "#d9ef8b", "#a6d96a", "#66bd63", "#1a9850", "#006837",
-]
 
 DISPLAY = {"cpu0_STLB": "STLB", "LLC": "LLC"}
 LABELS_NICE = {
@@ -261,13 +154,13 @@ def plot_liveness(data_per_cache, label, out_path, show_hist=True):
     for key in ("doa", "mostly_dead", "mostly_alive"):
         vals = np.array(pct[key])
         ax.bar(x, vals, bar_w, bottom=bottoms,
-               color=COLORS[key], edgecolor="black", linewidth=0.5,
+               color=LIVENESS_COLORS[key], edgecolor="black", linewidth=0.5,
                label=LABELS_NICE[key])
         for xi, (b, v) in enumerate(zip(bottoms, vals)):
             if v > 3:
                 ax.text(xi, b + v / 2, f"{v:.1f}%",
                         ha="center", va="center", fontsize=9, fontweight="bold",
-                        color=_LABEL_COLOR[key])
+                        color=LIVENESS_LABEL_COLORS[key])
         bottoms += vals
 
     ax.set_xticks(x)
@@ -295,7 +188,7 @@ def plot_liveness(data_per_cache, label, out_path, show_hist=True):
             hist = (hist + [0] * n_bins)[:n_bins]
             xs = np.arange(n_bins) + offsets[ci]
             ax2.bar(xs, hist, bar_w2,
-                    color=[HIT_HIST_COLORS[i % len(HIT_HIST_COLORS)] for i in range(n_bins)],
+                    color=[HIT_HIST_LIVENESS_COLORS[i % len(HIT_HIST_COLORS)] for i in range(n_bins)],
                     edgecolor="black", linewidth=0.4, alpha=0.85,
                     label=DISPLAY.get(c, c))
         ax2.set_yscale("log")
@@ -328,7 +221,7 @@ def plot_liveness_per_workload(trace_data, label, out_path, cache_filter=None):
     Produces one panel per cache with one stacked bar per workload + geomean.
     """
     # Aggregate SPEC simpoints into parent benchmarks
-    trace_data = _aggregate_spec_benchmarks(trace_data)
+    trace_data = aggregate_spec_liveness(trace_data)
 
     all_caches = ["cpu0_STLB", "LLC"]
     if cache_filter:
@@ -392,7 +285,7 @@ def plot_liveness_per_workload(trace_data, label, out_path, cache_filter=None):
         # Append benchmark-weighted geometric mean for each class (over all workloads)
         for key in pct:
             pct[key].append(
-                _benchmark_weighted_geomean_frac(trace_names_all, all_pct[key]))
+                benchmark_weighted_geomean_frac(trace_names_all, all_pct[key]))
         # Normalise geomean so the geomean bar sums to 100%
         gm_sum = sum(pct[k][-1] for k in ("doa", "mostly_dead", "mostly_alive"))
         if gm_sum > 0:
@@ -404,9 +297,9 @@ def plot_liveness_per_workload(trace_data, label, out_path, cache_filter=None):
         for key in ("doa", "mostly_dead", "mostly_alive"):
             vals = np.array(pct[key])
             ax.bar(x, vals, bar_w, bottom=bottoms,
-                   color=COLORS[key], edgecolor="black", linewidth=0.4,
+                   color=LIVENESS_COLORS[key], edgecolor="black", linewidth=0.4,
                    label=LABELS_NICE[key])
-            tc = _LABEL_COLOR[key]
+            tc = LIVENESS_LABEL_COLORS[key]
             # Label every segment (workload bars + geomean bar)
             for xi in range(len(vals)):
                 v = vals[xi]

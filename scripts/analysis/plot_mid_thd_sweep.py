@@ -22,16 +22,11 @@ import numpy as np
 from matplotlib.ticker import FixedFormatter, FixedLocator
 
 from spec_weights import benchmark_weighted_geomean_pct
-from champsim_utils import parse_ipc
+from champsim_utils import parse_ipc, load_baseline
 
 
 def _geomean_speedup(sweep_dir: Path, n: int):
-    lru_dir = sweep_dir / "lru"
-    baselines: dict = {}
-    for f in sorted(lru_dir.glob("*/champsim.out")):
-        v = parse_ipc(f)
-        if v is not None:
-            baselines[f.parent.name] = v
+    baselines = load_baseline(sweep_dir / "lru")
     if not baselines:
         return None
     thd_dir = sweep_dir / f"mid_thd{n}"

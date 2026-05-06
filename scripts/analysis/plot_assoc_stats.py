@@ -21,11 +21,8 @@ import math
 import matplotlib.pyplot as plt
 import numpy as np
 
+from colors import LRU_COLOR, LFU_COLOR
 from champsim_utils import geomean_speedup, find_test_dir
-
-
-LRU_COLOR = "#1a9850"
-LFU_COLOR = "#4393c3"
 
 
 def parse_stats(path):

@@ -26,21 +26,11 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
 
-from spec_weights import benchmark_weighted_geomean_pct, SPEC_WEIGHTS, benchmark_name
+from spec_weights import benchmark_weighted_geomean_pct, SPEC_WEIGHTS, benchmark_name, weighted_geomean_pct
 from champsim_utils import parse_ipc
 
 # ── Parsing ───────────────────────────────────────────────────────────────────
 
-
-def _wgeomean(speedups, weights):
-    pairs = [(s / 100.0 + 1.0, w) for s, w in zip(speedups, weights)]
-    valid = [(r, w) for r, w in pairs if r > 0 and w is not None]
-    if valid:
-        total = sum(w for _, w in valid)
-        if total > 0:
-            return (np.exp(sum((w / total) * np.log(r) for r, w in valid)) - 1.0) * 100.0
-    pos = [r for r, _ in pairs if r > 0]
-    return (np.exp(np.mean(np.log(pos))) - 1.0) * 100.0 if pos else float("nan")
 
 
 def _group_name(trace: str, suite: str) -> str:
@@ -100,7 +90,7 @@ def _opt_keys(base: Path, suite: str):
                     sps.append(grid[t][key])
                     wts.append(SPEC_WEIGHTS.get(t) if use_wts else None)
             if sps:
-                v = _wgeomean(sps, wts)
+                v = weighted_geomean_pct(sps, wts)
                 if not np.isnan(v) and v > best_v:
                     best_v, best_k = v, key
         if best_k is not None:
