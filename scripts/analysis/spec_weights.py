@@ -108,3 +108,122 @@ def benchmark_weighted_mean_pct(pct_by_wl: "dict[str, float]") -> float:
         return float("nan")
     bench_means = [float(np.mean(vs)) for vs in groups.values() if vs]
     return float(np.mean(bench_means)) if bench_means else float("nan")
+
+
+def geomean_pct(pct_list: "list[float]") -> float:
+    """Flat (unweighted) geomean of a list of %-speedup values."""
+    ratios = [v / 100.0 + 1.0 for v in pct_list if not np.isnan(v) and v > -100]
+    if not ratios:
+        return float("nan")
+    return (float(np.exp(np.mean(np.log(ratios)))) - 1.0) * 100.0
+
+
+def weighted_geomean_pct(vals: "list[float]", weights: "list[float | None]") -> float:
+    """Weighted geomean of parallel %-speedup values and weight values.
+
+    Falls back to equal-weight geomean for entries with None weight.
+    vals and weights must have the same length.
+    """
+    pairs = [(v / 100.0 + 1.0, w) for v, w in zip(vals, weights)]
+    valid_w = [(r, w) for r, w in pairs if r > 0 and w is not None]
+    if valid_w:
+        total = sum(w for _, w in valid_w)
+        if total > 0:
+            return (float(np.exp(sum((w / total) * np.log(r) for r, w in valid_w))) - 1.0) * 100.0
+    valid = [r for r, _ in pairs if r > 0]
+    return (float(np.exp(np.mean(np.log(valid)))) - 1.0) * 100.0 if valid else float("nan")
+
+
+def benchmark_weighted_geomean_frac(trace_names: "list[str]", fracs: "list[float]") -> float:
+    """Benchmark-weighted geomean of per-trace fractions (e.g. liveness rates).
+
+    Like benchmark_weighted_geomean_pct but operates on 0–1 fractions rather
+    than IPC ratios.  Clips values to a small epsilon before taking the log so
+    that exact-zero fractions do not collapse the geomean.
+    """
+    eps = 1e-6
+    by_wl = dict(zip(trace_names, fracs))
+    groups: dict = {}
+    for wl in by_wl:
+        groups.setdefault(_benchmark_name(wl), []).append(wl)
+    per_bench = []
+    for wl_list in groups.values():
+        if _SPEC_WEIGHTS:
+            pairs = [(by_wl[wl], _SPEC_WEIGHTS.get(wl)) for wl in wl_list]
+            if any(w is not None for _, w in pairs):
+                pairs = [(v, w) for v, w in pairs if w is not None]
+                total_w = sum(w for _, w in pairs)
+                if total_w > 0:
+                    per_bench.append(
+                        float(np.exp(sum((w / total_w) * np.log(max(v, eps))
+                                        for v, w in pairs))))
+                    continue
+        vals = [max(by_wl[wl], eps) for wl in wl_list]
+        per_bench.append(float(np.exp(np.mean(np.log(vals)))))
+    if not per_bench:
+        return float("nan")
+    return float(np.exp(np.mean(np.log([max(v, eps) for v in per_bench]))))
+
+
+def aggregate_spec_liveness(rows: list) -> list:
+    """Collapse SPEC simpoints into parent-benchmark rows for liveness data.
+
+    For SPEC traces (identified by the -NNNb suffix): compute SimPoint-weighted
+    average liveness fractions within each benchmark and return one synthetic
+    row per benchmark.  Non-SPEC rows are kept as-is.
+
+    rows = [(wl_name, {cache: {"total": int, "doa": int, "mostly_dead": int,
+                                "mostly_alive": int, ...}})]
+    """
+    groups: dict = {}
+    for wl, data in rows:
+        groups.setdefault(_benchmark_name(wl), []).append((wl, data))
+
+    result = []
+    for bm_name in sorted(groups.keys()):
+        items = groups[bm_name]
+        if len(items) == 1 and items[0][0] == bm_name:
+            result.append(items[0])
+            continue
+        all_caches: set = set()
+        for _, d in items:
+            all_caches |= set(d.keys())
+        agg_data: dict = {}
+        for cache in all_caches:
+            sp_fracs = []
+            for wl, data in items:
+                d = data.get(cache, {})
+                tot = d.get("total", 0)
+                if tot == 0:
+                    continue
+                w = _SPEC_WEIGHTS.get(wl)
+                sp_fracs.append((d.get("doa", 0) / tot,
+                                 d.get("mostly_dead", 0) / tot,
+                                 d.get("mostly_alive", 0) / tot, w))
+            if not sp_fracs:
+                continue
+            w_valid = [(d, m, a, w) for d, m, a, w in sp_fracs if w is not None]
+            if w_valid and _SPEC_WEIGHTS:
+                total_w = sum(w for _, _, _, w in w_valid)
+                if total_w > 0:
+                    avg_doa = sum(w / total_w * d for d, _, _, w in w_valid)
+                    avg_md  = sum(w / total_w * m for _, m, _, w in w_valid)
+                    avg_ma  = sum(w / total_w * a for _, _, a, w in w_valid)
+                else:
+                    avg_doa = sum(d for d, _, _, _ in sp_fracs) / len(sp_fracs)
+                    avg_md  = sum(m for _, m, _, _ in sp_fracs) / len(sp_fracs)
+                    avg_ma  = sum(a for _, _, a, _ in sp_fracs) / len(sp_fracs)
+            else:
+                avg_doa = sum(d for d, _, _, _ in sp_fracs) / len(sp_fracs)
+                avg_md  = sum(m for _, m, _, _ in sp_fracs) / len(sp_fracs)
+                avg_ma  = sum(a for _, _, a, _ in sp_fracs) / len(sp_fracs)
+            SCALE = 10000
+            agg_data[cache] = {
+                "total":        SCALE,
+                "doa":          int(avg_doa * SCALE),
+                "mostly_dead":  int(avg_md  * SCALE),
+                "mostly_alive": int(avg_ma  * SCALE),
+            }
+        if agg_data:
+            result.append((bm_name, agg_data))
+    return result

@@ -39,7 +39,6 @@ Y_LO, Y_HI = -2.0, 5.0   # clip range; outliers are annotated
 # ── Suite identity ────────────────────────────────────────────────────────────
 SUITE_ORDER  = ["dpc3",        "google",  "qmm"]
 SUITE_LABELS = ["SPEC (DPC3)", "Google",  "Qualcomm"]
-SUITE_COLORS = ["#2C7BB6",     "#D7191C", "#1A9641"]
 
 # ── Configuration identity ────────────────────────────────────────────────────
 CONFIGS = [
@@ -57,6 +56,7 @@ CONFIGS = [
     ),
 ]
 
+from colors import SUITE_COLORS
 from spec_weights import benchmark_weighted_geomean_pct
 from champsim_utils import parse_ipc
 

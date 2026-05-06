@@ -26,7 +26,7 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
 
-from spec_weights import benchmark_weighted_geomean_pct
+from spec_weights import benchmark_weighted_geomean_pct, geomean_pct
 from champsim_utils import parse_ipc
 
 # ── Parsing ───────────────────────────────────────────────────────────────────
@@ -59,18 +59,6 @@ def parse_mpki(path: Path):
         return (stlb_miss + llc_miss) / (instrs / 1000)
     return None
 
-
-def geomean_ratios(pct_list):
-    ratios = [v / 100.0 + 1.0 for v in pct_list if not np.isnan(v)]
-    if not ratios:
-        return float("nan")
-    return (np.exp(np.mean(np.log(ratios))) - 1.0) * 100.0
-
-
-def geomean_ratios_weighted(pct_by_wl: "dict[str, float]") -> float:
-    """Wrapper: convert %-speedup dict to ratio dict, apply benchmark-weighted geomean."""
-    ratios = {wl: v / 100.0 + 1.0 for wl, v in pct_by_wl.items() if not np.isnan(v)}
-    return benchmark_weighted_geomean_pct(ratios)
 
 
 # ── Main ──────────────────────────────────────────────────────────────────────
@@ -139,7 +127,7 @@ def main():
                 if v == 0:
                     continue  # no misses — skip; can't compute reduction
                 pct_by_wl[t] = (baselines[t] / v - 1.0) * 100.0
-        agg_values.append(geomean_ratios_weighted(pct_by_wl))
+        agg_values.append(benchmark_weighted_geomean_pct({wl: v/100+1 for wl, v in pct_by_wl.items() if not np.isnan(v)}))
 
     # ── Plot ──────────────────────────────────────────────────────────────────
     color  = "#1a9850" if args.metric == "ipc" else "#2166ac"

@@ -67,10 +67,7 @@ import matplotlib.ticker as mticker
 from matplotlib.colors import LogNorm
 import numpy as np
 
-# Liveness class colours
-DOA_COLOR = "#d62728"
-MD_COLOR  = "#ff7f0e"
-MA_COLOR  = "#2ca02c"
+from colors import LIVENESS_COLORS
 
 SUITE_COLORS = ["#1f77b4", "#9467bd", "#8c564b", "#e377c2", "#7f7f7f"]
 
@@ -277,9 +274,9 @@ def plot_lorenz_suite(pool: dict, suite_label: str, cache_name: str,
     ax.axvline(10, color="gray", linewidth=0.6, linestyle=":", zorder=1)
 
     for vals, color, ls, label in [
-        (doa, DOA_COLOR, "-",  "DoA"),
-        (md,  MD_COLOR,  "--", "Mostly-dead"),
-        (ma,  MA_COLOR,  ":",  "Mostly-alive"),
+        (doa, LIVENESS_COLORS["doa"], "-",  "DoA"),
+        (md,  LIVENESS_COLORS["mostly_dead"],  "--", "Mostly-dead"),
+        (ma,  LIVENESS_COLORS["mostly_alive"],  ":",  "Mostly-alive"),
     ]:
         x, y = lorenz_xy(vals)
         ax.plot(x * 100, y * 100, color=color, linestyle=ls,
@@ -314,9 +311,9 @@ def plot_lorenz_suite(pool: dict, suite_label: str, cache_name: str,
 def plot_lorenz_by_class(suite_pools: list, cache_name: str, out_prefix: str):
     """One Lorenz plot per liveness class, comparing all suites."""
     for cls_idx, (cls_name, color_cls, ls) in enumerate([
-        ("DoA",         DOA_COLOR, "-"),
-        ("Mostly-dead", MD_COLOR,  "--"),
-        ("Mostly-alive",MA_COLOR,  ":"),
+        ("DoA",         LIVENESS_COLORS["doa"], "-"),
+        ("Mostly-dead", LIVENESS_COLORS["mostly_dead"],  "--"),
+        ("Mostly-alive",LIVENESS_COLORS["mostly_alive"],  ":"),
     ]):
         fig, ax = plt.subplots(figsize=(7, 6))
         ax.plot([0, 100], [0, 100], color="black", linewidth=0.8, linestyle="--",
@@ -460,8 +457,8 @@ def plot_top_k_composition(pool: dict, suite_label: str, cache_name: str,
     labels = [f"0x{ip:x}" for ip in ips_plot]
 
     fig, ax = plt.subplots(figsize=(9, max(4, k * 0.40 + 1.5)))
-    ax.barh(y_pos, doa_plot, color=DOA_COLOR, label="DoA",         height=0.6)
-    ax.barh(y_pos, md_plot,  left=doa_plot,   color=MD_COLOR,
+    ax.barh(y_pos, doa_plot, color=LIVENESS_COLORS["doa"], label="DoA",         height=0.6)
+    ax.barh(y_pos, md_plot,  left=doa_plot,   color=LIVENESS_COLORS["mostly_dead"],
             label="Mostly-dead", height=0.6)
 
     ax.set_yticks(y_pos)

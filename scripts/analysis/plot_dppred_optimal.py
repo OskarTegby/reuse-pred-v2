@@ -39,7 +39,7 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
 
-from spec_weights import benchmark_weighted_geomean_pct, SPEC_WEIGHTS, benchmark_name
+from spec_weights import benchmark_weighted_geomean_pct, SPEC_WEIGHTS, benchmark_name, weighted_geomean_pct
 from champsim_utils import parse_ipc
 
 SUITE_LABELS = {
@@ -66,20 +66,6 @@ def _short_label(name: str, suite: str) -> str:
 
 
 # ── Aggregation ───────────────────────────────────────────────────────────────
-
-def _wgeomean(speedups: list, weights: list) -> float:
-    """Weighted (or equal-weight) geomean of speedup-percent values."""
-    pairs = [(s / 100.0 + 1.0, w) for s, w in zip(speedups, weights)]
-    valid_w = [(r, w) for r, w in pairs if r > 0 and w is not None]
-    if valid_w:
-        total = sum(w for _, w in valid_w)
-        if total > 0:
-            return (np.exp(
-                sum((w / total) * np.log(r) for r, w in valid_w)
-            ) - 1.0) * 100.0
-    valid = [r for r, _ in pairs if r > 0]
-    return (np.exp(np.mean(np.log(valid))) - 1.0) * 100.0 if valid else float("nan")
-
 
 def _geomean(vals: list) -> float:
     pos = [v / 100.0 + 1.0 for v in vals if not np.isnan(v) and v > -100]
@@ -174,7 +160,7 @@ def main():
             if key in grid.get(t, {}):
                 sps.append(grid[t][key])
                 wts.append(SPEC_WEIGHTS.get(t) if use_wts else None)
-        return _wgeomean(sps, wts) if sps else float("nan")
+        return weighted_geomean_pct(sps, wts) if sps else float("nan")
 
     def dp_group_speedup(tlist: list, key) -> float:
         sps, wts = [], []
@@ -182,7 +168,7 @@ def main():
             if key in dp_grid.get(t, {}):
                 sps.append(dp_grid[t][key])
                 wts.append(SPEC_WEIGHTS.get(t) if use_wts else None)
-        return _wgeomean(sps, wts) if sps else float("nan")
+        return weighted_geomean_pct(sps, wts) if sps else float("nan")
 
     results: dict = {}
     for grp, tlist in sorted(groups.items()):

@@ -49,20 +49,15 @@ import matplotlib.transforms as mtrans
 import numpy as np
 
 from spec_weights import benchmark_weighted_geomean_pct
-from champsim_utils import parse_ipc
+from champsim_utils import parse_ipc, load_baseline
 
 # ── Parsing ───────────────────────────────────────────────────────────────────
 
 def _compute_speedups(sweep_dir: Path, max_n: int) -> "list[float]":
     """Return list of geomean IPC speedup (%) for N=1..max_n."""
-    lru_dir = sweep_dir / "lru"
-    baselines: dict = {}
-    for f in sorted(lru_dir.glob("*/champsim.out")):
-        v = parse_ipc(f)
-        if v is not None:
-            baselines[f.parent.name] = v
+    baselines = load_baseline(sweep_dir / "lru")
     if not baselines:
-        print(f"  WARNING: no baseline data in {lru_dir}", file=sys.stderr)
+        print(f"  WARNING: no baseline data in {sweep_dir / 'lru'}", file=sys.stderr)
         return [float("nan")] * max_n
 
     result = []
