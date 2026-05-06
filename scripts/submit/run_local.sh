@@ -64,7 +64,7 @@ if [ "$N" -eq 0 ]; then
   exit 2
 fi
 
-[ "$TEST" -eq 1 ] && { WARMUP=5000000; SIM=10000000; DEBUG=1; }
+[ "$TEST" -eq 1 ] && { WARMUP=25000000; SIM=50000000; DEBUG=1; }
 
 if [ "$DEBUG" -eq 1 ]; then
   TRACES=("${TRACES[0]}")

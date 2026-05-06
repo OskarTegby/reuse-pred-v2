@@ -92,7 +92,7 @@ esac
 # Apply overrides after defaults are set
 [ -n "$WARMUP_OVERRIDE" ] && WARMUP="$WARMUP_OVERRIDE"
 [ -n "$SIM_OVERRIDE" ]    && SIM="$SIM_OVERRIDE"
-[ "$TEST" -eq 1 ] && { WARMUP=5000000; SIM=10000000; DEBUG=1; }
+[ "$TEST" -eq 1 ] && { WARMUP=25000000; SIM=50000000; DEBUG=1; }
 
 # ── Resolve trace list ────────────────────────────────────────────────────────
 mapfile -t TRACES < <(find "${TRACE_DIR}" -name "*.${TRACE_EXT}" | sort)
