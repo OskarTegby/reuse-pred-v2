@@ -49,7 +49,7 @@ case "$token" in
     TRACE_DIR="${SHARED_TRACES}/Google_Traces_v2"
     TRACE_EXT="champsim.gz" ;;
   test)
-    WARMUP=1000000; SIM=5000000
+    WARMUP=25000000; SIM=50000000
     TRACE_DIR="${PROJECT_ROOT}/trace-files/TEST"
     TRACE_EXT="champsimtrace.xz" ;;
 esac

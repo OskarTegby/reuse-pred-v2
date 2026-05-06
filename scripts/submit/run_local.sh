@@ -3,12 +3,9 @@
 # Usage: ./run_local.sh {maz|qmm} [--debug] [--warmup N] [--sim N] [--jobs N]
 #
 # --debug       Run only srv_128 (quick sanity check)
-# --warmup N    Warmup instructions   (default: 1000000)
-# --sim    N    Simulation instructions (default: 5000000)
+# --warmup N    Warmup instructions   (default: 25000000)
+# --sim    N    Simulation instructions (default: 50000000)
 # --jobs   N    Max parallel processes  (default: nproc - 1)
-#
-# Defaults are intentionally small so a local run finishes in minutes.
-# Use the cluster values (--warmup 50000000 --sim 100000000) for full fidelity.
 
 set -euo pipefail
 
@@ -19,8 +16,8 @@ PROJECT_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 token=""
 DEBUG=0
 TEST=0
-WARMUP=1000000
-SIM=5000000
+WARMUP=25000000
+SIM=50000000
 MAX_JOBS=$(( $(nproc) - 1 ))
 MAX_JOBS=$(( MAX_JOBS < 1 ? 1 : MAX_JOBS ))
 
