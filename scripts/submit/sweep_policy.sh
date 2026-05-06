@@ -130,7 +130,7 @@ esac
 
 [ -n "$WARMUP_OVERRIDE" ] && WARMUP="$WARMUP_OVERRIDE"
 [ -n "$SIM_OVERRIDE" ]    && SIM="$SIM_OVERRIDE"
-[ "$TEST" -eq 1 ] && { WARMUP=25000000; SIM=50000000; DEBUG=1; }
+[ "$TEST" -eq 1 ] && { WARMUP=25000000; SIM=50000000; }
 
 # ── Resolve trace list ────────────────────────────────────────────────────────
 mapfile -t TRACES < <(find "${TRACE_DIR}" -name "*.${TRACE_EXT}" | sort)
@@ -140,7 +140,13 @@ if [ "$N" -eq 0 ]; then
   exit 2
 fi
 
-if [ "$DEBUG" -eq 1 ]; then
+if [ "$TEST" -eq 1 ] && [ "$token" = "dpc3" ]; then
+  TASK_RANGE=$(printf '%s\n' "${TRACES[@]}" | awk -F/ '{name=$NF; sub(/-[0-9]+B\.champsimtrace\.xz$/,"",name); if(name!=prev){print NR; prev=name}}' | paste -sd,)
+elif [ "$TEST" -eq 1 ] && [ "$token" = "google" ]; then
+  TASK_RANGE=$(printf '%s\n' "${TRACES[@]}" | awk -F/ '{name=$(NF-1); if(name!=prev){print NR; prev=name}}' | paste -sd,)
+elif [ "$TEST" -eq 1 ]; then
+  TASK_RANGE="1-$(( N < 10 ? N : 10 ))"
+elif [ "$DEBUG" -eq 1 ]; then
   TASK_RANGE="1-1"
 else
   TASK_RANGE="1-${N}"
