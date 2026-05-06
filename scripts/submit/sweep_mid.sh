@@ -146,11 +146,11 @@ if [ "$N" -eq 0 ]; then
 fi
 
 if [ "$TEST" -eq 1 ] && [ "$token" = "dpc3" ]; then
-  TASK_RANGE=$(printf '%s\n' "${TRACES[@]}" | awk -F/ '{name=$NF; sub(/-[0-9]+B\.champsimtrace\.xz$/,"",name); if(name!=prev){print NR; prev=name}}' | paste -sd,)
+  TASK_RANGE=$(printf '%s\n' "${TRACES[@]}" | awk -F/ '{name=$NF; sub(/-[0-9]+B\.champsimtrace\.xz$/,"",name); if(name!=prev){print NR; prev=name}}' | head -5 | paste -sd,)
 elif [ "$TEST" -eq 1 ] && [ "$token" = "google" ]; then
-  TASK_RANGE=$(printf '%s\n' "${TRACES[@]}" | awk -F/ '{name=$(NF-1); if(name!=prev){print NR; prev=name}}' | paste -sd,)
+  TASK_RANGE=$(printf '%s\n' "${TRACES[@]}" | awk -F/ '{name=$(NF-1); if(name!=prev){print NR; prev=name}}' | head -5 | paste -sd,)
 elif [ "$TEST" -eq 1 ]; then
-  TASK_RANGE="1-$(( N < 10 ? N : 10 ))"
+  TASK_RANGE="1-$(( N < 5 ? N : 5 ))"
 elif [ "$DEBUG" -eq 1 ]; then
   TASK_RANGE="1-1"
 else
