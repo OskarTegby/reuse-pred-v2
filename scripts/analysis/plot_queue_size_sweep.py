@@ -128,13 +128,27 @@ def _queue_line(ax, sizes, speedups, inf_val, xlabel, title, color):
     ax.grid(axis="y", alpha=0.3)
 
 
+def find_test_dir(suite):
+    import glob
+    pattern = os.path.join("results", f"{suite}_queue_size_*_test")
+    matches = sorted(glob.glob(pattern))
+    if not matches:
+        print(f"No _test results found matching {pattern}", file=sys.stderr)
+        sys.exit(1)
+    return matches[-1]
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("results_dir", help="Base directory from sweep_queue_size.sh")
+    ap.add_argument("results_dir",
+                    help="Results directory, or suite name (dpc3|google|qmm) with --test")
+    ap.add_argument("--test", action="store_true",
+                    help="Find and plot the most recent _test run for the given suite")
     ap.add_argument("--out-dir", default=None)
     args = ap.parse_args()
 
-    results_dir = args.results_dir.rstrip("/")
+    results_dir = (find_test_dir(args.results_dir) if args.test
+                   else args.results_dir.rstrip("/"))
     out_dir     = args.out_dir or results_dir
     os.makedirs(out_dir, exist_ok=True)
     label = os.path.basename(results_dir)
