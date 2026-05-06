@@ -27,24 +27,9 @@ import matplotlib.pyplot as plt
 import numpy as np
 
 from spec_weights import benchmark_weighted_geomean_pct
+from champsim_utils import parse_ipc
 
 # ── Parsing ───────────────────────────────────────────────────────────────────
-
-def parse_ipc(path: Path):
-    """Return ROI cumulative IPC, or None."""
-    in_roi = False
-    try:
-        for line in path.read_text(errors="replace").splitlines():
-            if "Region of Interest Statistics" in line:
-                in_roi = True
-            if in_roi and "cumulative IPC:" in line:
-                m = re.search(r"cumulative IPC:\s+([0-9.]+)", line)
-                if m:
-                    return float(m.group(1))
-    except OSError:
-        pass
-    return None
-
 
 def parse_mpki(path: Path):
     """Return ROI total MPKI (STLB + LLC), or None."""

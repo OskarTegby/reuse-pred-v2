@@ -58,6 +58,7 @@ CONFIGS = [
 ]
 
 from spec_weights import benchmark_weighted_geomean_pct
+from champsim_utils import parse_ipc
 
 
 def _geomean_pct(sp: dict) -> float:
@@ -67,21 +68,6 @@ def _geomean_pct(sp: dict) -> float:
 
 # ── Parsing ───────────────────────────────────────────────────────────────────
 
-def _parse_ipc(path: Path):
-    in_roi = False
-    try:
-        for line in path.read_text(errors="replace").splitlines():
-            if "Region of Interest Statistics" in line:
-                in_roi = True
-            if in_roi and "cumulative IPC:" in line:
-                m = re.search(r"cumulative IPC:\s+([0-9.]+)", line)
-                if m:
-                    return float(m.group(1))
-    except OSError:
-        pass
-    return None
-
-
 def _load_speedups(suite_dir: Path, baseline_name: str, pred_name: str) -> dict:
     base_d = suite_dir / baseline_name
     pred_d = suite_dir / pred_name
@@ -89,14 +75,14 @@ def _load_speedups(suite_dir: Path, baseline_name: str, pred_name: str) -> dict:
         return {}
     bases = {}
     for f in sorted(base_d.glob("*/champsim.out")):
-        v = _parse_ipc(f)
+        v = parse_ipc(f)
         if v is not None:
             bases[f.parent.name] = v
     sp = {}
     for wl, b in bases.items():
         if b <= 0:
             continue
-        p = _parse_ipc(pred_d / wl / "champsim.out")
+        p = parse_ipc(pred_d / wl / "champsim.out")
         if p is not None:
             sp[wl] = (p / b - 1) * 100
     return sp

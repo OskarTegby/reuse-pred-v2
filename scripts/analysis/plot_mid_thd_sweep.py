@@ -22,28 +22,14 @@ import numpy as np
 from matplotlib.ticker import FixedFormatter, FixedLocator
 
 from spec_weights import benchmark_weighted_geomean_pct
-
-
-def _parse_ipc(path: Path):
-    in_roi = False
-    try:
-        for line in path.read_text(errors="replace").splitlines():
-            if "Region of Interest Statistics" in line:
-                in_roi = True
-            if in_roi and "cumulative IPC:" in line:
-                m = re.search(r"cumulative IPC:\s+([0-9.]+)", line)
-                if m:
-                    return float(m.group(1))
-    except OSError:
-        pass
-    return None
+from champsim_utils import parse_ipc
 
 
 def _geomean_speedup(sweep_dir: Path, n: int):
     lru_dir = sweep_dir / "lru"
     baselines: dict = {}
     for f in sorted(lru_dir.glob("*/champsim.out")):
-        v = _parse_ipc(f)
+        v = parse_ipc(f)
         if v is not None:
             baselines[f.parent.name] = v
     if not baselines:
@@ -53,7 +39,7 @@ def _geomean_speedup(sweep_dir: Path, n: int):
         return None
     ratios: dict = {}
     for wl, b in baselines.items():
-        v = _parse_ipc(thd_dir / wl / "champsim.out")
+        v = parse_ipc(thd_dir / wl / "champsim.out")
         if v is not None and b > 0:
             ratios[wl] = v / b
     if not ratios:

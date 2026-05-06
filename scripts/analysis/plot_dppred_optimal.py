@@ -40,6 +40,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 
 from spec_weights import benchmark_weighted_geomean_pct, SPEC_WEIGHTS, benchmark_name
+from champsim_utils import parse_ipc
 
 SUITE_LABELS = {
     "dpc3":   "SPEC CPU2006 (DPC3)",
@@ -62,23 +63,6 @@ def _short_label(name: str, suite: str) -> str:
     if suite == "dpc3" and "." in name:
         return name.split(".", 1)[1]   # "600.perlbench_s" → "perlbench_s"
     return name
-
-
-# ── IPC parsing ───────────────────────────────────────────────────────────────
-
-def _parse_ipc(path: Path):
-    in_roi = False
-    try:
-        for line in path.read_text(errors="replace").splitlines():
-            if "Region of Interest Statistics" in line:
-                in_roi = True
-            if in_roi and "cumulative IPC:" in line:
-                m = re.search(r"cumulative IPC:\s+([0-9.]+)", line)
-                if m:
-                    return float(m.group(1))
-    except OSError:
-        pass
-    return None
 
 
 # ── Aggregation ───────────────────────────────────────────────────────────────
@@ -149,7 +133,7 @@ def main():
     if not bl_dir.is_dir():
         sys.exit(f"ERROR: baseline/ not found under {base}")
     traces    = sorted(d.name for d in bl_dir.iterdir() if d.is_dir())
-    baselines = {t: _parse_ipc(bl_dir / t / "champsim.out")
+    baselines = {t: parse_ipc(bl_dir / t / "champsim.out")
                  for t in traces}
     baselines = {t: v for t, v in baselines.items() if v is not None}
 
@@ -164,7 +148,7 @@ def main():
     for t, bi in baselines.items():
         grid[t] = {}
         for key in all_keys + [default_key]:
-            v = _parse_ipc(base / _cfg_dir(key) / t / "champsim.out")
+            v = parse_ipc(base / _cfg_dir(key) / t / "champsim.out")
             if v is not None and bi > 0:
                 grid[t][key] = (v / bi - 1.0) * 100.0
 
@@ -174,7 +158,7 @@ def main():
         for t, bi in baselines.items():
             dp_grid[t] = {}
             for key in nr + [dp_default_key]:
-                v = _parse_ipc(base / _cfg_dir(key) / t / "champsim.out")
+                v = parse_ipc(base / _cfg_dir(key) / t / "champsim.out")
                 if v is not None and bi > 0:
                     dp_grid[t][key] = (v / bi - 1.0) * 100.0
 

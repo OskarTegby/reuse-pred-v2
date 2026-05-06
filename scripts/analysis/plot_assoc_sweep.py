@@ -35,6 +35,7 @@ import matplotlib.patches as mpatches
 import numpy as np
 
 from spec_weights import benchmark_weighted_geomean_pct
+from champsim_utils import find_test_dir, parse_ipc
 
 
 LRU_COLOR  = "#1a9850"
@@ -43,22 +44,6 @@ HASH_COLOR = "#d73027"
 
 
 # ── Parsing ───────────────────────────────────────────────────────────────────
-
-def parse_ipc(path):
-    in_roi = False
-    try:
-        with open(path) as f:
-            for line in f:
-                if "Region of Interest Statistics" in line:
-                    in_roi = True
-                if in_roi and "cumulative IPC:" in line:
-                    m = re.search(r"cumulative IPC:\s+([0-9.]+)", line)
-                    if m:
-                        return float(m.group(1))
-    except OSError:
-        pass
-    return None
-
 
 def speedup_stats(exp_dir, baseline_dir):
     """Return (geomean_pct, min_pct, max_pct) of IPC speedup across all traces.
@@ -214,17 +199,6 @@ def plot_table_sweep(results_dir, prefix, label, out_path):
     print(f"  Written: {out_path}")
 
 
-def find_test_dir(suite):
-    """Return the most recent results/{suite}_assoc_*_test directory."""
-    import glob
-    pattern = os.path.join("results", f"{suite}_assoc_*_test")
-    matches = sorted(glob.glob(pattern))
-    if not matches:
-        print(f"No _test results found matching {pattern}", file=sys.stderr)
-        sys.exit(1)
-    return matches[-1]
-
-
 def main():
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -235,7 +209,7 @@ def main():
     ap.add_argument("--out-dir", default=None, help="Output directory for PNGs")
     args = ap.parse_args()
 
-    results_dir = (find_test_dir(args.results_dir) if args.test
+    results_dir = (find_test_dir(args.results_dir, "assoc") if args.test
                    else args.results_dir.rstrip("/"))
     out_dir = args.out_dir or results_dir
     os.makedirs(out_dir, exist_ok=True)
