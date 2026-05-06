@@ -33,6 +33,7 @@ import argparse
 import os
 import re
 import sys
+from pathlib import Path
 
 import matplotlib.colors as mcolors
 import matplotlib.pyplot as plt
@@ -200,90 +201,106 @@ METRIC_COLORS = {
     "total_bypass_pct": "#762a83",  # purple (family 4)
 }
 
-# ── Aggregation helpers ───────────────────────────────────────────────────────
+# ── SimPoint weights ──────────────────────────────────────────────────────────
+
+_DEFAULT_WEIGHTS_DIR = (
+    Path(__file__).parents[2] / ".." / "ChampSim-dev" / "trace-files" / "SPEC2006_weights"
+).resolve()
+
+
+def _load_spec_weights(weights_dir: Path) -> "dict[str, float]":
+    result: dict = {}
+    if not weights_dir.is_dir():
+        return result
+    for bm_dir in sorted(weights_dir.iterdir()):
+        if not bm_dir.is_dir():
+            continue
+        w_file = bm_dir / "weights.out"
+        s_file = bm_dir / "simpoints.out"
+        if not (w_file.exists() and s_file.exists()):
+            continue
+        w_vals = [float(x) for x in w_file.read_text().split()]
+        s_ids  = [int(x)   for x in s_file.read_text().split()]
+        for sp_id, w in zip(s_ids, w_vals):
+            result[f"{bm_dir.name}-{sp_id}B"] = w
+    return result
+
 
 def _benchmark_name(wl: str) -> str:
-    """Strip simpoint suffix so all simpoints of one benchmark share a key.
-    SPEC: 600.perlbench_s-1273B → 600.perlbench_s
-    Google: arizona_0000 → arizona
-    Other (QMM, etc.): returned unchanged.
-    """
+    """Strip SPEC simpoint suffix: 602.gcc_s-734B -> 602.gcc_s."""
     m = re.match(r'^(.+)-\d+[A-Z]+$', wl)
-    if m:
-        return m.group(1)
-    m = re.match(r'^(.+)_\d{4}$', wl)
-    if m:
-        return m.group(1)
-    return wl
+    return m.group(1) if m else wl
 
 
-def geomean_ratios(pct_list):
-    """Geomean of a list of % speedup/reduction values (ratio-space average)."""
-    ratios = [v / 100.0 + 1.0 for v in pct_list if not np.isnan(v)]
-    if not ratios:
-        return float("nan")
-    return (np.exp(np.mean(np.log(ratios))) - 1.0) * 100.0
+_SPEC_WEIGHTS: "dict[str, float]" = _load_spec_weights(_DEFAULT_WEIGHTS_DIR)
 
 
-def geomean_ratios_grouped(pct_by_trace: dict) -> float:
-    """Benchmark-weighted geomean of % speedup values.
+# ── Aggregation helpers ───────────────────────────────────────────────────────
 
-    Groups traces by benchmark, takes geomean within each group, then geomean
-    across groups so SPEC simpoint count doesn't skew the aggregate.
+def _benchmark_weighted_geomean_pct(ratios_by_wl: "dict[str, float]") -> float:
+    """Simpoint-weighted geomean speedup (%).
+
+    For SPEC traces with weights: weighted geomean within each benchmark
+    (re-normalised for missing simpoints), then equal-weight geomean across
+    benchmarks.  For other traces: flat equal-weight geomean.
+    ratios_by_wl values are raw ratios (ipc_new/ipc_base), not percentages.
     """
-    from collections import defaultdict
-    groups: dict = defaultdict(list)
-    for trace, pct in pct_by_trace.items():
-        if not np.isnan(pct):
-            groups[_benchmark_name(trace)].append(pct / 100.0 + 1.0)
-    if not groups:
+    groups: dict = {}
+    for wl, r in ratios_by_wl.items():
+        groups.setdefault(_benchmark_name(wl), []).append(wl)
+    per_bench = []
+    for wl_list in groups.values():
+        if _SPEC_WEIGHTS:
+            pairs = [(ratios_by_wl[wl], _SPEC_WEIGHTS.get(wl)) for wl in wl_list]
+            if any(w is not None for _, w in pairs):
+                pairs = [(r, w) for r, w in pairs if w is not None and r > 0]
+                total_w = sum(w for _, w in pairs)
+                if total_w > 0:
+                    per_bench.append(
+                        float(np.exp(sum((w / total_w) * np.log(r) for r, w in pairs))))
+                    continue
+        vals = [ratios_by_wl[wl] for wl in wl_list if ratios_by_wl[wl] > 0]
+        if vals:
+            per_bench.append(float(np.exp(np.mean(np.log(vals)))))
+    if not per_bench:
         return float("nan")
-    bench_means = [np.exp(np.mean(np.log(rs))) for rs in groups.values() if rs]
-    if not bench_means:
-        return float("nan")
-    return (np.exp(np.mean(np.log(bench_means))) - 1.0) * 100.0
+    return (float(np.exp(np.mean(np.log([r for r in per_bench if r > 0])))) - 1) * 100
 
 
-def geomean_abs_grouped(abs_by_trace: dict) -> float:
-    """Benchmark-weighted geomean of absolute values (e.g. MPKI)."""
-    from collections import defaultdict
-    groups: dict = defaultdict(list)
-    for trace, v in abs_by_trace.items():
+def _benchmark_weighted_geomean_abs(vals_by_wl: "dict[str, float]") -> float:
+    """Benchmark-weighted geomean of absolute values (e.g. MPKI).
+
+    No simpoint weights applied — absolute values are aggregated with
+    equal weight within each benchmark group, then geomean across groups.
+    """
+    groups: dict = {}
+    for wl, v in vals_by_wl.items():
         if not np.isnan(v) and v > 0:
-            groups[_benchmark_name(trace)].append(v)
+            groups.setdefault(_benchmark_name(wl), []).append(v)
     if not groups:
         return float("nan")
-    bench_means = [np.exp(np.mean(np.log(vs))) for vs in groups.values() if vs]
-    if not bench_means:
-        return float("nan")
-    return np.exp(np.mean(np.log(bench_means)))
+    bench_means = [float(np.exp(np.mean(np.log(vs)))) for vs in groups.values() if vs]
+    return float(np.exp(np.mean(np.log(bench_means)))) if bench_means else float("nan")
 
 
-def mean_pct_grouped(pct_by_trace: dict) -> float:
+def _benchmark_weighted_mean_pct(pct_by_wl: "dict[str, float]") -> float:
     """Benchmark-weighted arithmetic mean for bypass percentages (can be 0%)."""
-    from collections import defaultdict
-    groups: dict = defaultdict(list)
-    for trace, v in pct_by_trace.items():
+    groups: dict = {}
+    for wl, v in pct_by_wl.items():
         if not np.isnan(v):
-            groups[_benchmark_name(trace)].append(v)
+            groups.setdefault(_benchmark_name(wl), []).append(v)
     if not groups:
         return float("nan")
     bench_means = [float(np.mean(vs)) for vs in groups.values() if vs]
     return float(np.mean(bench_means)) if bench_means else float("nan")
 
 
-def geomean_abs(vals):
-    """Geomean of a list of absolute values (e.g. MPKI)."""
-    pos = [v for v in vals if not np.isnan(v) and v > 0]
-    if not pos:
+def geomean_ratios(pct_list):
+    """Geomean of a list of % speedup values (kept for single-trace paths)."""
+    ratios = [v / 100.0 + 1.0 for v in pct_list if not np.isnan(v)]
+    if not ratios:
         return float("nan")
-    return np.exp(np.mean(np.log(pos)))
-
-
-def mean_pct(vals):
-    """Arithmetic mean for bypass percentages (geomean breaks at 0%)."""
-    valid = [v for v in vals if not np.isnan(v)]
-    return float(np.mean(valid)) if valid else float("nan")
+    return (np.exp(np.mean(np.log(ratios))) - 1.0) * 100.0
 
 
 # ── Plot helpers ──────────────────────────────────────────────────────────────
@@ -426,17 +443,20 @@ def main():
             return val
 
     def aggregate(vals_by_trace: dict):
-        """Benchmark-weighted aggregate of per-trace values."""
+        """Simpoint-weighted aggregate of per-trace values."""
         if not vals_by_trace:
             return float("nan")
         if metric == "speedup_range":
             return max(vals_by_trace.values()) - min(vals_by_trace.values())
         elif metric in ("ipc", "mpki"):
-            return geomean_ratios_grouped(vals_by_trace)
+            # vals are already % speedup; convert to ratios for weighted geomean
+            ratios = {t: v / 100.0 + 1.0 for t, v in vals_by_trace.items()
+                      if not np.isnan(v)}
+            return _benchmark_weighted_geomean_pct(ratios)
         elif metric == "mpki_abs":
-            return geomean_abs_grouped(vals_by_trace)
+            return _benchmark_weighted_geomean_abs(vals_by_trace)
         else:  # stlb_bypass_pct, total_bypass_pct — arithmetic mean (can be 0%)
-            return mean_pct_grouped(vals_by_trace)
+            return _benchmark_weighted_mean_pct(vals_by_trace)
 
     def collect(config_dir):
         vals: dict = {}

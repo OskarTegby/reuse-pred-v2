@@ -45,42 +45,74 @@ def _parse_ipc(path: Path):
     return None
 
 
+# ── SimPoint weights ──────────────────────────────────────────────────────────
+
+_DEFAULT_WEIGHTS_DIR = (
+    Path(__file__).parents[2] / ".." / "ChampSim-dev" / "trace-files" / "SPEC2006_weights"
+).resolve()
+
+
+def _load_spec_weights(weights_dir: Path) -> "dict[str, float]":
+    result: dict = {}
+    if not weights_dir.is_dir():
+        return result
+    for bm_dir in sorted(weights_dir.iterdir()):
+        if not bm_dir.is_dir():
+            continue
+        w_file = bm_dir / "weights.out"
+        s_file = bm_dir / "simpoints.out"
+        if not (w_file.exists() and s_file.exists()):
+            continue
+        w_vals = [float(x) for x in w_file.read_text().split()]
+        s_ids  = [int(x)   for x in s_file.read_text().split()]
+        for sp_id, w in zip(s_ids, w_vals):
+            result[f"{bm_dir.name}-{sp_id}B"] = w
+    return result
+
+
 def _benchmark_name(wl: str) -> str:
-    """Strip simpoint suffix so all simpoints of one benchmark share a key.
-    SPEC: 600.perlbench_s-1273B → 600.perlbench_s
-    Google: arizona_0000 → arizona
-    Other (QMM, etc.): returned unchanged.
-    """
+    """Strip SPEC simpoint suffix: 602.gcc_s-734B -> 602.gcc_s."""
     m = re.match(r'^(.+)-\d+[A-Z]+$', wl)
-    if m:
-        return m.group(1)
-    m = re.match(r'^(.+)_\d{4}$', wl)
-    if m:
-        return m.group(1)
-    return wl
+    return m.group(1) if m else wl
 
 
-def _benchmark_geomean_speedup(ratios_by_trace: dict) -> float:
-    """Benchmark-weighted geomean IPC speedup (%).
+_SPEC_WEIGHTS: "dict[str, float]" = _load_spec_weights(_DEFAULT_WEIGHTS_DIR)
 
-    Groups simpoints by benchmark, takes geomean within each group, then
-    geomean across groups so SPEC simpoint count doesn't skew the result.
+
+def _benchmark_weighted_geomean_pct(ratios_by_wl: "dict[str, float]") -> float:
+    """Simpoint-weighted geomean speedup (%).
+
+    For SPEC traces with weights: weighted geomean within each benchmark
+    (re-normalised for missing simpoints), then equal-weight geomean across
+    benchmarks.  For other traces: flat equal-weight geomean.
+    ratios_by_wl values are raw ratios (ipc_new/ipc_base), not percentages.
     """
-    from collections import defaultdict
-    groups: dict = defaultdict(list)
-    for t, r in ratios_by_trace.items():
-        if r > 0:
-            groups[_benchmark_name(t)].append(r)
-    if not groups:
+    groups: dict = {}
+    for wl, r in ratios_by_wl.items():
+        groups.setdefault(_benchmark_name(wl), []).append(wl)
+    per_bench = []
+    for wl_list in groups.values():
+        if _SPEC_WEIGHTS:
+            pairs = [(ratios_by_wl[wl], _SPEC_WEIGHTS.get(wl)) for wl in wl_list]
+            if any(w is not None for _, w in pairs):
+                pairs = [(r, w) for r, w in pairs if w is not None and r > 0]
+                total_w = sum(w for _, w in pairs)
+                if total_w > 0:
+                    per_bench.append(
+                        float(np.exp(sum((w / total_w) * np.log(r) for r, w in pairs))))
+                    continue
+        vals = [ratios_by_wl[wl] for wl in wl_list if ratios_by_wl[wl] > 0]
+        if vals:
+            per_bench.append(float(np.exp(np.mean(np.log(vals)))))
+    if not per_bench:
         return float("nan")
-    bench_means = [float(np.exp(np.mean(np.log(rs)))) for rs in groups.values()]
-    return (float(np.exp(np.mean(np.log(bench_means)))) - 1.0) * 100.0
+    return (float(np.exp(np.mean(np.log([r for r in per_bench if r > 0])))) - 1) * 100
 
 
 # ── Heatmap data ──────────────────────────────────────────────────────────────
 
 def _heatmap_data(base: Path) -> np.ndarray:
-    """Return 7×7 benchmark-weighted geomean IPC speedup (%) grid."""
+    """Return 7×7 simpoint-weighted geomean IPC speedup (%) grid."""
     bl_dir = base / "baseline"
     traces = sorted(d.name for d in bl_dir.iterdir() if d.is_dir())
     baselines = {t: _parse_ipc(bl_dir / t / "champsim.out") for t in traces}
@@ -96,7 +128,7 @@ def _heatmap_data(base: Path) -> np.ndarray:
                 if v is not None and bi > 0:
                     ratios[t] = v / bi
             if ratios:
-                data[pthd, bthd] = _benchmark_geomean_speedup(ratios)
+                data[pthd, bthd] = _benchmark_weighted_geomean_pct(ratios)
     return data
 
 
