@@ -57,55 +57,12 @@ CONFIGS = [
     ),
 ]
 
-# ── Simpoint weights ──────────────────────────────────────────────────────────
-_DEFAULT_WEIGHTS_DIR = (
-    Path(__file__).parents[2] / ".." / "ChampSim-dev" / "trace-files" / "SPEC2006_weights"
-).resolve()
-
-
-def _load_spec_weights(d: Path) -> dict:
-    result: dict = {}
-    if not d.is_dir():
-        return result
-    for bm in sorted(d.iterdir()):
-        wf = bm / "weights.out"; sf = bm / "simpoints.out"
-        if not (wf.exists() and sf.exists()):
-            continue
-        for sp_id, w in zip([int(x) for x in sf.read_text().split()],
-                            [float(x) for x in wf.read_text().split()]):
-            result[f"{bm.name}-{sp_id}B"] = w
-    return result
-
-
-_SPEC_WEIGHTS = _load_spec_weights(_DEFAULT_WEIGHTS_DIR)
-
-
-def _bm_name(wl: str) -> str:
-    m = re.match(r'^(.+)-\d+[A-Z]+$', wl)
-    return m.group(1) if m else wl
+from spec_weights import benchmark_weighted_geomean_pct
 
 
 def _geomean_pct(sp: dict) -> float:
-    groups: dict = {}
-    for wl, v in sp.items():
-        groups.setdefault(_bm_name(wl), []).append(wl)
-    per_bench = []
-    for wls in groups.values():
-        ratios = {wl: sp[wl] / 100 + 1 for wl in wls}
-        if _SPEC_WEIGHTS:
-            pairs = [(ratios[wl], _SPEC_WEIGHTS.get(wl)) for wl in wls]
-            if any(w is not None for _, w in pairs):
-                pairs = [(r, w) for r, w in pairs if w is not None and r > 0]
-                tw = sum(w for _, w in pairs)
-                if tw > 0:
-                    per_bench.append(float(np.exp(sum(w / tw * np.log(r) for r, w in pairs))))
-                    continue
-        vals = [ratios[wl] for wl in wls if ratios[wl] > 0]
-        if vals:
-            per_bench.append(float(np.exp(np.mean(np.log(vals)))))
-    if not per_bench:
-        return float("nan")
-    return (float(np.exp(np.mean(np.log([r for r in per_bench if r > 0])))) - 1) * 100
+    ratios = {wl: v / 100 + 1 for wl, v in sp.items()}
+    return benchmark_weighted_geomean_pct(ratios)
 
 
 # ── Parsing ───────────────────────────────────────────────────────────────────

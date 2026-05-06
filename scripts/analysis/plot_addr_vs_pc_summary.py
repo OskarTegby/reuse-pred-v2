@@ -20,62 +20,7 @@ import matplotlib.pyplot as plt
 import matplotlib.ticker as mticker
 import numpy as np
 
-# ── Simpoint weights ──────────────────────────────────────────────────────────
-
-_DEFAULT_WEIGHTS_DIR = (
-    Path(__file__).parents[2] / ".." / "ChampSim-dev" / "trace-files" / "SPEC2006_weights"
-).resolve()
-
-
-def _load_spec_weights(weights_dir: Path) -> "dict[str, float]":
-    result: dict = {}
-    if not weights_dir.is_dir():
-        return result
-    for bm_dir in sorted(weights_dir.iterdir()):
-        if not bm_dir.is_dir():
-            continue
-        w_file = bm_dir / "weights.out"
-        s_file = bm_dir / "simpoints.out"
-        if not (w_file.exists() and s_file.exists()):
-            continue
-        w_vals = [float(x) for x in w_file.read_text().split()]
-        s_ids  = [int(x)   for x in s_file.read_text().split()]
-        for sp_id, w in zip(s_ids, w_vals):
-            result[f"{bm_dir.name}-{sp_id}B"] = w
-    return result
-
-
-def _benchmark_name(wl: str) -> str:
-    m = re.match(r'^(.+)-\d+[A-Z]+$', wl)
-    return m.group(1) if m else wl
-
-
-_SPEC_WEIGHTS: "dict[str, float]" = _load_spec_weights(_DEFAULT_WEIGHTS_DIR)
-
-
-def _benchmark_weighted_geomean_pct(ratios_by_wl: "dict[str, float]") -> "float | None":
-    """Benchmark-weighted geomean IPC speedup (%).  ratios = ipc_new/ipc_base."""
-    groups: dict = {}
-    for wl, r in ratios_by_wl.items():
-        groups.setdefault(_benchmark_name(wl), []).append(wl)
-    per_bench = []
-    for wl_list in groups.values():
-        if _SPEC_WEIGHTS:
-            pairs = [(ratios_by_wl[wl], _SPEC_WEIGHTS.get(wl)) for wl in wl_list]
-            if any(w is not None for _, w in pairs):
-                pairs = [(r, w) for r, w in pairs if w is not None and r > 0]
-                total_w = sum(w for _, w in pairs)
-                if total_w > 0:
-                    per_bench.append(
-                        float(np.exp(sum((w / total_w) * np.log(r) for r, w in pairs))))
-                    continue
-        vals = [ratios_by_wl[wl] for wl in wl_list if ratios_by_wl[wl] > 0]
-        if vals:
-            per_bench.append(float(np.exp(np.mean(np.log(vals)))))
-    if not per_bench:
-        return None
-    return (float(np.exp(np.mean(np.log([r for r in per_bench if r > 0])))) - 1) * 100
-
+from spec_weights import benchmark_weighted_geomean_pct
 
 BASE = Path("results")
 
@@ -156,7 +101,7 @@ def best_geomean(sweep_dir: Path):
                 ratios_by_wl[wl] = v / b
         if not ratios_by_wl:
             continue
-        gm = _benchmark_weighted_geomean_pct(ratios_by_wl)
+        gm = benchmark_weighted_geomean_pct(ratios_by_wl)
         if gm is not None and gm > best_gm:
             best_gm, best_n = gm, n
     return best_n, best_gm if best_n is not None else None

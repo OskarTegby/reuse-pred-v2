@@ -30,37 +30,7 @@ import matplotlib.pyplot as plt
 import matplotlib.ticker as mticker
 import numpy as np
 
-# ── Simpoint weights ──────────────────────────────────────────────────────────
-
-_DEFAULT_WEIGHTS_DIR = (
-    Path(__file__).parents[2] / ".." / "ChampSim-dev" / "trace-files" / "SPEC2006_weights"
-).resolve()
-
-
-def _load_spec_weights(weights_dir: Path) -> "dict[str, float]":
-    result: dict = {}
-    if not weights_dir.is_dir():
-        return result
-    for bm_dir in sorted(weights_dir.iterdir()):
-        if not bm_dir.is_dir():
-            continue
-        w_file = bm_dir / "weights.out"
-        s_file = bm_dir / "simpoints.out"
-        if not (w_file.exists() and s_file.exists()):
-            continue
-        w_vals = [float(x) for x in w_file.read_text().split()]
-        s_ids  = [int(x)   for x in s_file.read_text().split()]
-        for sp_id, w in zip(s_ids, w_vals):
-            result[f"{bm_dir.name}-{sp_id}B"] = w
-    return result
-
-
-def _spec_benchmark_name(wl: str) -> str:
-    m = re.match(r'^(.+)-\d+[A-Z]+$', wl)
-    return m.group(1) if m else wl
-
-
-_SPEC_WEIGHTS: "dict[str, float]" = _load_spec_weights(_DEFAULT_WEIGHTS_DIR)
+from spec_weights import benchmark_weighted_geomean_pct, SPEC_WEIGHTS, benchmark_name
 
 # ── Palette ───────────────────────────────────────────────────────────────────
 
@@ -166,11 +136,11 @@ def suite_geomean_fracs(rows, cache):
         by_wl = dict(zip(names, fracs))
         groups: dict = {}
         for w in by_wl:
-            groups.setdefault(_spec_benchmark_name(w), []).append(w)
+            groups.setdefault(benchmark_name(w), []).append(w)
         per_bench = []
         for wl_list in groups.values():
-            if _SPEC_WEIGHTS:
-                pairs = [(by_wl[w], _SPEC_WEIGHTS.get(w)) for w in wl_list]
+            if SPEC_WEIGHTS:
+                pairs = [(by_wl[w], SPEC_WEIGHTS.get(w)) for w in wl_list]
                 if any(wgt is not None for _, wgt in pairs):
                     pairs = [(v, wgt) for v, wgt in pairs if wgt is not None]
                     total_w = sum(wgt for _, wgt in pairs)

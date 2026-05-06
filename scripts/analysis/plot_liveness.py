@@ -28,7 +28,6 @@ import argparse
 import os
 import re
 import sys
-from pathlib import Path
 
 import matplotlib
 matplotlib.use("Agg")
@@ -36,37 +35,7 @@ import matplotlib.pyplot as plt
 import matplotlib.ticker as mticker
 import numpy as np
 
-# ── Simpoint weights ──────────────────────────────────────────────────────────
-
-_DEFAULT_WEIGHTS_DIR = (
-    Path(__file__).parents[2] / ".." / "ChampSim-dev" / "trace-files" / "SPEC2006_weights"
-).resolve()
-
-
-def _load_spec_weights(weights_dir: Path) -> "dict[str, float]":
-    result: dict = {}
-    if not weights_dir.is_dir():
-        return result
-    for bm_dir in sorted(weights_dir.iterdir()):
-        if not bm_dir.is_dir():
-            continue
-        w_file = bm_dir / "weights.out"
-        s_file = bm_dir / "simpoints.out"
-        if not (w_file.exists() and s_file.exists()):
-            continue
-        w_vals = [float(x) for x in w_file.read_text().split()]
-        s_ids  = [int(x)   for x in s_file.read_text().split()]
-        for sp_id, w in zip(s_ids, w_vals):
-            result[f"{bm_dir.name}-{sp_id}B"] = w
-    return result
-
-
-def _benchmark_name(wl: str) -> str:
-    m = re.match(r'^(.+)-\d+[A-Z]+$', wl)
-    return m.group(1) if m else wl
-
-
-_SPEC_WEIGHTS: "dict[str, float]" = _load_spec_weights(_DEFAULT_WEIGHTS_DIR)
+from spec_weights import benchmark_weighted_geomean_pct, SPEC_WEIGHTS, benchmark_name
 
 MAX_WORKLOADS = 25   # maximum per-workload bars shown in multi-workload plots
 
@@ -108,7 +77,7 @@ def _aggregate_spec_benchmarks(rows):
     """
     groups: dict = {}
     for wl, data in rows:
-        groups.setdefault(_benchmark_name(wl), []).append((wl, data))
+        groups.setdefault(benchmark_name(wl), []).append((wl, data))
 
     result = []
     for bm_name in sorted(groups.keys()):
@@ -129,14 +98,14 @@ def _aggregate_spec_benchmarks(rows):
                 tot = d.get("total", 0)
                 if tot == 0:
                     continue
-                w = _SPEC_WEIGHTS.get(wl)
+                w = SPEC_WEIGHTS.get(wl)
                 sp_fracs.append((d.get("doa", 0) / tot,
                                  d.get("mostly_dead", 0) / tot,
                                  d.get("mostly_alive", 0) / tot, w))
             if not sp_fracs:
                 continue
             w_valid = [(d, m, a, w) for d, m, a, w in sp_fracs if w is not None]
-            if w_valid and _SPEC_WEIGHTS:
+            if w_valid and SPEC_WEIGHTS:
                 total_w = sum(w for _, _, _, w in w_valid)
                 if total_w > 0:
                     avg_doa = sum(w / total_w * d for d, _, _, w in w_valid)
@@ -174,11 +143,11 @@ def _benchmark_weighted_geomean_frac(trace_names, fracs) -> float:
     by_wl = dict(zip(trace_names, fracs))
     groups: dict = {}
     for wl in by_wl:
-        groups.setdefault(_benchmark_name(wl), []).append(wl)
+        groups.setdefault(benchmark_name(wl), []).append(wl)
     per_bench = []
     for wl_list in groups.values():
-        if _SPEC_WEIGHTS:
-            pairs = [(by_wl[wl], _SPEC_WEIGHTS.get(wl)) for wl in wl_list]
+        if SPEC_WEIGHTS:
+            pairs = [(by_wl[wl], SPEC_WEIGHTS.get(wl)) for wl in wl_list]
             if any(w is not None for _, w in pairs):
                 pairs = [(v, w) for v, w in pairs if w is not None]
                 total_w = sum(w for _, w in pairs)
