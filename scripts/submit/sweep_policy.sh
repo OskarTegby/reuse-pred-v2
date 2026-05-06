@@ -51,6 +51,7 @@ PROJECT_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 # ── Argument parsing ──────────────────────────────────────────────────────────
 token=""
 DEBUG=0
+TEST=0
 WITH_BASE=1          # include the 8 no-prefetch configs (disable with --no-base)
 WITH_PREF=0
 WITH_PAPER_PREF=0
@@ -64,6 +65,7 @@ MID_PROMOTE_VAL=0
 while [[ $# -gt 0 ]]; do
   case "$1" in
     maz|mazumdar|qmm|dpc3|google|test) token="${1,,}"; shift ;;
+    --test)         TEST=1; shift ;;
     --debug)        DEBUG=1; shift ;;
     --no-base)      WITH_BASE=0; shift ;;
     --pref)         WITH_PREF=1; shift ;;
@@ -80,13 +82,13 @@ while [[ $# -gt 0 ]]; do
       esac
       shift 2 ;;
     *) echo "Unknown argument: $1" >&2
-       echo "Usage: $0 {maz|qmm|dpc3|google|test} [--debug] [--no-base] [--pref] [--paper-pref] [--warmup N] [--sim N] [--mid-thd N] [--mid-key addr|pc] [--mid-promote]" >&2
+       echo "Usage: $0 {maz|qmm|dpc3|google|test} [--test] [--debug] [--no-base] [--pref] [--paper-pref] [--warmup N] [--sim N] [--mid-thd N] [--mid-key addr|pc] [--mid-promote]" >&2
        exit 2 ;;
   esac
 done
 
 if [ -z "$token" ]; then
-  echo "Usage: $0 {maz|qmm|dpc3|google|test} [--debug] [--no-base] [--pref] [--paper-pref] [--warmup N] [--sim N] [--mid-thd N] [--mid-key addr|pc] [--mid-promote]" >&2
+  echo "Usage: $0 {maz|qmm|dpc3|google|test} [--test] [--debug] [--no-base] [--pref] [--paper-pref] [--warmup N] [--sim N] [--mid-thd N] [--mid-key addr|pc] [--mid-promote]" >&2
   exit 2
 fi
 
@@ -128,6 +130,7 @@ esac
 
 [ -n "$WARMUP_OVERRIDE" ] && WARMUP="$WARMUP_OVERRIDE"
 [ -n "$SIM_OVERRIDE" ]    && SIM="$SIM_OVERRIDE"
+[ "$TEST" -eq 1 ] && { WARMUP=5000000; SIM=10000000; DEBUG=1; }
 
 # ── Resolve trace list ────────────────────────────────────────────────────────
 mapfile -t TRACES < <(find "${TRACE_DIR}" -name "*.${TRACE_EXT}" | sort)
@@ -139,14 +142,13 @@ fi
 
 if [ "$DEBUG" -eq 1 ]; then
   TASK_RANGE="1-1"
-  MODE_TAG="_debug"
 else
   TASK_RANGE="1-${N}"
-  MODE_TAG=""
 fi
 
 DATE=$(date +%Y%m%d_%H%M)
-BASE_LABEL="${token}_pol_${DATE}${MODE_TAG}"
+TEST_TAG=$( [ "$TEST" -eq 1 ] && echo "_test" || echo "" )
+BASE_LABEL="${token}_pol_${DATE}${TEST_TAG}"
 
 LOG_DIR="${PROJECT_ROOT}/logs/${BASE_LABEL}"
 mkdir -p "$LOG_DIR"
