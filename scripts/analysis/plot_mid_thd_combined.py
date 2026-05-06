@@ -18,39 +18,7 @@ import matplotlib.pyplot as plt
 import matplotlib.ticker as mticker
 import numpy as np
 
-# ── Simpoint weights ──────────────────────────────────────────────────────────
-
-_DEFAULT_WEIGHTS_DIR = (
-    Path(__file__).parents[2] / ".." / "ChampSim-dev" / "trace-files" / "SPEC2006_weights"
-).resolve()
-
-
-def _load_spec_weights(weights_dir: Path) -> "dict[str, float]":
-    """Return {trace_name: weight} from weights_dir/{bm}/{weights.out,simpoints.out}."""
-    result: dict = {}
-    if not weights_dir.is_dir():
-        return result
-    for bm_dir in sorted(weights_dir.iterdir()):
-        if not bm_dir.is_dir():
-            continue
-        w_file = bm_dir / "weights.out"
-        s_file = bm_dir / "simpoints.out"
-        if not (w_file.exists() and s_file.exists()):
-            continue
-        w_vals = [float(x) for x in w_file.read_text().split()]
-        s_ids  = [int(x)   for x in s_file.read_text().split()]
-        for sp_id, w in zip(s_ids, w_vals):
-            result[f"{bm_dir.name}-{sp_id}B"] = w
-    return result
-
-
-def _benchmark_name(wl: str) -> str:
-    """Strip SPEC simpoint suffix: 602.gcc_s-734B -> 602.gcc_s."""
-    m = re.match(r'^(.+)-\d+[A-Z]+$', wl)
-    return m.group(1) if m else wl
-
-
-_SPEC_WEIGHTS: "dict[str, float]" = _load_spec_weights(_DEFAULT_WEIGHTS_DIR)
+from spec_weights import benchmark_weighted_geomean_pct
 
 BASE = Path("results")
 
@@ -132,31 +100,7 @@ def geomean_speedup(sweep_dir: Path, n: int):
     if not ratios:
         return None
 
-    # Group by benchmark name (SPEC only; others each become their own group)
-    groups: dict = {}
-    for wl, r in ratios.items():
-        groups.setdefault(_benchmark_name(wl), []).append(wl)
-
-    per_bench = []
-    for wl_list in groups.values():
-        if _SPEC_WEIGHTS:
-            pairs = [(ratios[wl], _SPEC_WEIGHTS.get(wl)) for wl in wl_list]
-            if any(w is not None for _, w in pairs):
-                pairs = [(r, w) for r, w in pairs if w is not None and r > 0]
-                total_w = sum(w for _, w in pairs)
-                if total_w > 0:
-                    per_bench.append(
-                        float(np.exp(sum((w / total_w) * np.log(r) for r, w in pairs))))
-                    continue
-        # Fallback: equal-weight geomean within group
-        vals = [r for r in [ratios[wl] for wl in wl_list] if r > 0]
-        if vals:
-            per_bench.append(float(np.exp(np.mean(np.log(vals)))))
-
-    if not per_bench:
-        return None
-    # Geomean across benchmarks → convert to %
-    return (float(np.exp(np.mean(np.log([r for r in per_bench if r > 0])))) - 1) * 100
+    return benchmark_weighted_geomean_pct(ratios)
 
 
 def main():
