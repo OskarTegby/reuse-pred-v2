@@ -202,12 +202,74 @@ METRIC_COLORS = {
 
 # ── Aggregation helpers ───────────────────────────────────────────────────────
 
+def _benchmark_name(wl: str) -> str:
+    """Strip simpoint suffix so all simpoints of one benchmark share a key.
+    SPEC: 600.perlbench_s-1273B → 600.perlbench_s
+    Google: arizona_0000 → arizona
+    Other (QMM, etc.): returned unchanged.
+    """
+    m = re.match(r'^(.+)-\d+[A-Z]+$', wl)
+    if m:
+        return m.group(1)
+    m = re.match(r'^(.+)_\d{4}$', wl)
+    if m:
+        return m.group(1)
+    return wl
+
+
 def geomean_ratios(pct_list):
     """Geomean of a list of % speedup/reduction values (ratio-space average)."""
     ratios = [v / 100.0 + 1.0 for v in pct_list if not np.isnan(v)]
     if not ratios:
         return float("nan")
     return (np.exp(np.mean(np.log(ratios))) - 1.0) * 100.0
+
+
+def geomean_ratios_grouped(pct_by_trace: dict) -> float:
+    """Benchmark-weighted geomean of % speedup values.
+
+    Groups traces by benchmark, takes geomean within each group, then geomean
+    across groups so SPEC simpoint count doesn't skew the aggregate.
+    """
+    from collections import defaultdict
+    groups: dict = defaultdict(list)
+    for trace, pct in pct_by_trace.items():
+        if not np.isnan(pct):
+            groups[_benchmark_name(trace)].append(pct / 100.0 + 1.0)
+    if not groups:
+        return float("nan")
+    bench_means = [np.exp(np.mean(np.log(rs))) for rs in groups.values() if rs]
+    if not bench_means:
+        return float("nan")
+    return (np.exp(np.mean(np.log(bench_means))) - 1.0) * 100.0
+
+
+def geomean_abs_grouped(abs_by_trace: dict) -> float:
+    """Benchmark-weighted geomean of absolute values (e.g. MPKI)."""
+    from collections import defaultdict
+    groups: dict = defaultdict(list)
+    for trace, v in abs_by_trace.items():
+        if not np.isnan(v) and v > 0:
+            groups[_benchmark_name(trace)].append(v)
+    if not groups:
+        return float("nan")
+    bench_means = [np.exp(np.mean(np.log(vs))) for vs in groups.values() if vs]
+    if not bench_means:
+        return float("nan")
+    return np.exp(np.mean(np.log(bench_means)))
+
+
+def mean_pct_grouped(pct_by_trace: dict) -> float:
+    """Benchmark-weighted arithmetic mean for bypass percentages (can be 0%)."""
+    from collections import defaultdict
+    groups: dict = defaultdict(list)
+    for trace, v in pct_by_trace.items():
+        if not np.isnan(v):
+            groups[_benchmark_name(trace)].append(v)
+    if not groups:
+        return float("nan")
+    bench_means = [float(np.mean(vs)) for vs in groups.values() if vs]
+    return float(np.mean(bench_means)) if bench_means else float("nan")
 
 
 def geomean_abs(vals):
@@ -363,28 +425,28 @@ def main():
         else:  # mpki_abs, bypass_pct — absolute
             return val
 
-    def aggregate(vals):
-        """Aggregate a list of per-trace values into a single scalar."""
-        if not vals:
+    def aggregate(vals_by_trace: dict):
+        """Benchmark-weighted aggregate of per-trace values."""
+        if not vals_by_trace:
             return float("nan")
         if metric == "speedup_range":
-            return max(vals) - min(vals)
+            return max(vals_by_trace.values()) - min(vals_by_trace.values())
         elif metric in ("ipc", "mpki"):
-            return geomean_ratios(vals)
+            return geomean_ratios_grouped(vals_by_trace)
         elif metric == "mpki_abs":
-            return geomean_abs(vals)
-        else:  # stlb_bypass_pct, llc_bypass_pct — arithmetic mean (can be 0%)
-            return mean_pct(vals)
+            return geomean_abs_grouped(vals_by_trace)
+        else:  # stlb_bypass_pct, total_bypass_pct — arithmetic mean (can be 0%)
+            return mean_pct_grouped(vals_by_trace)
 
     def collect(config_dir):
-        vals = []
+        vals: dict = {}
         for t in valid_traces:
             v = config_value(config_dir, t)
             if v is None:
                 print(f"  WARNING: missing: {os.path.join(base, config_dir, t, 'champsim.out')}",
                       file=sys.stderr)
             else:
-                vals.append(v)
+                vals[t] = v
         return aggregate(vals)
 
     # ── 1-D dpPred-only chart ─────────────────────────────────────────────────

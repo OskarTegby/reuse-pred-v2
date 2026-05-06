@@ -58,20 +58,43 @@ def parse_ipc(path):
     return None
 
 
+def _benchmark_name(wl: str) -> str:
+    """Strip simpoint suffix so all simpoints of one benchmark share a key.
+    SPEC: 600.perlbench_s-1273B → 600.perlbench_s
+    Google: arizona_0000 → arizona
+    Other (QMM, etc.): returned unchanged.
+    """
+    m = re.match(r'^(.+)-\d+[A-Z]+$', wl)
+    if m:
+        return m.group(1)
+    m = re.match(r'^(.+)_\d{4}$', wl)
+    if m:
+        return m.group(1)
+    return wl
+
+
 def speedup_stats(exp_dir, baseline_dir):
-    """Return (geomean_pct, min_pct, max_pct) of IPC speedup across all traces."""
-    ratios = []
+    """Return (geomean_pct, min_pct, max_pct) of IPC speedup across all traces.
+
+    Geomean is benchmark-weighted: geomean within each benchmark group first,
+    then geomean across groups, so SPEC simpoint count doesn't skew results.
+    Min/max are still the extreme individual-trace values.
+    """
+    from collections import defaultdict
+    groups: dict = defaultdict(list)
     for trace in os.listdir(exp_dir):
         exp_file  = os.path.join(exp_dir, trace, "champsim.out")
         base_file = os.path.join(baseline_dir, trace, "champsim.out")
         ipc_exp  = parse_ipc(exp_file)
         ipc_base = parse_ipc(base_file)
         if ipc_exp is not None and ipc_base is not None and ipc_base > 0:
-            ratios.append(ipc_exp / ipc_base)
-    if not ratios:
+            groups[_benchmark_name(trace)].append(ipc_exp / ipc_base)
+    if not groups:
         return (float("nan"),) * 3
+    all_ratios = [r for rs in groups.values() for r in rs]
+    bench_means = [np.exp(np.mean(np.log(rs))) for rs in groups.values()]
     pct = lambda r: (r - 1.0) * 100.0
-    return pct(np.exp(np.mean(np.log(ratios)))), pct(min(ratios)), pct(max(ratios))
+    return pct(np.exp(np.mean(np.log(bench_means)))), pct(min(all_ratios)), pct(max(all_ratios))
 
 
 # ── Data collection ───────────────────────────────────────────────────────────

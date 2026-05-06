@@ -44,18 +44,40 @@ def parse_ipc(path):
     return None
 
 
+def _benchmark_name(wl: str) -> str:
+    """Strip simpoint suffix so all simpoints of one benchmark share a key.
+    SPEC: 600.perlbench_s-1273B → 600.perlbench_s
+    Google: arizona_0000 → arizona
+    Other (QMM, etc.): returned unchanged.
+    """
+    m = re.match(r'^(.+)-\d+[A-Z]+$', wl)
+    if m:
+        return m.group(1)
+    m = re.match(r'^(.+)_\d{4}$', wl)
+    if m:
+        return m.group(1)
+    return wl
+
+
 def geomean_speedup(exp_dir, baseline_dir):
-    ratios = []
+    """Benchmark-weighted geomean IPC speedup (%).
+
+    Groups simpoints by benchmark, takes geomean within each group, then
+    geomean across groups so SPEC simpoint count doesn't skew the result.
+    """
+    from collections import defaultdict
+    groups: dict = defaultdict(list)
     for trace in os.listdir(exp_dir):
         exp_file  = os.path.join(exp_dir, trace, "champsim.out")
         base_file = os.path.join(baseline_dir, trace, "champsim.out")
         ipc_exp  = parse_ipc(exp_file)
         ipc_base = parse_ipc(base_file)
         if ipc_exp is not None and ipc_base is not None and ipc_base > 0:
-            ratios.append(ipc_exp / ipc_base)
-    if not ratios:
+            groups[_benchmark_name(trace)].append(ipc_exp / ipc_base)
+    if not groups:
         return float("nan")
-    return (np.exp(np.mean(np.log(ratios))) - 1.0) * 100.0
+    bench_means = [np.exp(np.mean(np.log(rs))) for rs in groups.values()]
+    return (np.exp(np.mean(np.log(bench_means))) - 1.0) * 100.0
 
 
 # ── Data collection ───────────────────────────────────────────────────────────
