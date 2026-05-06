@@ -28,23 +28,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 
 from spec_weights import benchmark_weighted_geomean_pct
-
-
-# ── IPC parsing ───────────────────────────────────────────────────────────────
-
-def _parse_ipc(path: Path):
-    in_roi = False
-    try:
-        for line in path.read_text(errors="replace").splitlines():
-            if "Region of Interest Statistics" in line:
-                in_roi = True
-            if in_roi and "cumulative IPC:" in line:
-                m = re.search(r"cumulative IPC:\s+([0-9.]+)", line)
-                if m:
-                    return float(m.group(1))
-    except OSError:
-        pass
-    return None
+from champsim_utils import parse_ipc
 
 
 # ── Heatmap data ──────────────────────────────────────────────────────────────
@@ -53,7 +37,7 @@ def _heatmap_data(base: Path) -> np.ndarray:
     """Return 7×7 simpoint-weighted geomean IPC speedup (%) grid."""
     bl_dir = base / "baseline"
     traces = sorted(d.name for d in bl_dir.iterdir() if d.is_dir())
-    baselines = {t: _parse_ipc(bl_dir / t / "champsim.out") for t in traces}
+    baselines = {t: parse_ipc(bl_dir / t / "champsim.out") for t in traces}
     baselines = {t: v for t, v in baselines.items() if v is not None}
 
     data = np.full((7, 7), np.nan)
@@ -62,7 +46,7 @@ def _heatmap_data(base: Path) -> np.ndarray:
             cfg = f"pthd{pthd}_bthd{bthd}"
             ratios: dict = {}
             for t, bi in baselines.items():
-                v = _parse_ipc(base / cfg / t / "champsim.out")
+                v = parse_ipc(base / cfg / t / "champsim.out")
                 if v is not None and bi > 0:
                     ratios[t] = v / bi
             if ratios:

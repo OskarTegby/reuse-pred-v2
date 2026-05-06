@@ -30,6 +30,8 @@ import matplotlib.pyplot as plt
 import matplotlib.ticker as mticker
 import numpy as np
 
+from champsim_utils import parse_stats
+
 
 # ── Policies ──────────────────────────────────────────────────────────────────
 
@@ -44,36 +46,6 @@ BASELINE      = "lru"
 
 
 # ── Parsing ───────────────────────────────────────────────────────────────────
-
-def parse_stats(path: Path):
-    """Return (ipc, stlb_mpki, llc_mpki) from a champsim.out file."""
-    in_roi = False
-    ipc = stlb_miss = llc_miss = instrs = None
-    try:
-        for line in path.read_text(errors="replace").splitlines():
-            if "Region of Interest Statistics" in line:
-                in_roi = True
-            if not in_roi:
-                continue
-            if ipc is None and "cumulative IPC:" in line:
-                m = re.search(r"cumulative IPC:\s+([0-9.]+)\s+instructions:\s+(\d+)", line)
-                if m:
-                    ipc = float(m.group(1))
-                    instrs = int(m.group(2))
-            if stlb_miss is None and re.match(r"cpu0_STLB TOTAL\s+ACCESS:", line):
-                m = re.search(r"MISS:\s+(\d+)", line)
-                if m:
-                    stlb_miss = int(m.group(1))
-            if llc_miss is None and re.match(r"LLC TOTAL\s+ACCESS:", line):
-                m = re.search(r"MISS:\s+(\d+)", line)
-                if m:
-                    llc_miss = int(m.group(1))
-    except OSError:
-        pass
-    stlb_mpki = stlb_miss / (instrs / 1000) if (stlb_miss is not None and instrs) else None
-    llc_mpki  = llc_miss  / (instrs / 1000) if (llc_miss  is not None and instrs) else None
-    return ipc, stlb_mpki, llc_mpki
-
 
 def load_policy_stats(policy_dir: Path):
     """Return dict { workload: (ipc, stlb_mpki, llc_mpki) }."""

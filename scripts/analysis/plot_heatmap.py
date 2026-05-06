@@ -43,26 +43,10 @@ from spec_weights import (
     benchmark_weighted_geomean_abs,
     benchmark_weighted_mean_pct,
 )
+from champsim_utils import parse_ipc
 
 
 # ── Parsing ───────────────────────────────────────────────────────────────────
-
-def parse_ipc(filepath):
-    """Return ROI cumulative IPC, or None."""
-    in_roi = False
-    try:
-        with open(filepath) as f:
-            for line in f:
-                if "Region of Interest Statistics" in line:
-                    in_roi = True
-                if in_roi and "cumulative IPC:" in line:
-                    m = re.search(r"cumulative IPC:\s+([0-9.]+)", line)
-                    if m:
-                        return float(m.group(1))
-    except OSError:
-        pass
-    return None
-
 
 def parse_mpki(filepath):
     """Return ROI total MPKI (STLB + LLC misses per kilo-instruction), or None."""

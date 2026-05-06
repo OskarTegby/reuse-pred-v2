@@ -31,6 +31,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 
 from spec_weights import benchmark_weighted_geomean_pct
+from champsim_utils import parse_ipc
 
 # ── Suite colours — match liveness strip ─────────────────────────────────────
 # Order: SPEC → Google → Qualcomm  (matches liveness_corr_strip ordering)
@@ -49,21 +50,6 @@ def _weighted_geomean_pct(speedups_by_wl: "dict[str, float]") -> float:
 
 
 # ── Parsing ───────────────────────────────────────────────────────────────────
-
-def _parse_ipc(path: Path):
-    in_roi = False
-    try:
-        for line in path.read_text(errors="replace").splitlines():
-            if "Region of Interest Statistics" in line:
-                in_roi = True
-            if in_roi and "cumulative IPC:" in line:
-                m = re.search(r"cumulative IPC:\s+([0-9.]+)", line)
-                if m:
-                    return float(m.group(1))
-    except OSError:
-        pass
-    return None
-
 
 def _parse_pfq_hit_rate(path: Path):
     """Return PFQ hit rate (%) computed from 'LLC PFQ PROBES: N  HITS: M'."""
@@ -112,7 +98,7 @@ def _load_suite(suite_dir: Path) -> dict:
 
     baselines: dict = {}
     for f in sorted(lru_dir.glob("*/champsim.out")):
-        v = _parse_ipc(f)
+        v = parse_ipc(f)
         if v is not None:
             baselines[f.parent.name] = v
 
@@ -127,11 +113,11 @@ def _load_suite(suite_dir: Path) -> dict:
         if base <= 0:
             continue
 
-        dp_ipc = _parse_ipc(dp_dir / wl / "champsim.out")
+        dp_ipc = parse_ipc(dp_dir / wl / "champsim.out")
         if dp_ipc is not None:
             result["ipc_speedup_dp"][wl] = (dp_ipc / base - 1.0) * 100.0
 
-        both_ipc = _parse_ipc(both_dir / wl / "champsim.out")
+        both_ipc = parse_ipc(both_dir / wl / "champsim.out")
         if both_ipc is not None:
             result["ipc_speedup_both"][wl] = (both_ipc / base - 1.0) * 100.0
 
