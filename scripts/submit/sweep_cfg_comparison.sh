@@ -15,19 +15,21 @@ PROJECT_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 
 token=""
 DEBUG=0
+TEST=0
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
     qmm|dpc3|google|test) token="${1,,}"; shift ;;
+    --test)  TEST=1; shift ;;
     --debug) DEBUG=1; shift ;;
     *) echo "Unknown argument: $1" >&2
-       echo "Usage: $0 {qmm|dpc3|google|test} [--debug]" >&2
+       echo "Usage: $0 {qmm|dpc3|google|test} [--test] [--debug]" >&2
        exit 2 ;;
   esac
 done
 
 if [ -z "$token" ]; then
-  echo "Usage: $0 {qmm|dpc3|google|test} [--debug]" >&2; exit 2
+  echo "Usage: $0 {qmm|dpc3|google|test} [--test] [--debug]" >&2; exit 2
 fi
 
 SHARED_TRACES=/home/users/shared/traces
@@ -52,18 +54,21 @@ case "$token" in
     TRACE_EXT="champsimtrace.xz" ;;
 esac
 
+[ "$TEST" -eq 1 ] && { WARMUP=5000000; SIM=10000000; DEBUG=1; }
+
 mapfile -t TRACES < <(find "${TRACE_DIR}" -name "*.${TRACE_EXT}" | sort)
 N=${#TRACES[@]}
 [ "$N" -eq 0 ] && { echo "ERROR: no traces in ${TRACE_DIR}" >&2; exit 2; }
 
 if [ "$DEBUG" -eq 1 ]; then
-  TASK_RANGE="1-1"; MODE_TAG="_debug"
+  TASK_RANGE="1-1"
 else
-  TASK_RANGE="1-${N}"; MODE_TAG=""
+  TASK_RANGE="1-${N}"
 fi
 
 DATE=$(date +%Y%m%d_%H%M)
-BASE_LABEL="${token}_oldcfg_${DATE}${MODE_TAG}"
+TEST_TAG=$( [ "$TEST" -eq 1 ] && echo "_test" || echo "" )
+BASE_LABEL="${token}_oldcfg_${DATE}${TEST_TAG}"
 LOG_DIR="${PROJECT_ROOT}/logs/${BASE_LABEL}"
 mkdir -p "$LOG_DIR"
 
