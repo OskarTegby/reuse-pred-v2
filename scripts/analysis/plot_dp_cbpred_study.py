@@ -420,7 +420,7 @@ def main():
     ax.set_xlim(-0.5, len(SUITE_LABELS) - 0.5)
     ax.set_ylim(Y_LO, Y_HI)
     ax.set_ylabel("IPC speedup vs LRU (%)", fontsize=10)
-    ax.set_title("IPC speedup\n(dpPred only vs.\ dpPred+cbPred, pconf=bconf=6)",
+    ax.set_title("IPC speedup\n(dpPred only vs. dpPred+cbPred, pconf=bconf=6)",
                  fontsize=11, fontweight="bold")
     ax.yaxis.set_major_formatter(mticker.FormatStrFormatter("%.1f%%"))
     ax.legend(fontsize=9, framealpha=0.85, loc="upper right")
