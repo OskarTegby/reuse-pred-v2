@@ -29,6 +29,7 @@ import matplotlib.pyplot as plt
 import matplotlib.ticker as mticker
 import numpy as np
 
+from champsim_utils import geomean
 from colors import POLICY_COLORS, POLICY_HATCHES
 from spec_weights import benchmark_name, load_spec_weights
 
@@ -82,13 +83,6 @@ def load_policy(policy_dir: Path):
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
-
-def geomean(vals):
-    """Geometric mean of a list; ignores None and non-positive values."""
-    v = [x for x in vals if x is not None and x > 0]
-    if not v:
-        return None
-    return float(np.exp(np.mean(np.log(v))))
 
 
 

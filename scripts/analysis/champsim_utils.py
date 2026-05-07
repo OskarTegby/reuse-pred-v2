@@ -9,6 +9,9 @@ parse_ipc(path) -> float | None
 parse_stats(path) -> (ipc, stlb_mpki, llc_mpki)
     Extract IPC and MPKI metrics from a champsim.out file.
 
+geomean(vals) -> float | None
+    Flat geometric mean; ignores None and non-positive values.
+
 geomean_speedup(exp_dir, baseline_dir) -> float
     Simpoint-weighted geomean IPC speedup (%) vs a baseline directory.
 
@@ -21,6 +24,8 @@ import os
 import re
 import sys
 from pathlib import Path
+
+import numpy as np
 
 from spec_weights import benchmark_weighted_geomean_pct
 
@@ -82,6 +87,14 @@ def geomean_speedup(exp_dir, baseline_dir) -> float:
     if not ratios:
         return float("nan")
     return benchmark_weighted_geomean_pct(ratios)
+
+
+def geomean(vals) -> "float | None":
+    """Flat geometric mean of a collection; ignores None and non-positive values."""
+    v = [x for x in vals if x is not None and x > 0]
+    if not v:
+        return None
+    return float(np.exp(np.mean(np.log(v))))
 
 
 def load_baseline(baseline_dir) -> "dict[str, float]":
