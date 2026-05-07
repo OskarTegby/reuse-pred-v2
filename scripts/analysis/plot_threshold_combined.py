@@ -17,13 +17,10 @@ Usage
 """
 
 import argparse
-import re
-import sys
 from pathlib import Path
 
 import matplotlib
 matplotlib.use("Agg")
-import matplotlib.colors as mcolors
 import matplotlib.pyplot as plt
 import numpy as np
 

@@ -21,13 +21,11 @@ Usage:
 
 import argparse
 import os
-import re
 import sys
 
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
-import matplotlib.colors as mcolors
 import numpy as np
 
 from champsim_utils import geomean_speedup, find_test_dir

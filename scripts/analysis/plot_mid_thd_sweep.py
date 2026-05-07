@@ -8,7 +8,6 @@ Within each group, bars are shaded light→dark for N=1..5.
 Output: results/plots/mid_lru/mid_thd.png
 """
 
-import re
 import sys
 from pathlib import Path
 

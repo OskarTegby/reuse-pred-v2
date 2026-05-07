@@ -35,7 +35,6 @@ produced by sweep_mid.sh.  A scope can be omitted (e.g. --both is optional).
 """
 
 import argparse
-import re
 import sys
 from pathlib import Path
 
