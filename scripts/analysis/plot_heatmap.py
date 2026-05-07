@@ -34,6 +34,8 @@ import os
 import re
 import sys
 
+import matplotlib
+matplotlib.use("Agg")
 import matplotlib.colors as mcolors
 import matplotlib.pyplot as plt
 import numpy as np
@@ -42,7 +44,6 @@ from spec_weights import (
     benchmark_weighted_geomean_pct,
     benchmark_weighted_geomean_abs,
     benchmark_weighted_mean_pct,
-    geomean_pct,
 )
 from champsim_utils import parse_ipc
 

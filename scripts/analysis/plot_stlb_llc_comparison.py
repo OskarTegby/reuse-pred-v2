@@ -18,7 +18,6 @@ Usage
 """
 
 import argparse
-import re
 import sys
 from pathlib import Path
 
@@ -29,6 +28,7 @@ import numpy as np
 
 from colors import POLICY_COLORS
 from champsim_utils import parse_stats
+from spec_weights import SPEC_WEIGHTS, benchmark_name
 
 
 POLICIES       = ["lru_mid", "lru_mid_pred"]
@@ -46,27 +46,6 @@ def load_policy(policy_dir: Path):
             out[f.parent.name] = (ipc, stlb, llc)
     return out
 
-
-def benchmark_name(wl: str) -> str:
-    m = re.match(r'^(.+)-\d+[A-Z]+$', wl)
-    return m.group(1) if m else wl
-
-
-def load_spec_weights(weights_dir: Path):
-    result = {}
-    if not weights_dir.is_dir():
-        return result
-    for bm_dir in sorted(weights_dir.iterdir()):
-        if not bm_dir.is_dir():
-            continue
-        w_file, s_file = bm_dir / "weights.out", bm_dir / "simpoints.out"
-        if not (w_file.exists() and s_file.exists()):
-            continue
-        w_vals = [float(x) for x in w_file.read_text().split()]
-        s_ids  = [int(x)   for x in s_file.read_text().split()]
-        for sp_id, w in zip(s_ids, w_vals):
-            result[f"{bm_dir.name}-{sp_id}B"] = w
-    return result
 
 
 def geomean(vals):
@@ -234,8 +213,7 @@ def main():
     parser.add_argument("--out", default="results/plots/stlb_llc_comparison/suite_ipc.png")
     args = parser.parse_args()
 
-    _default_weights = Path(__file__).parents[2] / ".." / "ChampSim-dev" / "trace-files" / "SPEC2006_weights"
-    weights = load_spec_weights(_default_weights.resolve())
+    weights = SPEC_WEIGHTS
     if weights:
         print(f"Loaded simpoint weights for {len(set(benchmark_name(k) for k in weights))} benchmarks")
 

@@ -26,7 +26,7 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
 
-from spec_weights import benchmark_weighted_geomean_pct, geomean_pct
+from spec_weights import benchmark_weighted_geomean_pct
 from champsim_utils import parse_ipc
 
 # ── Parsing ───────────────────────────────────────────────────────────────────

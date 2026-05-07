@@ -48,8 +48,9 @@ def _benchmark_name(wl: str) -> str:
 _SPEC_WEIGHTS: "dict[str, float]" = _load_spec_weights(_DEFAULT_WEIGHTS_DIR)
 
 # Public aliases for scripts that need direct weight lookup.
-SPEC_WEIGHTS  = _SPEC_WEIGHTS
-benchmark_name = _benchmark_name
+SPEC_WEIGHTS       = _SPEC_WEIGHTS
+benchmark_name     = _benchmark_name
+load_spec_weights  = _load_spec_weights
 
 
 def benchmark_weighted_geomean_pct(ratios_by_wl: "dict[str, float]") -> float:

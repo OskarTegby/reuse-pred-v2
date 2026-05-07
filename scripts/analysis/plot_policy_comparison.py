@@ -30,6 +30,7 @@ import matplotlib.ticker as mticker
 import numpy as np
 
 from colors import POLICY_COLORS, POLICY_HATCHES
+from spec_weights import benchmark_name, load_spec_weights
 
 
 # ── Parsing ───────────────────────────────────────────────────────────────────
@@ -89,38 +90,6 @@ def geomean(vals):
         return None
     return float(np.exp(np.mean(np.log(v))))
 
-
-def benchmark_name(wl: str) -> str:
-    """Strip the slice suffix from a trace name to get the benchmark name.
-
-    SPEC CPU2017:  602.gcc_s-734B  -> 602.gcc_s   (strip -<digits><letters>)
-    All other suites (Google, QMM, …) are left unchanged — we only group traces
-    when we have real simpoint weights to go with the grouping.
-    """
-    m = re.match(r'^(.+)-\d+[A-Z]+$', wl)
-    if m:
-        return m.group(1)
-    return wl
-
-
-def load_spec_weights(weights_dir: "Path") -> "dict[str, float]":
-    """Load simpoint weights; returns {trace_name: weight} or {} if dir missing."""
-    result: dict = {}
-    if not weights_dir.is_dir():
-        return result
-    for bm_dir in sorted(weights_dir.iterdir()):
-        if not bm_dir.is_dir():
-            continue
-        w_file = bm_dir / "weights.out"
-        s_file = bm_dir / "simpoints.out"
-        if not (w_file.exists() and s_file.exists()):
-            continue
-        w_vals = [float(x) for x in w_file.read_text().split()]
-        s_ids  = [int(x)   for x in s_file.read_text().split()]
-        bm_name = bm_dir.name
-        for sp_id, w in zip(s_ids, w_vals):
-            result[f"{bm_name}-{sp_id}B"] = w
-    return result
 
 
 MAX_WORKLOADS = 15   # maximum per-workload groups shown in the chart
