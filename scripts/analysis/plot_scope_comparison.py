@@ -48,7 +48,6 @@ import matplotlib.ticker as mticker
 import matplotlib.transforms as mtrans
 import numpy as np
 
-from spec_weights import benchmark_weighted_geomean_pct
 from champsim_utils import parse_ipc, load_baseline
 
 # ── Parsing ───────────────────────────────────────────────────────────────────

@@ -21,7 +21,6 @@ Usage
 """
 
 import argparse
-import re
 import sys
 from pathlib import Path
 
@@ -31,7 +30,8 @@ import matplotlib.pyplot as plt
 import matplotlib.ticker as mticker
 import numpy as np
 
-from spec_weights import benchmark_weighted_geomean_pct, SPEC_WEIGHTS, benchmark_name, aggregate_spec_liveness, benchmark_weighted_geomean_frac
+from liveness_utils import load_suite
+from spec_weights import aggregate_spec_liveness, benchmark_weighted_geomean_frac
 
 MAX_WORKLOADS = 25   # maximum per-workload bars shown in each panel
 
@@ -77,55 +77,6 @@ def _contrast(hex_color: str) -> str:
     """Return 'white' or 'black' for best contrast against the given hex background."""
     r, g, b = (int(hex_color[i:i+2], 16) / 255 for i in (1, 3, 5))
     return "white" if (0.299 * r + 0.587 * g + 0.114 * b) < 0.55 else "black"
-
-# ── Parsing ───────────────────────────────────────────────────────────────────
-
-def parse_liveness_file(path: Path):
-    """Return dict { cache_name: {doa, mostly_dead, mostly_alive, total} }."""
-    text = path.read_text(errors="replace")
-    result = {}
-    pat = re.compile(
-        r"^(\S+) LIVENESS EVICTIONS:\s+(\d+)"
-        r"\s+DOA:\s+(\d+)\s+\([\d.]+%\)"
-        r"\s+MOSTLY_DEAD:\s+(\d+)\s+\([\d.]+%\)"
-        r"\s+MOSTLY_ALIVE:\s+(\d+)\s+\([\d.]+%\)",
-        re.MULTILINE,
-    )
-    for m in pat.finditer(text):
-        result[m.group(1)] = {
-            "total":        int(m.group(2)),
-            "doa":          int(m.group(3)),
-            "mostly_dead":  int(m.group(4)),
-            "mostly_alive": int(m.group(5)),
-        }
-    return result
-
-
-def load_suite(results_dir: Path):
-    """Load all champsim.out files.
-
-    Supports two layouts:
-      Flat  (local runs):   <dir>/<trace>.out
-      Nested (cluster runs): <dir>/<trace>/champsim.out
-    """
-    files = sorted(results_dir.glob("*/champsim.out"))  # cluster layout
-    nested = True
-    if not files:
-        files = sorted(results_dir.glob("*.out"))        # flat layout
-        nested = False
-    if not files:
-        sys.exit(f"ERROR: no output files found in {results_dir}\n"
-                 "Expected either <dir>/*.out or <dir>/*/champsim.out")
-    rows = []
-    for f in files:
-        workload = f.parent.name if nested else f.stem
-        data = parse_liveness_file(f)
-        if not data:
-            print(f"  WARNING: no LIVENESS lines in {f} — skipped")
-            continue
-        rows.append((workload, data))
-    return rows
-
 
 # ── Plot ──────────────────────────────────────────────────────────────────────
 

@@ -39,7 +39,7 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
 
-from spec_weights import benchmark_weighted_geomean_pct, SPEC_WEIGHTS, benchmark_name, weighted_geomean_pct
+from spec_weights import SPEC_WEIGHTS, weighted_geomean_pct, geomean_pct
 from champsim_utils import parse_ipc
 
 SUITE_LABELS = {
@@ -63,13 +63,6 @@ def _short_label(name: str, suite: str) -> str:
     if suite == "dpc3" and "." in name:
         return name.split(".", 1)[1]   # "600.perlbench_s" → "perlbench_s"
     return name
-
-
-# ── Aggregation ───────────────────────────────────────────────────────────────
-
-def _geomean(vals: list) -> float:
-    pos = [v / 100.0 + 1.0 for v in vals if not np.isnan(v) and v > -100]
-    return (np.exp(np.mean(np.log(pos))) - 1.0) * 100.0 if pos else float("nan")
 
 
 # ── Config directory name helpers ─────────────────────────────────────────────
@@ -233,8 +226,8 @@ def main():
         dist_label    = f"all {n_all}"
 
     # Geomean over ALL groups (pre-filter snapshot)
-    gm_opt = _geomean(all_opt_spds)
-    gm_def = _geomean(all_def_spds)
+    gm_opt = geomean_pct(all_opt_spds)
+    gm_def = geomean_pct(all_def_spds)
 
     # Top-panel subset: top --max-bars groups by optimal speedup (already sorted)
     if args.max_bars is not None and n_grps > args.max_bars:
@@ -258,8 +251,8 @@ def main():
         bar_dp_opt_spds = [results[g]["dp_opt_spd"] for g in bar_grps]
         bar_dp_def_spds = [results[g]["dp_def_spd"] for g in bar_grps]
         bar_dp_opt_keys = [results[g]["dp_opt_key"] for g in bar_grps]
-        gm_dp_opt = _geomean(all_dp_opt_spds)
-        gm_dp_def = _geomean(all_dp_def_spds)
+        gm_dp_opt = geomean_pct(all_dp_opt_spds)
+        gm_dp_def = geomean_pct(all_dp_def_spds)
 
     # ── Colors (pthd 0=green … 6=red) ────────────────────────────────────────
     cmap     = plt.cm.RdYlGn_r

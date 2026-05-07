@@ -40,7 +40,7 @@ import matplotlib.pyplot as plt
 import matplotlib.ticker as mticker
 import numpy as np
 
-from spec_weights import benchmark_weighted_geomean_pct, SPEC_WEIGHTS, benchmark_name
+from spec_weights import SPEC_WEIGHTS, benchmark_name
 
 
 def _benchmark_weighted_geomean(vals_by_wl: "dict[str, float]") -> float:

@@ -34,7 +34,6 @@ import matplotlib.pyplot as plt
 import numpy as np
 
 from colors import SUITE_COLORS
-from spec_weights import benchmark_weighted_geomean_pct
 from champsim_utils import parse_ipc
 
 # ── IPC parsing ───────────────────────────────────────────────────────────────

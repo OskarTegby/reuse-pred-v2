@@ -29,12 +29,8 @@ import matplotlib.pyplot as plt
 import matplotlib.ticker as mticker
 import numpy as np
 
-from colors import SUITE_COLORS, LIVENESS_COLORS, LIVENESS_LABEL_COLORS
-from liveness_utils import (
-    N_HIST_BINS,
-    load_suite, load_suite_corr, load_suite_pc,
-    parse_correlation, parse_liveness_file, parse_per_pc,
-)
+from colors import SUITE_COLORS, LIVENESS_COLORS
+from liveness_utils import N_HIST_BINS, load_suite, load_suite_corr, load_suite_pc
 from spec_weights import benchmark_weighted_geomean_frac
 
 COLOR_DOA = LIVENESS_COLORS["doa"]

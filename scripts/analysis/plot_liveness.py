@@ -36,7 +36,7 @@ import matplotlib.ticker as mticker
 import numpy as np
 
 from colors import LIVENESS_COLORS, LIVENESS_LABEL_COLORS, HIT_HIST_COLORS
-from spec_weights import benchmark_weighted_geomean_pct, SPEC_WEIGHTS, benchmark_name, aggregate_spec_liveness, benchmark_weighted_geomean_frac
+from spec_weights import aggregate_spec_liveness, benchmark_weighted_geomean_frac
 
 MAX_WORKLOADS = 25   # maximum per-workload bars shown in multi-workload plots
 
