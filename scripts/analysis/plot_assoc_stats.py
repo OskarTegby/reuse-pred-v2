@@ -18,29 +18,13 @@ import re
 import sys
 import math
 
+import matplotlib
+matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
 
-from spec_weights import benchmark_weighted_geomean_pct
-
-
-LRU_COLOR = "#1a9850"
-LFU_COLOR = "#4393c3"
-
-
-def _speedup_pct(exp_dir: str, baseline_dir: str) -> float:
-    """Simpoint-weighted geomean IPC speedup (%) over baseline."""
-    ratios: dict = {}
-    for trace in os.listdir(exp_dir):
-        exp_file  = os.path.join(exp_dir, trace, "champsim.out")
-        base_file = os.path.join(baseline_dir, trace, "champsim.out")
-        exp_stats  = parse_stats(exp_file)
-        base_stats = parse_stats(base_file)
-        if exp_stats and base_stats and base_stats.get("ipc", 0) > 0:
-            ratios[trace] = exp_stats["ipc"] / base_stats["ipc"]
-    if not ratios:
-        return float("nan")
-    return benchmark_weighted_geomean_pct(ratios)
+from colors import LRU_COLOR, LFU_COLOR
+from champsim_utils import geomean_speedup, find_test_dir
 
 
 def parse_stats(path):
@@ -123,7 +107,7 @@ def collect_sweep(results_dir, prefix, policies=("lru", "lfu")):
             exp_dir = os.path.join(results_dir, entry)
             a = aggregate(exp_dir)
             if a:
-                a["ipc_speedup"] = _speedup_pct(exp_dir, baseline_dir)
+                a["ipc_speedup"] = geomean_speedup(exp_dir, baseline_dir)
             points[ways] = a
         if points:
             out[pol] = sorted(points.items())
@@ -198,17 +182,6 @@ def plot_sweep(results_dir, prefix, table_label, hit_rate_label, out_path):
     print(f"  Written: {out_path}")
 
 
-def find_test_dir(suite):
-    """Return the most recent results/{suite}_assoc_*_test directory."""
-    import glob
-    pattern = os.path.join("results", f"{suite}_assoc_*_test")
-    matches = sorted(glob.glob(pattern))
-    if not matches:
-        print(f"No _test results found matching {pattern}", file=sys.stderr)
-        sys.exit(1)
-    return matches[-1]
-
-
 def main():
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -219,7 +192,7 @@ def main():
     ap.add_argument("--out-dir", default=None)
     args = ap.parse_args()
 
-    results_dir = (find_test_dir(args.results_dir) if args.test
+    results_dir = (find_test_dir(args.results_dir, "assoc") if args.test
                    else args.results_dir.rstrip("/"))
     out_dir     = args.out_dir or results_dir
     os.makedirs(out_dir, exist_ok=True)

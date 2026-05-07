@@ -21,47 +21,14 @@ Usage:
 
 import argparse
 import os
-import re
 import sys
 
+import matplotlib
+matplotlib.use("Agg")
 import matplotlib.pyplot as plt
-import matplotlib.colors as mcolors
 import numpy as np
 
-from spec_weights import benchmark_weighted_geomean_pct
-
-
-# ── Parsing ───────────────────────────────────────────────────────────────────
-
-def parse_ipc(path):
-    in_roi = False
-    try:
-        with open(path) as f:
-            for line in f:
-                if "Region of Interest Statistics" in line:
-                    in_roi = True
-                if in_roi and "cumulative IPC:" in line:
-                    m = re.search(r"cumulative IPC:\s+([0-9.]+)", line)
-                    if m:
-                        return float(m.group(1))
-    except OSError:
-        pass
-    return None
-
-
-def geomean_speedup(exp_dir, baseline_dir):
-    """Simpoint-weighted geomean IPC speedup (%), benchmark-weighted fallback."""
-    ratios: dict = {}
-    for trace in os.listdir(exp_dir):
-        exp_file  = os.path.join(exp_dir, trace, "champsim.out")
-        base_file = os.path.join(baseline_dir, trace, "champsim.out")
-        ipc_exp  = parse_ipc(exp_file)
-        ipc_base = parse_ipc(base_file)
-        if ipc_exp is not None and ipc_base is not None and ipc_base > 0:
-            ratios[trace] = ipc_exp / ipc_base
-    if not ratios:
-        return float("nan")
-    return benchmark_weighted_geomean_pct(ratios)
+from champsim_utils import geomean_speedup, find_test_dir
 
 
 # ── Data collection ───────────────────────────────────────────────────────────
@@ -256,16 +223,6 @@ def plot_marginal(results_dir, phist_sizes, bhist_sizes,
     print(f"  Written: {out}")
 
 
-def find_test_dir(suite, range_):
-    import glob
-    pattern = os.path.join("results", f"{suite}_hist_{range_}_*_test")
-    matches = sorted(glob.glob(pattern))
-    if not matches:
-        print(f"No _test results found matching {pattern}", file=sys.stderr)
-        sys.exit(1)
-    return matches[-1]
-
-
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("results_dir",
@@ -277,7 +234,7 @@ def main():
     ap.add_argument("--out-dir", default=None)
     args = ap.parse_args()
 
-    results_dir = (find_test_dir(args.results_dir, args.range) if args.test
+    results_dir = (find_test_dir(args.results_dir, f"hist_{args.range}") if args.test
                    else args.results_dir.rstrip("/"))
     out_dir     = args.out_dir or results_dir
     os.makedirs(out_dir, exist_ok=True)

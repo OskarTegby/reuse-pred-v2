@@ -8,7 +8,6 @@ Three panels (one per suite), each showing 2 bars per threshold:
 Output: results/plots/mid_lru_llc_only/mid_thd_comparison.png
 """
 
-import re
 import sys
 from pathlib import Path
 
@@ -19,6 +18,7 @@ import matplotlib.ticker as mticker
 import numpy as np
 
 from spec_weights import benchmark_weighted_geomean_pct
+from champsim_utils import parse_ipc, load_baseline
 
 BASE = Path("results")
 
@@ -54,21 +54,6 @@ SUITES = [
 MAX_N = 5
 
 
-def parse_ipc(path: Path):
-    in_roi = False
-    try:
-        for line in path.read_text(errors="replace").splitlines():
-            if "Region of Interest Statistics" in line:
-                in_roi = True
-            if in_roi and "cumulative IPC:" in line:
-                m = re.search(r"cumulative IPC:\s+([0-9.]+)", line)
-                if m:
-                    return float(m.group(1))
-    except OSError:
-        pass
-    return None
-
-
 def geomean_speedup(sweep_dir: Path, n: int):
     """Return benchmark-weighted geomean IPC speedup (%) at mid_thd=n.
 
@@ -77,12 +62,7 @@ def geomean_speedup(sweep_dir: Path, n: int):
     equal-weight geomean across benchmarks.
     For all other traces: flat equal-weight geomean.
     """
-    lru_dir = sweep_dir / "lru"
-    baselines: dict = {}
-    for f in sorted(lru_dir.glob("*/champsim.out")):
-        v = parse_ipc(f)
-        if v is not None:
-            baselines[f.parent.name] = v
+    baselines = load_baseline(sweep_dir / "lru")
     if not baselines:
         return None
 

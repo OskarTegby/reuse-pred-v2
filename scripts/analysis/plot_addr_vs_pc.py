@@ -6,7 +6,6 @@ optimal mid_thd, and PC key at its optimal mid_thd. A geomean bar is appended
 after a small gap.
 """
 
-import re
 import sys
 from pathlib import Path
 
@@ -17,6 +16,7 @@ import matplotlib.ticker as mticker
 import numpy as np
 
 from spec_weights import benchmark_weighted_geomean_pct, SPEC_WEIGHTS, benchmark_name
+from champsim_utils import parse_ipc
 
 COLOR_ADDR = "#5B7FA6"   # steel blue
 COLOR_PC   = "#E07B4A"   # warm orange
@@ -53,21 +53,6 @@ SUITES = [
         5, True,
     ),
 ]
-
-
-def parse_ipc(path: Path):
-    in_roi = False
-    try:
-        for line in path.read_text(errors="replace").splitlines():
-            if "Region of Interest Statistics" in line:
-                in_roi = True
-            if in_roi and "cumulative IPC:" in line:
-                m = re.search(r"cumulative IPC:\s+([0-9.]+)", line)
-                if m:
-                    return float(m.group(1))
-    except OSError:
-        pass
-    return None
 
 
 MAX_WORKLOADS = 25   # maximum per-workload bars shown
@@ -169,13 +154,6 @@ def _aggregate_spec(speedup_by_wl: "dict[str, float]") -> "dict[str, float]":
         if valid:
             result[bm_name] = (float(np.exp(np.mean(np.log(valid)))) - 1) * 100
     return result
-
-
-def geomean_pct(pcts):
-    vals = [v for v in pcts if v is not None]
-    if not vals:
-        return None
-    return (np.exp(np.mean(np.log([v / 100 + 1 for v in vals]))) - 1) * 100
 
 
 def draw_panel(ax, suite_label, addr_sp, pc_sp, addr_n, addr_promo, pc_n, pc_promo):

@@ -16,8 +16,6 @@ Usage
 """
 
 import argparse
-import re
-import sys
 from collections import defaultdict
 from pathlib import Path
 
@@ -26,35 +24,11 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
 
-from spec_weights import benchmark_weighted_geomean_pct, SPEC_WEIGHTS, benchmark_name
+from spec_weights import SPEC_WEIGHTS, weighted_geomean_pct
+from champsim_utils import parse_ipc
 
 # ── Parsing ───────────────────────────────────────────────────────────────────
 
-
-def _parse_ipc(path: Path):
-    in_roi = False
-    try:
-        for line in path.read_text(errors="replace").splitlines():
-            if "Region of Interest Statistics" in line:
-                in_roi = True
-            if in_roi and "cumulative IPC:" in line:
-                m = re.search(r"cumulative IPC:\s+([0-9.]+)", line)
-                if m:
-                    return float(m.group(1))
-    except OSError:
-        pass
-    return None
-
-
-def _wgeomean(speedups, weights):
-    pairs = [(s / 100.0 + 1.0, w) for s, w in zip(speedups, weights)]
-    valid = [(r, w) for r, w in pairs if r > 0 and w is not None]
-    if valid:
-        total = sum(w for _, w in valid)
-        if total > 0:
-            return (np.exp(sum((w / total) * np.log(r) for r, w in valid)) - 1.0) * 100.0
-    pos = [r for r, _ in pairs if r > 0]
-    return (np.exp(np.mean(np.log(pos))) - 1.0) * 100.0 if pos else float("nan")
 
 
 def _group_name(trace: str, suite: str) -> str:
@@ -74,7 +48,7 @@ def _opt_keys(base: Path, suite: str):
     use_wts = (suite == "dpc3")
     bl_dir  = base / "baseline"
     traces  = sorted(d.name for d in bl_dir.iterdir() if d.is_dir())
-    baselines = {t: _parse_ipc(bl_dir / t / "champsim.out") for t in traces}
+    baselines = {t: parse_ipc(bl_dir / t / "champsim.out") for t in traces}
     baselines = {t: v for t, v in baselines.items() if v is not None}
 
     all_keys = [(n, m) for n in nr for m in nr]
@@ -83,7 +57,7 @@ def _opt_keys(base: Path, suite: str):
     for t, bi in baselines.items():
         grid[t] = {}
         for key in all_keys:
-            v = _parse_ipc(base / f"pthd{key[0]}_bthd{key[1]}" / t / "champsim.out")
+            v = parse_ipc(base / f"pthd{key[0]}_bthd{key[1]}" / t / "champsim.out")
             if v is not None and bi > 0:
                 grid[t][key] = (v / bi - 1.0) * 100.0
 
@@ -114,7 +88,7 @@ def _opt_keys(base: Path, suite: str):
                     sps.append(grid[t][key])
                     wts.append(SPEC_WEIGHTS.get(t) if use_wts else None)
             if sps:
-                v = _wgeomean(sps, wts)
+                v = weighted_geomean_pct(sps, wts)
                 if not np.isnan(v) and v > best_v:
                     best_v, best_k = v, key
         if best_k is not None:

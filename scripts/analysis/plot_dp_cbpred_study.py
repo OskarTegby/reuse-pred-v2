@@ -30,13 +30,14 @@ import matplotlib.ticker as mticker
 import matplotlib.pyplot as plt
 import numpy as np
 
+from colors import SUITE_COLORS
 from spec_weights import benchmark_weighted_geomean_pct
+from champsim_utils import parse_ipc
 
 # ── Suite colours — match liveness strip ─────────────────────────────────────
 # Order: SPEC → Google → Qualcomm  (matches liveness_corr_strip ordering)
 SUITE_ORDER  = ["dpc3",   "google",  "qmm"]
 SUITE_LABELS = ["SPEC (DPC3)", "Google", "Qualcomm"]
-SUITE_COLORS = ["#2C7BB6",    "#D7191C", "#1A9641"]
 
 # Config colours — fixed per config across all suites (Panel 1)
 COLOR_DP   = "#4393C3"   # blue  — dpPred only
@@ -49,21 +50,6 @@ def _weighted_geomean_pct(speedups_by_wl: "dict[str, float]") -> float:
 
 
 # ── Parsing ───────────────────────────────────────────────────────────────────
-
-def _parse_ipc(path: Path):
-    in_roi = False
-    try:
-        for line in path.read_text(errors="replace").splitlines():
-            if "Region of Interest Statistics" in line:
-                in_roi = True
-            if in_roi and "cumulative IPC:" in line:
-                m = re.search(r"cumulative IPC:\s+([0-9.]+)", line)
-                if m:
-                    return float(m.group(1))
-    except OSError:
-        pass
-    return None
-
 
 def _parse_pfq_hit_rate(path: Path):
     """Return PFQ hit rate (%) computed from 'LLC PFQ PROBES: N  HITS: M'."""
@@ -112,7 +98,7 @@ def _load_suite(suite_dir: Path) -> dict:
 
     baselines: dict = {}
     for f in sorted(lru_dir.glob("*/champsim.out")):
-        v = _parse_ipc(f)
+        v = parse_ipc(f)
         if v is not None:
             baselines[f.parent.name] = v
 
@@ -127,11 +113,11 @@ def _load_suite(suite_dir: Path) -> dict:
         if base <= 0:
             continue
 
-        dp_ipc = _parse_ipc(dp_dir / wl / "champsim.out")
+        dp_ipc = parse_ipc(dp_dir / wl / "champsim.out")
         if dp_ipc is not None:
             result["ipc_speedup_dp"][wl] = (dp_ipc / base - 1.0) * 100.0
 
-        both_ipc = _parse_ipc(both_dir / wl / "champsim.out")
+        both_ipc = parse_ipc(both_dir / wl / "champsim.out")
         if both_ipc is not None:
             result["ipc_speedup_both"][wl] = (both_ipc / base - 1.0) * 100.0
 
@@ -434,7 +420,7 @@ def main():
     ax.set_xlim(-0.5, len(SUITE_LABELS) - 0.5)
     ax.set_ylim(Y_LO, Y_HI)
     ax.set_ylabel("IPC speedup vs LRU (%)", fontsize=10)
-    ax.set_title("IPC speedup\n(dpPred only vs.\ dpPred+cbPred, pconf=bconf=6)",
+    ax.set_title("IPC speedup\n(dpPred only vs. dpPred+cbPred, pconf=bconf=6)",
                  fontsize=11, fontweight="bold")
     ax.yaxis.set_major_formatter(mticker.FormatStrFormatter("%.1f%%"))
     ax.legend(fontsize=9, framealpha=0.85, loc="upper right")

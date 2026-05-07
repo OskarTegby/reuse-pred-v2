@@ -39,7 +39,8 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
 
-from spec_weights import benchmark_weighted_geomean_pct, SPEC_WEIGHTS, benchmark_name
+from spec_weights import SPEC_WEIGHTS, weighted_geomean_pct, geomean_pct
+from champsim_utils import parse_ipc
 
 SUITE_LABELS = {
     "dpc3":   "SPEC CPU2006 (DPC3)",
@@ -62,44 +63,6 @@ def _short_label(name: str, suite: str) -> str:
     if suite == "dpc3" and "." in name:
         return name.split(".", 1)[1]   # "600.perlbench_s" → "perlbench_s"
     return name
-
-
-# ── IPC parsing ───────────────────────────────────────────────────────────────
-
-def _parse_ipc(path: Path):
-    in_roi = False
-    try:
-        for line in path.read_text(errors="replace").splitlines():
-            if "Region of Interest Statistics" in line:
-                in_roi = True
-            if in_roi and "cumulative IPC:" in line:
-                m = re.search(r"cumulative IPC:\s+([0-9.]+)", line)
-                if m:
-                    return float(m.group(1))
-    except OSError:
-        pass
-    return None
-
-
-# ── Aggregation ───────────────────────────────────────────────────────────────
-
-def _wgeomean(speedups: list, weights: list) -> float:
-    """Weighted (or equal-weight) geomean of speedup-percent values."""
-    pairs = [(s / 100.0 + 1.0, w) for s, w in zip(speedups, weights)]
-    valid_w = [(r, w) for r, w in pairs if r > 0 and w is not None]
-    if valid_w:
-        total = sum(w for _, w in valid_w)
-        if total > 0:
-            return (np.exp(
-                sum((w / total) * np.log(r) for r, w in valid_w)
-            ) - 1.0) * 100.0
-    valid = [r for r, _ in pairs if r > 0]
-    return (np.exp(np.mean(np.log(valid))) - 1.0) * 100.0 if valid else float("nan")
-
-
-def _geomean(vals: list) -> float:
-    pos = [v / 100.0 + 1.0 for v in vals if not np.isnan(v) and v > -100]
-    return (np.exp(np.mean(np.log(pos))) - 1.0) * 100.0 if pos else float("nan")
 
 
 # ── Config directory name helpers ─────────────────────────────────────────────
@@ -149,7 +112,7 @@ def main():
     if not bl_dir.is_dir():
         sys.exit(f"ERROR: baseline/ not found under {base}")
     traces    = sorted(d.name for d in bl_dir.iterdir() if d.is_dir())
-    baselines = {t: _parse_ipc(bl_dir / t / "champsim.out")
+    baselines = {t: parse_ipc(bl_dir / t / "champsim.out")
                  for t in traces}
     baselines = {t: v for t, v in baselines.items() if v is not None}
 
@@ -164,7 +127,7 @@ def main():
     for t, bi in baselines.items():
         grid[t] = {}
         for key in all_keys + [default_key]:
-            v = _parse_ipc(base / _cfg_dir(key) / t / "champsim.out")
+            v = parse_ipc(base / _cfg_dir(key) / t / "champsim.out")
             if v is not None and bi > 0:
                 grid[t][key] = (v / bi - 1.0) * 100.0
 
@@ -174,7 +137,7 @@ def main():
         for t, bi in baselines.items():
             dp_grid[t] = {}
             for key in nr + [dp_default_key]:
-                v = _parse_ipc(base / _cfg_dir(key) / t / "champsim.out")
+                v = parse_ipc(base / _cfg_dir(key) / t / "champsim.out")
                 if v is not None and bi > 0:
                     dp_grid[t][key] = (v / bi - 1.0) * 100.0
 
@@ -190,7 +153,7 @@ def main():
             if key in grid.get(t, {}):
                 sps.append(grid[t][key])
                 wts.append(SPEC_WEIGHTS.get(t) if use_wts else None)
-        return _wgeomean(sps, wts) if sps else float("nan")
+        return weighted_geomean_pct(sps, wts) if sps else float("nan")
 
     def dp_group_speedup(tlist: list, key) -> float:
         sps, wts = [], []
@@ -198,7 +161,7 @@ def main():
             if key in dp_grid.get(t, {}):
                 sps.append(dp_grid[t][key])
                 wts.append(SPEC_WEIGHTS.get(t) if use_wts else None)
-        return _wgeomean(sps, wts) if sps else float("nan")
+        return weighted_geomean_pct(sps, wts) if sps else float("nan")
 
     results: dict = {}
     for grp, tlist in sorted(groups.items()):
@@ -263,8 +226,8 @@ def main():
         dist_label    = f"all {n_all}"
 
     # Geomean over ALL groups (pre-filter snapshot)
-    gm_opt = _geomean(all_opt_spds)
-    gm_def = _geomean(all_def_spds)
+    gm_opt = geomean_pct(all_opt_spds)
+    gm_def = geomean_pct(all_def_spds)
 
     # Top-panel subset: top --max-bars groups by optimal speedup (already sorted)
     if args.max_bars is not None and n_grps > args.max_bars:
@@ -288,8 +251,8 @@ def main():
         bar_dp_opt_spds = [results[g]["dp_opt_spd"] for g in bar_grps]
         bar_dp_def_spds = [results[g]["dp_def_spd"] for g in bar_grps]
         bar_dp_opt_keys = [results[g]["dp_opt_key"] for g in bar_grps]
-        gm_dp_opt = _geomean(all_dp_opt_spds)
-        gm_dp_def = _geomean(all_dp_def_spds)
+        gm_dp_opt = geomean_pct(all_dp_opt_spds)
+        gm_dp_def = geomean_pct(all_dp_def_spds)
 
     # ── Colors (pthd 0=green … 6=red) ────────────────────────────────────────
     cmap     = plt.cm.RdYlGn_r

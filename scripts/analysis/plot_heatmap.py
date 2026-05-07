@@ -34,6 +34,8 @@ import os
 import re
 import sys
 
+import matplotlib
+matplotlib.use("Agg")
 import matplotlib.colors as mcolors
 import matplotlib.pyplot as plt
 import numpy as np
@@ -43,26 +45,10 @@ from spec_weights import (
     benchmark_weighted_geomean_abs,
     benchmark_weighted_mean_pct,
 )
+from champsim_utils import parse_ipc
 
 
 # ── Parsing ───────────────────────────────────────────────────────────────────
-
-def parse_ipc(filepath):
-    """Return ROI cumulative IPC, or None."""
-    in_roi = False
-    try:
-        with open(filepath) as f:
-            for line in f:
-                if "Region of Interest Statistics" in line:
-                    in_roi = True
-                if in_roi and "cumulative IPC:" in line:
-                    m = re.search(r"cumulative IPC:\s+([0-9.]+)", line)
-                    if m:
-                        return float(m.group(1))
-    except OSError:
-        pass
-    return None
-
 
 def parse_mpki(filepath):
     """Return ROI total MPKI (STLB + LLC misses per kilo-instruction), or None."""
@@ -207,13 +193,6 @@ METRIC_COLORS = {
 }
 
 # ── Aggregation helpers ───────────────────────────────────────────────────────
-
-def geomean_ratios(pct_list):
-    """Geomean of a list of % speedup values (kept for single-trace paths)."""
-    ratios = [v / 100.0 + 1.0 for v in pct_list if not np.isnan(v)]
-    if not ratios:
-        return float("nan")
-    return (np.exp(np.mean(np.log(ratios))) - 1.0) * 100.0
 
 
 # ── Plot helpers ──────────────────────────────────────────────────────────────

@@ -23,7 +23,6 @@ The scope colour drives the N-shading ramp in the distribution tile below.
 """
 
 import argparse
-import re
 import sys
 from pathlib import Path
 
@@ -33,34 +32,17 @@ import matplotlib.ticker as mticker
 import matplotlib.pyplot as plt
 import numpy as np
 
-from spec_weights import benchmark_weighted_geomean_pct
-
-# ── Suite colours — match plot_suite_liveness.py (SPEC / Google / Qualcomm) ──
-SUITE_COLORS = ["#2C7BB6", "#D7191C", "#1A9641"]
+from colors import SUITE_COLORS
+from champsim_utils import parse_ipc
 
 # ── IPC parsing ───────────────────────────────────────────────────────────────
-
-def _parse_ipc(path: Path):
-    in_roi = False
-    try:
-        for line in path.read_text(errors="replace").splitlines():
-            if "Region of Interest Statistics" in line:
-                in_roi = True
-            if in_roi and "cumulative IPC:" in line:
-                m = re.search(r"cumulative IPC:\s+([0-9.]+)", line)
-                if m:
-                    return float(m.group(1))
-    except OSError:
-        pass
-    return None
-
 
 def _load_optimal_data(sweep_dir: Path, max_n: int) -> "dict[str, tuple[float,int]]":
     """Return {trace: (optimal_speedup_%, optimal_n)}."""
     lru_dir = sweep_dir / "lru"
     baselines: dict = {}
     for f in sorted(lru_dir.glob("*/champsim.out")):
-        v = _parse_ipc(f)
+        v = parse_ipc(f)
         if v is not None:
             baselines[f.parent.name] = v
     if not baselines:
@@ -73,7 +55,7 @@ def _load_optimal_data(sweep_dir: Path, max_n: int) -> "dict[str, tuple[float,in
         best_pct, best_n = float("-inf"), -1
         for n in range(1, max_n + 1):
             f = sweep_dir / f"mid_thd{n}" / wl / "champsim.out"
-            v = _parse_ipc(f)
+            v = parse_ipc(f)
             if v is not None:
                 pct = (v / base_ipc - 1.0) * 100.0
                 if pct > best_pct:
