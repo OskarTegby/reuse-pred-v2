@@ -8,7 +8,6 @@ Three panels (one per suite), each showing 2 bars per threshold:
 Output: results/plots/mid_lru_llc_only/mid_thd_comparison.png
 """
 
-import re
 import sys
 from pathlib import Path
 

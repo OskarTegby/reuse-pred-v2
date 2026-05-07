@@ -6,7 +6,6 @@ optimal mid_thd, and PC key at its optimal mid_thd. A geomean bar is appended
 after a small gap.
 """
 
-import re
 import sys
 from pathlib import Path
 

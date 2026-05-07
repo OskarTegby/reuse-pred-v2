@@ -23,7 +23,6 @@ The scope colour drives the N-shading ramp in the distribution tile below.
 """
 
 import argparse
-import re
 import sys
 from pathlib import Path
 
