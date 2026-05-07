@@ -156,13 +156,6 @@ def _aggregate_spec(speedup_by_wl: "dict[str, float]") -> "dict[str, float]":
     return result
 
 
-def geomean_pct(pcts):
-    vals = [v for v in pcts if v is not None]
-    if not vals:
-        return None
-    return (np.exp(np.mean(np.log([v / 100 + 1 for v in vals]))) - 1) * 100
-
-
 def draw_panel(ax, suite_label, addr_sp, pc_sp, addr_n, addr_promo, pc_n, pc_promo):
     # Aggregate SPEC simpoints into parent benchmarks
     addr_sp = _aggregate_spec(addr_sp)

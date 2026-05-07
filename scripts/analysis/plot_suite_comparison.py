@@ -29,7 +29,7 @@ import matplotlib.pyplot as plt
 import matplotlib.ticker as mticker
 import numpy as np
 
-from champsim_utils import parse_stats
+from champsim_utils import parse_stats, geomean
 from spec_weights import benchmark_name, load_spec_weights
 
 
@@ -66,14 +66,6 @@ def load_policy_stats(policy_dir: Path):
 def load_policy_ipcs(policy_dir: Path):
     """Return dict { workload: ipc } — kept for backward compat."""
     return {wl: v[0] for wl, v in load_policy_stats(policy_dir).items()}
-
-
-def geomean(vals):
-    v = [x for x in vals if x is not None and x > 0]
-    if not v:
-        return None
-    return float(np.exp(np.mean(np.log(v))))
-
 
 
 def _weighted_geomean(pairs: "list[tuple[float, float]]") -> "float | None":

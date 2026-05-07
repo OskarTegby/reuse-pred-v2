@@ -26,7 +26,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 
 from colors import POLICY_COLORS
-from champsim_utils import parse_stats
+from champsim_utils import parse_stats, geomean
 from spec_weights import SPEC_WEIGHTS, benchmark_name
 
 
@@ -45,11 +45,6 @@ def load_policy(policy_dir: Path):
             out[f.parent.name] = (ipc, stlb, llc)
     return out
 
-
-
-def geomean(vals):
-    v = [x for x in vals if x is not None and x > 0]
-    return float(np.exp(np.mean(np.log(v)))) if v else None
 
 
 def wmean(vals, weights):
