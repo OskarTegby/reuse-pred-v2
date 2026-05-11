@@ -15,10 +15,12 @@
  */
 
 #include "cache.h"
+#include "hist_lru.h"
 
 #include <algorithm>
 #include <cassert>
 #include <climits>
+#include <cstring>
 #include <cstdlib>
 #include <iomanip>
 #include <iterator>
@@ -42,6 +44,66 @@ uint64_t CACHE::fold_xor(uint64_t val, unsigned bits) const
   return result;
 }
 
+
+bool CACHE::phist_entry_exists(uint64_t pc, uint64_t vpn) const
+{
+  if (phist_hash) {
+    const auto outer = phist.find(fold_xor(vpn, VPN_BITS));
+    return outer != phist.end() && outer->second.count(fold_xor(pc, PC_BITS));
+  }
+  const auto outer = phist_full.find(addr_set(pc, phist_sets));
+  return outer != phist_full.end() && outer->second.count(phist_key_t{addr_tag(pc, phist_sets), vpn});
+}
+
+CACHE::hist_entry& CACHE::get_phist_entry(uint64_t pc, uint64_t vpn)
+{
+  if (phist_hash)
+    return phist[fold_xor(vpn, VPN_BITS)][fold_xor(pc, PC_BITS)];
+  const uint64_t set = addr_set(pc, phist_sets);
+  const uint64_t tag = addr_tag(pc, phist_sets);
+  assert(addr_reconstruct(set, tag, phist_sets) == pc);
+  const phist_key_t key{tag, vpn};
+  hist_entry& e = (repl_pol == repl_pol_t::lfu)
+    ? lfu_access(phist_full[set], key, phist_ways, lru_clock)
+    : lru_access(phist_full[set], key, phist_ways, lru_clock);
+  e.full_addr = pc;
+  return e;
+}
+
+void CACHE::phist_clear_vpn(uint64_t vpn)
+{
+  if (phist_hash) {
+    phist[fold_xor(vpn, VPN_BITS)].clear();
+  } else {
+    for (auto& [set_key, inner] : phist_full) {
+      for (auto it = inner.begin(); it != inner.end(); )
+        if (it->first.vpn == vpn) it = inner.erase(it);
+        else                      ++it;
+    }
+  }
+}
+
+bool CACHE::bhist_entry_exists(uint64_t block_addr) const
+{
+  if (bhist_hash) return bhist.count(fold_xor(block_addr, BHT_BITS));
+  const auto outer = bhist_full.find(addr_set(block_addr, bhist_sets));
+  return outer != bhist_full.end() && outer->second.count(addr_tag(block_addr, bhist_sets));
+}
+
+CACHE::hist_entry& CACHE::get_bhist_entry(uint64_t block_addr)
+{
+  if (bhist_hash)
+    return bhist[fold_xor(block_addr, BHT_BITS)];
+  const uint64_t set = addr_set(block_addr, bhist_sets);
+  const uint64_t tag = addr_tag(block_addr, bhist_sets);
+  assert(addr_reconstruct(set, tag, bhist_sets) == block_addr);
+  hist_entry& e = (repl_pol == repl_pol_t::lfu)
+    ? lfu_access(bhist_full[set], tag, bhist_ways, lru_clock)
+    : lru_access(bhist_full[set], tag, bhist_ways, lru_clock);
+  e.full_addr = block_addr;
+  return e;
+}
+
 // On a shadow table hit: reset the VPN's history row, serve the stored
 // translation to all requesters, and re-insert the entry into the STLB via
 // a synthetic handle_fill call (PTW is skipped entirely).
@@ -49,11 +111,13 @@ uint64_t CACHE::fold_xor(uint64_t val, unsigned bits) const
 bool CACHE::dppred_shadow_lookup(const PACKET& handle_pkt)
 {
   const auto vpn = handle_pkt.address >> OFFSET_BITS;
+  sim_stats.back().st_lookups++;
   auto it = std::find_if(shadow_table.begin(), shadow_table.end(), [vpn](const auto& e) { return e.first == vpn; });
   if (it == shadow_table.end())
     return false;
+  sim_stats.back().st_hits++;
 
-  phist[fold_xor(vpn, VPN_BITS)].clear();
+  phist_clear_vpn(vpn);
   const auto stored_data = it->second;
   shadow_table.erase(it);
 
@@ -77,9 +141,11 @@ bool CACHE::dppred_shadow_lookup(const PACKET& handle_pkt)
 // Only called when the set is full (otherwise there is nothing to bypass).
 bool CACHE::dppred_bypass(const PACKET& fill_mshr)
 {
-  const auto vpn_hash = fold_xor(fill_mshr.address >> OFFSET_BITS, VPN_BITS);
-  const auto pc_hash  = fold_xor(fill_mshr.ip,                     PC_BITS);
-  if (phist[vpn_hash][pc_hash].doa <= pconf_thd)
+  const auto vpn = fill_mshr.address >> OFFSET_BITS;
+  const auto pc  = fill_mshr.ip;
+  sim_stats.back().phist_lookups++;
+  if (phist_entry_exists(pc, vpn)) sim_stats.back().phist_hits++;
+  if (get_phist_entry(pc, vpn).doa <= pconf_thd)
     return false;
 
   // Push physical frame into the shared queue for cbPred (FIFO)
@@ -101,14 +167,18 @@ bool CACHE::dppred_bypass(const PACKET& fill_mshr)
 bool CACHE::cbpred_bypass(const PACKET& fill_mshr)
 {
   const auto pfn        = fill_mshr.address >> LOG2_PAGE_SIZE;
-  const auto block_hash = fold_xor(fill_mshr.address >> OFFSET_BITS, BHT_BITS);
+  const auto block_addr = fill_mshr.address >> OFFSET_BITS;
   const bool in_pfq     = std::find(pfq.begin(), pfq.end(), pfn) != pfq.end();
 
   sim_stats.back().pfq_probes++;
   if (in_pfq)
     sim_stats.back().pfq_hits++;
 
-  if (!in_pfq || bhist[block_hash].doa <= bconf_thd)
+  if (in_pfq) {
+    sim_stats.back().bhist_lookups++;
+    if (bhist_entry_exists(block_addr)) sim_stats.back().bhist_hits++;
+  }
+  if (!in_pfq || get_bhist_entry(block_addr).doa <= bconf_thd)
     return false;
 
   sim_stats.back().llc_bypasses++;
@@ -246,11 +316,9 @@ void CACHE::update_eviction_counters(const BLOCK& victim, liveness_class lv)
 
   // Predictor tables: keep existing gated update rules unchanged.
   if (dppred && NAME == "cpu0_STLB") {
-    const auto vpn_hash = fold_xor(victim.address >> OFFSET_BITS, VPN_BITS);
-    const auto pc_hash  = fold_xor(victim.ip,                     PC_BITS);
-    update(phist[vpn_hash][pc_hash]);
+    update(get_phist_entry(victim.ip, victim.address >> OFFSET_BITS));
   } else if (cbpred && NAME == "LLC" && victim.dp) {
-    update(bhist[fold_xor(victim.address >> OFFSET_BITS, BHT_BITS)]);
+    update(get_bhist_entry(victim.address >> OFFSET_BITS));
   }
 
   // Insertion-policy tables: always updated for LLC and STLB, no hashing.
@@ -292,6 +360,13 @@ bool CACHE::needs_mid_insertion(uint64_t full_addr, uint64_t ip) const
 //   MID_PROMOTE=<0|1>  promote mid-inserted blocks to MRU on hit (default 0 = no promotion)
 //   ST_SIZE=<n>        shadow-table capacity (default 2)
 //   PFQ_CAP=<n>        shared PFQ capacity (default 8)
+//   PHIST_HASH=<0|1>   XOR-fold VPN+PC before phist lookup (default 1 = hash)
+//   BHIST_HASH=<0|1>   XOR-fold block address before bhist lookup (default 1 = hash)
+//   PHIST_SETS=<n>     number of sets in phist_full (default 1 = fully associative, full-key mode only)
+//   PHIST_WAYS=<n>     ways per set in phist_full; total = sets × ways (default 64, full-key mode only)
+//   BHIST_SETS=<n>     number of sets in bhist_full (default 1 = fully associative, full-key mode only)
+//   BHIST_WAYS=<n>     ways per set in bhist_full; total = sets × ways (default 64, full-key mode only)
+//   REPL_POL=<pol>     replacement policy for full-key tables: "lru" (default) | "lfu"
 void CACHE::load_predictor_settings()
 {
   auto getenv_uint64 = [](const char* var, uint64_t fallback) -> uint64_t {
@@ -311,6 +386,15 @@ void CACHE::load_predictor_settings()
   pfq_cap   = getenv_uint64("PFQ_CAP",   pfq_cap);
   mid_key          = (getenv_uint64("MID_KEY",     0) == 1) ? mid_key_t::pc : mid_key_t::addr;
   mid_promote_on_hit = (getenv_uint64("MID_PROMOTE", 0) == 1);
+
+  phist_hash = (getenv_uint64("PHIST_HASH", 1) != 0);
+  bhist_hash = (getenv_uint64("BHIST_HASH", 1) != 0);
+  phist_sets = getenv_uint64("PHIST_SETS", phist_sets);
+  phist_ways = getenv_uint64("PHIST_WAYS", phist_ways);
+  bhist_sets = getenv_uint64("BHIST_SETS", bhist_sets);
+  bhist_ways = getenv_uint64("BHIST_WAYS", bhist_ways);
+  if (const char* pol = std::getenv("REPL_POL"))
+    repl_pol = (std::strcmp(pol, "lfu") == 0) ? repl_pol_t::lfu : repl_pol_t::lru;
 }
 
 bool CACHE::handle_fill(const PACKET& fill_mshr)
@@ -334,8 +418,9 @@ bool CACHE::handle_fill(const PACKET& fill_mshr)
   bool predictor_bypassed = false;
   if (way != set_end && way->valid) {
     const bool bypassed =
-      (dppred && NAME == "cpu0_STLB" && dppred_bypass(fill_mshr)) ||
-      (cbpred && NAME == "LLC"       && cbpred_bypass(fill_mshr));
+      fill_mshr.type != WRITE &&
+      ((dppred && NAME == "cpu0_STLB" && dppred_bypass(fill_mshr)) ||
+       (cbpred && NAME == "LLC"       && cbpred_bypass(fill_mshr)));
 
     if (bypassed) {
       predictor_bypassed = true;
@@ -861,6 +946,13 @@ void CACHE::end_phase(unsigned finished_cpu)
   roi_stats.back().llc_bypasses = sim_stats.back().llc_bypasses;
   roi_stats.back().pfq_probes   = sim_stats.back().pfq_probes;
   roi_stats.back().pfq_hits     = sim_stats.back().pfq_hits;
+
+  roi_stats.back().phist_lookups = sim_stats.back().phist_lookups;
+  roi_stats.back().phist_hits    = sim_stats.back().phist_hits;
+  roi_stats.back().bhist_lookups = sim_stats.back().bhist_lookups;
+  roi_stats.back().bhist_hits    = sim_stats.back().bhist_hits;
+  roi_stats.back().st_lookups    = sim_stats.back().st_lookups;
+  roi_stats.back().st_hits       = sim_stats.back().st_hits;
 
   roi_stats.back().evict_total        = sim_stats.back().evict_total;
   roi_stats.back().evict_doa          = sim_stats.back().evict_doa;

@@ -22,9 +22,19 @@ export MID_THD=${MID_THD:-1}
 export MID_KEY=${MID_KEY:-0}
 export MID_PROMOTE=${MID_PROMOTE:-0}
 
+# History-table and queue parameters (read from env by ChampSim)
+export PHIST_HASH=${PHIST_HASH:-1}
+export BHIST_HASH=${BHIST_HASH:-1}
+export PHIST_SETS=${PHIST_SETS:-1}
+export PHIST_WAYS=${PHIST_WAYS:-64}
+export BHIST_SETS=${BHIST_SETS:-1}
+export BHIST_WAYS=${BHIST_WAYS:-64}
+export REPL_POL=${REPL_POL:-lru}
+export PFQ_CAP=${PFQ_CAP:-8}
+export ST_SIZE=${ST_SIZE:-2}
+
 # Binary selection: BINARY env var selects the per-policy executable.
-# Defaults to champsim_lru_mid for backwards compatibility.
-BINARY=${BINARY:-champsim_lru_mid}
+BINARY=${BINARY:-champsim_lru}
 BIN="./bin/${BINARY}"
 
 # Build sorted list of traces at runtime
@@ -72,14 +82,28 @@ bconf_thd=${BCONF_THD}
 mid_thd=${MID_THD}
 mid_key=${MID_KEY}
 mid_promote=${MID_PROMOTE}
+phist_hash=${PHIST_HASH}
+bhist_hash=${BHIST_HASH}
+phist_sets=${PHIST_SETS}
+phist_ways=${PHIST_WAYS}
+bhist_sets=${BHIST_SETS}
+bhist_ways=${BHIST_WAYS}
+repl_pol=${REPL_POL}
+pfq_cap=${PFQ_CAP}
+st_size=${ST_SIZE}
 warmup=${WARMUP}
 sim=${SIM}
 INFO
 
 # Run the binary
+# PC_STATS=1 enables per-PC liveness CSV output (large files; off by default)
+PC_STATS=${PC_STATS:-0}
+PC_STATS_ARG=()
+[ "${PC_STATS}" = "1" ] && PC_STATS_ARG=(--pc-stats="${RUN_DIR}/pc_liveness.csv")
+
 echo "Run: ${RUN_LABEL}  trace: ${TRACE_NAME}"
 "$BIN" --warmup_instructions "$WARMUP" --simulation_instructions "$SIM" \
-  --pc-stats="${RUN_DIR}/pc_liveness.csv" "$TRACE_FILE" \
+  "${PC_STATS_ARG[@]}" "$TRACE_FILE" \
   > "${RUN_DIR}/champsim.out" 2> "${RUN_DIR}/champsim.err"
 rc=$?
 

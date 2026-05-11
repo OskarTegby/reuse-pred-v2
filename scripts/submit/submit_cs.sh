@@ -15,12 +15,19 @@ PROJECT_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 SHARED_TRACES=/home/users/shared/traces
 
 if [ $# -lt 1 ]; then
-  echo "Usage: $0 {test|maz|qmm|dpc3|google} [qsub args...]" >&2
+  echo "Usage: $0 {test|maz|qmm|dpc3|google} [--test] [qsub args...]" >&2
   exit 2
 fi
 
 token="$1"; shift
-EXTRA_QSUB_ARGS=("$@")
+TEST=0
+EXTRA_QSUB_ARGS=()
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --test) TEST=1; shift ;;
+    *)      EXTRA_QSUB_ARGS+=("$1"); shift ;;
+  esac
+done
 
 # submit_one LABEL WARMUP SIM TRACE_DIR TRACE_EXT MAX_TRACES
 # MAX_TRACES=0 means submit all traces.
@@ -51,24 +58,27 @@ submit_one() {
        "${EXTRA_QSUB_ARGS[@]}" "${PROJECT_ROOT}/scripts/submit/run_cs.sh"
 }
 
+_max_traces=0
+[ "$TEST" -eq 1 ] && _max_traces=1
+
 case "${token,,}" in
   test)
-    submit_one test_maz    1000000 5000000 "${PROJECT_ROOT}/trace-files/MAZUMDAR"  champsimtrace.xz 1
-    submit_one test_qmm    1000000 5000000 "${PROJECT_ROOT}/trace-files/QMM"       champsimtrace.xz 1
-    submit_one test_dpc3   1000000 5000000 "${SHARED_TRACES}/dpc3_traces"         champsimtrace.xz 1
-    submit_one test_google 1000000 5000000 "${SHARED_TRACES}/Google_Traces_v2"   champsim.gz      1
+    submit_one test_maz    25000000 50000000 "${PROJECT_ROOT}/trace-files/MAZUMDAR"  champsimtrace.xz 1
+    submit_one test_qmm    25000000 50000000 "${PROJECT_ROOT}/trace-files/QMM"       champsimtrace.xz 1
+    submit_one test_dpc3   25000000 50000000 "${SHARED_TRACES}/dpc3_traces"         champsimtrace.xz 1
+    submit_one test_google 25000000 50000000 "${SHARED_TRACES}/Google_Traces_v2"   champsim.gz      1
     ;;
   maz|mazumdar)
-    submit_one maz 100000000 1000000000 "${PROJECT_ROOT}/trace-files/MAZUMDAR" champsimtrace.xz 0
+    submit_one maz 100000000 1000000000 "${PROJECT_ROOT}/trace-files/MAZUMDAR" champsimtrace.xz "$_max_traces"
     ;;
   qmm)
-    submit_one qmm 50000000 100000000 "${PROJECT_ROOT}/trace-files/QMM" champsimtrace.xz 0
+    submit_one qmm 50000000 100000000 "${PROJECT_ROOT}/trace-files/QMM" champsimtrace.xz "$_max_traces"
     ;;
   dpc3)
-    submit_one dpc3 100000000 1000000000 "${SHARED_TRACES}/dpc3_traces" champsimtrace.xz 0
+    submit_one dpc3 100000000 1000000000 "${SHARED_TRACES}/dpc3_traces" champsimtrace.xz "$_max_traces"
     ;;
   google)
-    submit_one google 100000000 1000000000 "${SHARED_TRACES}/Google_Traces_v2" champsim.gz 0
+    submit_one google 100000000 1000000000 "${SHARED_TRACES}/Google_Traces_v2" champsim.gz "$_max_traces"
     ;;
   *)
     echo "Unknown token: $token — use test, maz, qmm, dpc3, or google" >&2

@@ -60,6 +60,10 @@ struct cache_stats {
   uint64_t pfq_probes   = 0;   // LLC fills checked against PFQ (CBPRED=1 only)
   uint64_t pfq_hits     = 0;   // subset of pfq_probes whose page was in PFQ
 
+  uint64_t phist_lookups = 0, phist_hits = 0;  // dpPred prediction queries (DPPRED=1 only)
+  uint64_t bhist_lookups = 0, bhist_hits = 0;  // cbPred prediction queries (CBPRED=1 only)
+  uint64_t st_lookups    = 0, st_hits    = 0;  // shadow-table lookups (DPPRED=1 only)
+
   // ── Block/page liveness stats (LLC and STLB only) ─────────────────────────
   // Recorded at every valid eviction during the ROI.
   //   DoA        – hit_count == 0 (never referenced after insertion)
@@ -168,6 +172,17 @@ class CACHE : public champsim::operable, public MemoryRequestConsumer, public Me
   struct hist_entry {
     uint64_t doa         = 0;
     uint64_t mostly_dead = 0;
+    uint64_t last_access = 0;  // recency timestamp for LRU eviction (full-key mode only)
+    uint64_t freq        = 0;  // access frequency for LFU eviction (full-key mode only)
+    uint64_t full_addr   = 0;  // original PC (phist) or block address (bhist) before set/tag split
+  };
+
+  // Inner key for phist_full.  pc_tag stores the high bits of the PC after
+  // stripping the set-index bits (addr_tag(pc, phist_sets)); vpn is unsplit.
+  struct phist_key_t {
+    uint64_t pc_tag, vpn;
+    bool operator<(const phist_key_t& o) const { if (pc_tag != o.pc_tag) return pc_tag < o.pc_tag; return vpn < o.vpn; }
+    bool operator==(const phist_key_t& o) const { return pc_tag == o.pc_tag && vpn == o.vpn; }
   };
 
 
@@ -182,14 +197,26 @@ class CACHE : public champsim::operable, public MemoryRequestConsumer, public Me
   uint64_t bconf_thd = 6; // bhist confidence threshold
   uint64_t mid_thd        = 1;     // min DoA-or-mostly-dead evictions before mid-insertion triggers
   bool     mid_promote_on_hit = false; // promote mid-inserted blocks to MRU on hit (MID_PROMOTE=1)
-  uint64_t st_size = 2;   // shadow table capacity
+  uint64_t st_size    = 2;    // shadow table capacity
+  uint64_t phist_sets = 1;    // number of sets in phist_full (1 = fully associative)
+  uint64_t phist_ways = 64;   // ways per set in phist_full; total capacity = sets × ways
+  uint64_t bhist_sets = 1;    // number of sets in bhist_full (1 = fully associative)
+  uint64_t bhist_ways = 64;   // ways per set in bhist_full; total capacity = sets × ways
+  uint64_t lru_clock  = 0;    // monotonic counter for LRU timestamps
+
+  // Replacement policy for the full-key history tables (no effect in hashed mode).
+  // Controlled by the REPL_POL env var ("lru" (default) | "lfu").
+  enum class repl_pol_t : uint8_t { lru, lfu };
+  repl_pol_t repl_pol = repl_pol_t::lru;
 
   // Set by cpu0_STLB at initialize(); used by LLC to scan for DoA page correlations.
   inline static const CACHE* stlb_ptr = nullptr;
 
-  std::map<uint64_t, std::map<uint64_t, hist_entry>> phist; // [vpn_hash][pc_hash] → entry
-  std::deque<std::pair<uint64_t, uint64_t>> shadow_table;   // recently bypassed (VPN, translation data)
-  std::map<uint64_t, hist_entry> bhist;                      // [block_hash] → entry
+  std::map<uint64_t, std::map<uint64_t,    hist_entry>> phist;      // [vpn_hash][pc_hash] → entry  (hashed)
+  std::map<uint64_t, std::map<phist_key_t, hist_entry>> phist_full; // [pc_set][{pc_tag,vpn}] → entry (full-key)
+  std::deque<std::pair<uint64_t, uint64_t>> shadow_table;           // recently bypassed (VPN, translation data)
+  std::map<uint64_t, hist_entry> bhist;                             // [block_hash] → entry           (hashed)
+  std::map<uint64_t, std::map<uint64_t, hist_entry>> bhist_full;   // [addr_set][addr_tag] → entry   (full-key)
 
   // Selects which history signal drives needs_mid_insertion().
   // Controlled by the MID_KEY env var (0 = addr, 1 = pc; default 0).
@@ -211,15 +238,19 @@ class CACHE : public champsim::operable, public MemoryRequestConsumer, public Me
   std::map<uint64_t, hist_entry> stlb_mid_hist_addr;
   std::map<uint64_t, hist_entry> stlb_mid_hist_pc;
 
-  static constexpr unsigned  VPN_BITS = 4;
-  static constexpr unsigned  PC_BITS  = 6;
-  static constexpr unsigned  BHT_BITS = 12;
-  // No MAX_COUNTER cap: hardware would use a fixed-width saturating counter
-  // (e.g. 4 bits → 0-15), but in the simulator the counters live in std::map
-  // as uint64_t, so capping loses information without saving any memory.
-  // The bypass threshold (pconf_thd / bconf_thd) is the only meaningful limit.
+  static constexpr unsigned VPN_BITS = 4;
+  static constexpr unsigned PC_BITS  = 6;
+  static constexpr unsigned BHT_BITS = 12;
+
+  bool phist_hash = true;   // PHIST_HASH=0 disables XOR-folding, uses full VPN+PC as key
+  bool bhist_hash = true;   // BHIST_HASH=0 disables XOR-folding, uses full block address as key
 
   uint64_t fold_xor(uint64_t val, unsigned bits) const;
+  bool        phist_entry_exists(uint64_t pc, uint64_t vpn) const;
+  hist_entry& get_phist_entry(uint64_t pc, uint64_t vpn);     // dispatches to phist or phist_full
+  void        phist_clear_vpn(uint64_t vpn);                  // invalidate all entries for a VPN
+  bool        bhist_entry_exists(uint64_t block_addr) const;
+  hist_entry& get_bhist_entry(uint64_t block_addr);           // dispatches to bhist or bhist_full
   void load_predictor_settings();                               // reads env vars to configure dpPred/cbPred at construction
   bool dppred_shadow_lookup(const PACKET& handle_pkt);          // true → shadow hit: history reset, data served, entry re-inserted into STLB, PTW skipped
   bool dppred_bypass(const PACKET& fill_mshr);                  // true → skip STLB fill

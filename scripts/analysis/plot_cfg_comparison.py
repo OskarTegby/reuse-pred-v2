@@ -23,7 +23,6 @@ Any suite argument may be omitted; that suite is simply skipped.
 """
 
 import argparse
-import re
 import sys
 from pathlib import Path
 
@@ -39,7 +38,6 @@ Y_LO, Y_HI = -2.0, 5.0   # clip range; outliers are annotated
 # ── Suite identity ────────────────────────────────────────────────────────────
 SUITE_ORDER  = ["dpc3",        "google",  "qmm"]
 SUITE_LABELS = ["SPEC (DPC3)", "Google",  "Qualcomm"]
-SUITE_COLORS = ["#2C7BB6",     "#D7191C", "#1A9641"]
 
 # ── Configuration identity ────────────────────────────────────────────────────
 CONFIGS = [
@@ -57,73 +55,17 @@ CONFIGS = [
     ),
 ]
 
-# ── Simpoint weights ──────────────────────────────────────────────────────────
-_DEFAULT_WEIGHTS_DIR = (
-    Path(__file__).parents[2] / ".." / "ChampSim-dev" / "trace-files" / "SPEC2006_weights"
-).resolve()
-
-
-def _load_spec_weights(d: Path) -> dict:
-    result: dict = {}
-    if not d.is_dir():
-        return result
-    for bm in sorted(d.iterdir()):
-        wf = bm / "weights.out"; sf = bm / "simpoints.out"
-        if not (wf.exists() and sf.exists()):
-            continue
-        for sp_id, w in zip([int(x) for x in sf.read_text().split()],
-                            [float(x) for x in wf.read_text().split()]):
-            result[f"{bm.name}-{sp_id}B"] = w
-    return result
-
-
-_SPEC_WEIGHTS = _load_spec_weights(_DEFAULT_WEIGHTS_DIR)
-
-
-def _bm_name(wl: str) -> str:
-    m = re.match(r'^(.+)-\d+[A-Z]+$', wl)
-    return m.group(1) if m else wl
+from colors import SUITE_COLORS
+from spec_weights import benchmark_weighted_geomean_pct
+from champsim_utils import parse_ipc
 
 
 def _geomean_pct(sp: dict) -> float:
-    groups: dict = {}
-    for wl, v in sp.items():
-        groups.setdefault(_bm_name(wl), []).append(wl)
-    per_bench = []
-    for wls in groups.values():
-        ratios = {wl: sp[wl] / 100 + 1 for wl in wls}
-        if _SPEC_WEIGHTS:
-            pairs = [(ratios[wl], _SPEC_WEIGHTS.get(wl)) for wl in wls]
-            if any(w is not None for _, w in pairs):
-                pairs = [(r, w) for r, w in pairs if w is not None and r > 0]
-                tw = sum(w for _, w in pairs)
-                if tw > 0:
-                    per_bench.append(float(np.exp(sum(w / tw * np.log(r) for r, w in pairs))))
-                    continue
-        vals = [ratios[wl] for wl in wls if ratios[wl] > 0]
-        if vals:
-            per_bench.append(float(np.exp(np.mean(np.log(vals)))))
-    if not per_bench:
-        return float("nan")
-    return (float(np.exp(np.mean(np.log([r for r in per_bench if r > 0])))) - 1) * 100
+    ratios = {wl: v / 100 + 1 for wl, v in sp.items()}
+    return benchmark_weighted_geomean_pct(ratios)
 
 
 # ── Parsing ───────────────────────────────────────────────────────────────────
-
-def _parse_ipc(path: Path):
-    in_roi = False
-    try:
-        for line in path.read_text(errors="replace").splitlines():
-            if "Region of Interest Statistics" in line:
-                in_roi = True
-            if in_roi and "cumulative IPC:" in line:
-                m = re.search(r"cumulative IPC:\s+([0-9.]+)", line)
-                if m:
-                    return float(m.group(1))
-    except OSError:
-        pass
-    return None
-
 
 def _load_speedups(suite_dir: Path, baseline_name: str, pred_name: str) -> dict:
     base_d = suite_dir / baseline_name
@@ -132,14 +74,14 @@ def _load_speedups(suite_dir: Path, baseline_name: str, pred_name: str) -> dict:
         return {}
     bases = {}
     for f in sorted(base_d.glob("*/champsim.out")):
-        v = _parse_ipc(f)
+        v = parse_ipc(f)
         if v is not None:
             bases[f.parent.name] = v
     sp = {}
     for wl, b in bases.items():
         if b <= 0:
             continue
-        p = _parse_ipc(pred_d / wl / "champsim.out")
+        p = parse_ipc(pred_d / wl / "champsim.out")
         if p is not None:
             sp[wl] = (p / b - 1) * 100
     return sp

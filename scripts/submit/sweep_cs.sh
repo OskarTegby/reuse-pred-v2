@@ -27,6 +27,7 @@ PROJECT_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 # ── Argument parsing ──────────────────────────────────────────────────────────
 token=""
 DEBUG=0
+TEST=0
 BASELINE_ONLY=0
 WITH_PREF=0
 WARMUP_OVERRIDE=""
@@ -35,19 +36,20 @@ SIM_OVERRIDE=""
 while [[ $# -gt 0 ]]; do
   case "$1" in
     maz|mazumdar|qmm|dpc3|google|test) token="${1,,}"; shift ;;
+    --test)           TEST=1; shift ;;
     --debug)          DEBUG=1; shift ;;
     --baseline-only)  BASELINE_ONLY=1; shift ;;
     --pref)           WITH_PREF=1; shift ;;
     --warmup)         WARMUP_OVERRIDE="$2"; shift 2 ;;
     --sim)            SIM_OVERRIDE="$2"; shift 2 ;;
     *) echo "Unknown argument: $1" >&2
-       echo "Usage: $0 {maz|qmm|dpc3|google|test} [--debug] [--baseline-only] [--pref] [--warmup N] [--sim N]" >&2
+       echo "Usage: $0 {maz|qmm|dpc3|google|test} [--test] [--debug] [--baseline-only] [--pref] [--warmup N] [--sim N]" >&2
        exit 2 ;;
   esac
 done
 
 if [ -z "$token" ]; then
-  echo "Usage: $0 {maz|qmm|dpc3|google|test} [--debug] [--baseline-only] [--pref] [--warmup N] [--sim N]" >&2
+  echo "Usage: $0 {maz|qmm|dpc3|google|test} [--test] [--debug] [--baseline-only] [--pref] [--warmup N] [--sim N]" >&2
   exit 2
 fi
 
@@ -80,8 +82,8 @@ case "$token" in
     TRACE_EXT="champsim.gz"
     ;;
   test)
-    WARMUP=1000000
-    SIM=5000000
+    WARMUP=25000000
+    SIM=50000000
     TRACE_DIR="${PROJECT_ROOT}/trace-files/TEST"
     TRACE_EXT="champsimtrace.xz"
     ;;
@@ -90,6 +92,7 @@ esac
 # Apply overrides after defaults are set
 [ -n "$WARMUP_OVERRIDE" ] && WARMUP="$WARMUP_OVERRIDE"
 [ -n "$SIM_OVERRIDE" ]    && SIM="$SIM_OVERRIDE"
+[ "$TEST" -eq 1 ] && { WARMUP=25000000; SIM=50000000; }
 
 # ── Resolve trace list ────────────────────────────────────────────────────────
 mapfile -t TRACES < <(find "${TRACE_DIR}" -name "*.${TRACE_EXT}" | sort)
@@ -99,12 +102,12 @@ if [ "$N" -eq 0 ]; then
   exit 2
 fi
 
-if [ "$DEBUG" -eq 1 ]; then
+if [ "$TEST" -eq 1 ]; then
+  TASK_RANGE="1-$(( N < 5 ? N : 5 ))"
+elif [ "$DEBUG" -eq 1 ]; then
   TASK_RANGE="1-1"
-  MODE_TAG="_debug"
 else
   TASK_RANGE="1-${N}"
-  MODE_TAG=""
 fi
 
 SWEEP_BINARY="champsim_lru_mid"
@@ -115,7 +118,8 @@ if [ "${WITH_PREF}" -eq 1 ]; then
 fi
 
 DATE=$(date +%Y%m%d_%H%M)
-BASE_LABEL="${token}${PREF_TAG}_${DATE}${MODE_TAG}"
+TEST_TAG=$( [ "$TEST" -eq 1 ] && echo "_test" || echo "" )
+BASE_LABEL="${token}${PREF_TAG}_${DATE}${TEST_TAG}"
 
 LOG_DIR="${PROJECT_ROOT}/logs/${BASE_LABEL}"
 mkdir -p "$LOG_DIR"
