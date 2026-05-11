@@ -51,7 +51,7 @@ level. The LLC--STLB DoA correlation is near zero for Google and Qualcomm, which
 explains why the predictor adds little on those suites but helps on SPEC. With
 prefetching enabled, SRRIP overtakes \lrumid on the server suites ---
 the interaction between prefetching and replacement policy is not yet understood
-and is the main open question going forward.
+and further research into \lrumid also remains.
 \end{abstract}
 
 \tableofcontents
@@ -59,9 +59,10 @@ and is the main open question going forward.
 % ─────────────────────────────────────────────────────────────────────────────
 \section{Introduction}
 % ─────────────────────────────────────────────────────────────────────────────
-This document contains the experimental results from the investigation into guiding the DoA replacement policy
-using liveness data of the LLC cache blocks. The research might include the bypassing as well, and it's possible
-that the liveness data could be used to perform replacement in the STLB too, but, for now, it's not considered.
+This document presents experimental results from an investigation into using per-PC liveness history to guide
+LLC and STLB replacement. The work covers three directions: a characterisation of cache block liveness across
+three benchmark suites (SPEC CPU2006, Google Warehouse, and Qualcomm Mobile), an analysis of the LLC--STLB
+bypass predictor, and a study of liveness-guided insertion policies (\lrumid{} and SRRIP\textsubscript{live}).
 
 % ─────────────────────────────────────────────────────────────────────────────
 \section{Definitions}
@@ -71,18 +72,18 @@ that the liveness data could be used to perform replacement in the STLB too, but
   \item We define mostly-dead and mostly-alive in the following way:
     \begin{equation}
       \begin{cases}
-        \text{mostly-dead:} & \text{dead time} < \text{live time}, \\
-        \text{mostly-alive:} & \text{dead time} > \text{live time}
+        \text{mostly-dead:} & \text{dead time} > \text{live time}, \\
+        \text{mostly-alive:} & \text{dead time} \leq \text{live time}
       \end{cases}
     \end{equation}
       which is equivalent to
     \begin{equation}
       \begin{cases}
-        \text{mostly-dead:} & \text{install time} - \text{last-hit time} < \text{lifetime} / 2, \\ 
-        \text{mostly-alive:} & \text{install time} - \text{last-hit time} > \text{lifetime} / 2
+        \text{mostly-dead:} & \text{evict time} - \text{last-hit time} > \text{lifetime} / 2, \\
+        \text{mostly-alive:} & \text{evict time} - \text{last-hit time} \leq \text{lifetime} / 2
       \end{cases}
     \end{equation}
-    where $\text{life time} = \text{install time} - \text{evict time}$. We will use the latter to determine whether an
+    where $\text{lifetime} = \text{evict time} - \text{install time}$. We will use the latter to determine whether an
     entry is mostly-dead or mostly-alive.
   \item Dead on Arrival (DoA) is defined as an entry being evicted without any hits. That is recorded 
     architecturally by the Accessed bit (A) not being set on eviction as seen in Figure \ref{fig:dppred_design}
@@ -92,8 +93,8 @@ that the liveness data could be used to perform replacement in the STLB too, but
       \text{DoA correlation} = \frac{\text{Number of DoA LLC blocks on a DoA STLB page}}
                                     {\text{Number of DoA LLC blocks}}
     \end{equation}
-    Here, we define "on a DoA STLB page" as the corresponding page being DoA when the DoA LLC cache block is evicted.
-  \item We have defined the \lrumid replacement policy by inserting an entry into the middle of the recency stack
+    Here, we define "on a DoA STLB page" as the corresponding page being DoA when the DoA LLC cache block is being evicted.
+  \item We have defined the \lrumid\ replacement policy by inserting an entry into the middle of the recency stack
     we have seen $m>N$ evictions as DoA or mostly-dead, where $N$ is a parameter to be set empirically. 
 \end{enumerate}
 
@@ -156,8 +157,8 @@ what we insert never gets touched again both for the LLC and STLB.
 In Figure \ref{fig:liveness_google} and \ref{fig:liveness_qmm}, we find that the
 per-workload distribution is very even for both Google and Qualcomm. Both suites
 have more mostly-dead entries in the STLB than in the LLC. We find that Google has 
-about half as many mostly-alive entries in the STLB than Qualcomm, but it doubtful
-that this would have any real significance.
+about half as many mostly-alive entries in the STLB as Qualcomm, but it is doubtful
+that this has any real significance.
 
 \subsection{Per-workload liveness --- SPEC}
 
@@ -462,10 +463,10 @@ mostly-dead history to inform the insertion policy.
   \label{fig:addr_vs_pc_all}
 \end{figure}
 
-In Figure \ref{fig:addr_vs_pc_all} we see the per-workload at SPEC speedup.
-We find that \lrumid does better than SRRIP for workloads like \texttt{mcf}
+Figure~\ref{fig:addr_vs_pc_all} shows the per-workload speedup breakdown.
+\lrumid does better than SRRIP for workloads like \texttt{mcf}
 and \texttt{xalancbmk}, while both perform worse than LRU on others. The
-geomean ends up close to zero because of this. 
+geomean ends up close to zero because of this.
 
 For Google and Qualcomm, \lrumid performs more uniformly well across workloads.
 We note that the speedup is about twice as high for Google compared to Qualcomm and that
@@ -550,15 +551,13 @@ weak LLC--STLB DoA correlation. Interestingly, SRRIP still seems to benefit
 a bit from the predictor. My guess is that the STLB predictor is still useful
 there even without the LLC correlation, but this is only speculation.
 
-Here, it is important to remark that both the replacement policy in the LLC and
-the STLB is changed here, which, of course, will hurt SRRIP's performance. The
-reason why these results are shown here (Figure \ref{fig:suite_ipc_llc_only})
-is because we find that performance is better when using \lrumid in
-both the STLB and the LLC than when it is only being used in the STLB.
-
-The rest of the LLC-only results are found in the appendix. The only impact that the
-change in the STLB has here is that SRRIP probably will perform worse as it was designed
-with the LLC in mind.
+Note that Figure~\ref{fig:suite_ipc} changes the replacement policy in both the LLC and the
+STLB simultaneously, whereas Figure~\ref{fig:suite_ipc_llc_only} changes only the LLC.
+The main results use the combined scope because performance is consistently better when
+\lrumid is applied to both caches rather than to the LLC alone; the LLC-only variant and
+the full appendix figures are provided for reference.
+Since SRRIP was designed for the LLC, changing the STLB policy to \lrumid disadvantages it
+relative to the LLC-only comparison.
 
 \begin{figure}[htbp]
   \centering
@@ -654,9 +653,9 @@ MPKIs barely changes, which probably warrants further investigation.
   \label{fig:google_mpki}
 \end{figure}
 
-For Google (Figure \ref{fig:google_ipc} and ), \lrumid improves performance
-consistently across workloads, and for Qualcomm (Figure \ref{fig:qmm_ipc} and
-\ref{fig:qmm_mpki}), we find that SRRIP leads on IPC, consistent with the suite-level result. 
+For Google (Figures~\ref{fig:google_ipc} and~\ref{fig:google_mpki}), \lrumid improves performance
+consistently across workloads. For Qualcomm (Figures~\ref{fig:qmm_ipc} and
+\ref{fig:qmm_mpki}), SRRIP leads on IPC, consistent with the suite-level result.
 
 The STLB MPKI reduction is noticeable for Qualcomm (Figure \ref{fig:qmm_mpki}), unlike for
 the other suites (Figure \ref{fig:google_mpki} and \ref{fig:dpc3_mpki}). 
@@ -725,7 +724,7 @@ in the LLC it hurts performance for SPEC and is roughly neutral elsewhere.
 For SPEC (Figure \ref{fig:dpc3_pref_ipc} and \ref{fig:dpc3_pref_mpki}),
 the prefetcher hurts \lrumid relative to the no-prefetcher case
 on several workloads while SRRIP benefits --- the interaction between
-prefetching and insertion policy is not-yet clear.
+prefetching and insertion policy is not yet clear.
 
 \begin{figure}[htbp]
   \centering
@@ -759,7 +758,7 @@ the prefetcher is enabled, reversing the no-prefetcher result.
   \label{fig:qmm_pref_mpki}
 \end{figure}
 
-For Qualcomm (Figure \ref{fig:google_pref_ipc} and \ref{fig:google_pref_mpki}),
+For Qualcomm (Figures~\ref{fig:qmm_pref_ipc} and~\ref{fig:qmm_pref_mpki}),
 SRRIP gains the most from prefetching across individual workloads, but the MPKI
 is not improved that much.
 
@@ -831,8 +830,8 @@ is better under realistic workload conditions.
 \subsection{Research questions}
 % ─────────────────────────────────────────────────────────────────────────────
 \begin{enumerate}
-  \item How come that the performance improves so much when using \lrumid in
-    both the STLB?
+  \item Why does performance improve so much when using \lrumid in
+    both the LLC and STLB?
   \item Why does prefetching hurt \lrumid on SPEC and make SRRIP outperform
     \lrumid on Google and Qualcomm? Could we tap into that potential somehow?
   \item How could we better inform the insertion policy where to insert the entry in
@@ -851,9 +850,12 @@ is better under realistic workload conditions.
 \subsection{Planned experiments}
 % ─────────────────────────────────────────────────────────────────────────────
 \begin{enumerate}
-  \item Vary the replacement policies only in the STLB to study their effects there.
-  \item Reduce the inserted recency using the liveness data (i.e. $N$ DoA and $M$ mostly-dead 
-    lead to insertion recency $k$).
+  \item Vary the replacement policy only in the STLB to isolate its contribution.
+  \item \textbf{SRRIP\textsubscript{live}:} liveness-informed SRRIP --- insert dead-predicted blocks
+    at $\text{RRPV}{=}\text{maxRRPV}$ (immediate eviction candidate) instead of $\text{maxRRPV}{-}1$,
+    with configurable promotion on hit (currently under evaluation).
+  \item Finer-grained insertion: map ($N_{\text{DoA}}$, $M_{\text{mostly-dead}}$) to a specific
+    recency level rather than a binary mid/MRU decision.
 \end{enumerate}
 
 % ─────────────────────────────────────────────────────────────────────────────
