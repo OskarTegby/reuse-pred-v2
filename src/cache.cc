@@ -418,8 +418,9 @@ bool CACHE::handle_fill(const PACKET& fill_mshr)
   bool predictor_bypassed = false;
   if (way != set_end && way->valid) {
     const bool bypassed =
-      (dppred && NAME == "cpu0_STLB" && dppred_bypass(fill_mshr)) ||
-      (cbpred && NAME == "LLC"       && cbpred_bypass(fill_mshr));
+      fill_mshr.type != WRITE &&
+      ((dppred && NAME == "cpu0_STLB" && dppred_bypass(fill_mshr)) ||
+       (cbpred && NAME == "LLC"       && cbpred_bypass(fill_mshr)));
 
     if (bypassed) {
       predictor_bypassed = true;

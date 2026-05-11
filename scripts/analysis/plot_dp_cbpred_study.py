@@ -30,89 +30,26 @@ import matplotlib.ticker as mticker
 import matplotlib.pyplot as plt
 import numpy as np
 
+from colors import SUITE_COLORS
+from spec_weights import benchmark_weighted_geomean_pct
+from champsim_utils import parse_ipc
+
 # ── Suite colours — match liveness strip ─────────────────────────────────────
 # Order: SPEC → Google → Qualcomm  (matches liveness_corr_strip ordering)
 SUITE_ORDER  = ["dpc3",   "google",  "qmm"]
 SUITE_LABELS = ["SPEC (DPC3)", "Google", "Qualcomm"]
-SUITE_COLORS = ["#2C7BB6",    "#D7191C", "#1A9641"]
 
 # Config colours — fixed per config across all suites (Panel 1)
 COLOR_DP   = "#4393C3"   # blue  — dpPred only
 COLOR_BOTH = "#D6604D"   # red-orange — dpPred + cbPred
 
-# ── Simpoint weights ──────────────────────────────────────────────────────────
-
-_DEFAULT_WEIGHTS_DIR = (
-    Path(__file__).parents[2] / ".." / "ChampSim-dev" / "trace-files" / "SPEC2006_weights"
-).resolve()
-
-
-def _load_spec_weights(weights_dir: Path) -> "dict[str, float]":
-    result: dict = {}
-    if not weights_dir.is_dir():
-        return result
-    for bm_dir in sorted(weights_dir.iterdir()):
-        if not bm_dir.is_dir():
-            continue
-        w_file = bm_dir / "weights.out"
-        s_file = bm_dir / "simpoints.out"
-        if not (w_file.exists() and s_file.exists()):
-            continue
-        w_vals = [float(x) for x in w_file.read_text().split()]
-        s_ids  = [int(x)   for x in s_file.read_text().split()]
-        for sp_id, w in zip(s_ids, w_vals):
-            result[f"{bm_dir.name}-{sp_id}B"] = w
-    return result
-
-
-def _benchmark_name(wl: str) -> str:
-    m = re.match(r'^(.+)-\d+[A-Z]+$', wl)
-    return m.group(1) if m else wl
-
-
-_SPEC_WEIGHTS = _load_spec_weights(_DEFAULT_WEIGHTS_DIR)
-
 
 def _weighted_geomean_pct(speedups_by_wl: "dict[str, float]") -> float:
-    groups: dict = {}
-    for wl, v in speedups_by_wl.items():
-        groups.setdefault(_benchmark_name(wl), []).append(wl)
-    per_bench = []
-    for wl_list in groups.values():
-        ratios = {wl: speedups_by_wl[wl] / 100.0 + 1.0 for wl in wl_list}
-        if _SPEC_WEIGHTS:
-            pairs = [(ratios[wl], _SPEC_WEIGHTS.get(wl)) for wl in wl_list]
-            if any(w is not None for _, w in pairs):
-                pairs = [(r, w) for r, w in pairs if w is not None and r > 0]
-                total_w = sum(w for _, w in pairs)
-                if total_w > 0:
-                    per_bench.append(
-                        float(np.exp(sum((w / total_w) * np.log(r) for r, w in pairs))))
-                    continue
-        vals = [ratios[wl] for wl in wl_list if ratios[wl] > 0]
-        if vals:
-            per_bench.append(float(np.exp(np.mean(np.log(vals)))))
-    if not per_bench:
-        return float("nan")
-    return (float(np.exp(np.mean(np.log([r for r in per_bench if r > 0])))) - 1) * 100
+    ratios = {wl: v / 100.0 + 1.0 for wl, v in speedups_by_wl.items()}
+    return benchmark_weighted_geomean_pct(ratios)
 
 
 # ── Parsing ───────────────────────────────────────────────────────────────────
-
-def _parse_ipc(path: Path):
-    in_roi = False
-    try:
-        for line in path.read_text(errors="replace").splitlines():
-            if "Region of Interest Statistics" in line:
-                in_roi = True
-            if in_roi and "cumulative IPC:" in line:
-                m = re.search(r"cumulative IPC:\s+([0-9.]+)", line)
-                if m:
-                    return float(m.group(1))
-    except OSError:
-        pass
-    return None
-
 
 def _parse_pfq_hit_rate(path: Path):
     """Return PFQ hit rate (%) computed from 'LLC PFQ PROBES: N  HITS: M'."""
@@ -161,7 +98,7 @@ def _load_suite(suite_dir: Path) -> dict:
 
     baselines: dict = {}
     for f in sorted(lru_dir.glob("*/champsim.out")):
-        v = _parse_ipc(f)
+        v = parse_ipc(f)
         if v is not None:
             baselines[f.parent.name] = v
 
@@ -176,11 +113,11 @@ def _load_suite(suite_dir: Path) -> dict:
         if base <= 0:
             continue
 
-        dp_ipc = _parse_ipc(dp_dir / wl / "champsim.out")
+        dp_ipc = parse_ipc(dp_dir / wl / "champsim.out")
         if dp_ipc is not None:
             result["ipc_speedup_dp"][wl] = (dp_ipc / base - 1.0) * 100.0
 
-        both_ipc = _parse_ipc(both_dir / wl / "champsim.out")
+        both_ipc = parse_ipc(both_dir / wl / "champsim.out")
         if both_ipc is not None:
             result["ipc_speedup_both"][wl] = (both_ipc / base - 1.0) * 100.0
 
@@ -483,7 +420,7 @@ def main():
     ax.set_xlim(-0.5, len(SUITE_LABELS) - 0.5)
     ax.set_ylim(Y_LO, Y_HI)
     ax.set_ylabel("IPC speedup vs LRU (%)", fontsize=10)
-    ax.set_title("IPC speedup\n(dpPred only vs.\ dpPred+cbPred, pconf=bconf=6)",
+    ax.set_title("IPC speedup\n(dpPred only vs. dpPred+cbPred, pconf=bconf=6)",
                  fontsize=11, fontweight="bold")
     ax.yaxis.set_major_formatter(mticker.FormatStrFormatter("%.1f%%"))
     ax.legend(fontsize=9, framealpha=0.85, loc="upper right")

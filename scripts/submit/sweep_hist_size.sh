@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # sweep_hist_size.sh — independent pHIST × bHIST size scaling study.
 #
-# Sweeps all combinations of pHIST and bHIST capacity, fully associative (sets=1),
+# Sweeps all combinations of pHIST and bHIST capacity across three table modes,
 # split into two ranges around the original target sizes (pHIST=1024, bHIST=4096):
 #
 #   small  pHIST ∈ {64,128,256,512,1024}         (5 values, up to original)
@@ -15,19 +15,20 @@
 # The original sizes (pHIST=1024, bHIST=4096) appear in both ranges as an
 # anchor point for cross-range comparison.
 #
-# All tables run fully associative (sets=1); associativity effects are studied
-# separately in sweep_assoc.sh.  Both LRU and LFU replacement policies.
-#
-# Config naming: {pol}_p{phist_N}_b{bhist_N}
+# Each (phist_N, bhist_N) pair runs in three modes:
+#   full-key + LRU  : phist_hash=0, sets=1, ways=N — lru_p{N}_b{N}
+#   full-key + LFU  : same with lfu               — lfu_p{N}_b{N}
+#   hashed          : phist_hash=1, sets=N, ways=1 — hash_p{N}_b{N}
+#                     hash maps address to slot; no replacement policy (overwrites on collision)
 #
 # References (same for both ranges):
 #   baseline  — no predictor, hashed tables (IPC floor)
-#   hash_pred — predictor on, hashed tables (comparison baseline)
-#   inf       — both tables FA with 2^20 ways (no evictions; policy irrelevant)
+#   hash_pred — predictor on, hashed tables at default size (comparison baseline)
+#   inf       — both tables full-key with 2^20 ways (no evictions; policy irrelevant)
 #
 # Total configs:
-#   small: 3 refs + 35×2 = 73
-#   large: 3 refs + 15×2 = 33
+#   small: 3 refs + 35×3 = 108
+#   large: 3 refs + 15×3 = 48
 #
 # Usage: ./sweep_hist_size.sh {qmm|dpc3|google|test} {small|large}
 #                             [--debug] [--warmup N] [--sim N]
@@ -40,6 +41,7 @@ PROJECT_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 token=""
 range=""
 DEBUG=0
+TEST=0
 WARMUP_OVERRIDE=""
 SIM_OVERRIDE=""
 
@@ -47,17 +49,18 @@ while [[ $# -gt 0 ]]; do
   case "$1" in
     qmm|dpc3|google|test) token="${1,,}"; shift ;;
     small|large)           range="${1,,}"; shift ;;
+    --test)    TEST=1; shift ;;
     --debug)   DEBUG=1; shift ;;
     --warmup)  WARMUP_OVERRIDE="$2"; shift 2 ;;
     --sim)     SIM_OVERRIDE="$2"; shift 2 ;;
     *) echo "Unknown argument: $1" >&2
-       echo "Usage: $0 {qmm|dpc3|google|test} {small|large} [--debug] [--warmup N] [--sim N]" >&2
+       echo "Usage: $0 {qmm|dpc3|google|test} {small|large} [--test] [--debug] [--warmup N] [--sim N]" >&2
        exit 2 ;;
   esac
 done
 
 if [ -z "$token" ] || [ -z "$range" ]; then
-  echo "Usage: $0 {qmm|dpc3|google|test} {small|large} [--debug] [--warmup N] [--sim N]" >&2
+  echo "Usage: $0 {qmm|dpc3|google|test} {small|large} [--test] [--debug] [--warmup N] [--sim N]" >&2
   exit 2
 fi
 
@@ -91,7 +94,7 @@ case "$token" in
     TRACE_EXT="champsim.gz"
     ;;
   test)
-    WARMUP=1000000; SIM=5000000
+    WARMUP=25000000; SIM=50000000
     TRACE_DIR="${PROJECT_ROOT}/trace-files/TEST"
     TRACE_EXT="champsimtrace.xz"
     ;;
@@ -99,6 +102,7 @@ esac
 
 [ -n "$WARMUP_OVERRIDE" ] && WARMUP="$WARMUP_OVERRIDE"
 [ -n "$SIM_OVERRIDE" ]    && SIM="$SIM_OVERRIDE"
+[ "$TEST" -eq 1 ] && { WARMUP=25000000; SIM=50000000; }
 
 mapfile -t TRACES < <(find "${TRACE_DIR}" -name "*.${TRACE_EXT}" | sort)
 N_TRACES=${#TRACES[@]}
@@ -106,14 +110,17 @@ if [ "$N_TRACES" -eq 0 ]; then
   echo "ERROR: No traces found in ${TRACE_DIR}" >&2; exit 2
 fi
 
-if [ "$DEBUG" -eq 1 ]; then
-  TASK_RANGE="1-1"; MODE_TAG="_debug"
+if [ "$TEST" -eq 1 ]; then
+  TASK_RANGE="1-$(( N_TRACES < 5 ? N_TRACES : 5 ))"
+elif [ "$DEBUG" -eq 1 ]; then
+  TASK_RANGE="1-1"
 else
-  TASK_RANGE="1-${N_TRACES}"; MODE_TAG=""
+  TASK_RANGE="1-${N_TRACES}"
 fi
 
 DATE=$(date +%Y%m%d_%H%M)
-BASE_LABEL="${token}_hist_${range}_${DATE}${MODE_TAG}"
+TEST_TAG=$( [ "$TEST" -eq 1 ] && echo "_test" || echo "" )
+BASE_LABEL="${token}_hist_${range}_${DATE}${TEST_TAG}"
 LOG_DIR="${PROJECT_ROOT}/logs/${BASE_LABEL}"
 mkdir -p "$LOG_DIR"
 
@@ -122,16 +129,16 @@ configs=()
 
 # References
 configs+=("baseline  champsim_lru     0 0 6 6 1 1 1 64      1 64      lru")
-configs+=("hash_pred champsim_lru_mid 1 1 6 6 1 1 1 64      1 64      lru")
-configs+=("inf       champsim_lru_mid 1 1 6 6 0 0 1 1048576 1 1048576 lru")
+configs+=("hash_pred champsim_lru 1 1 6 6 1 1 1 64      1 64      lru")
+configs+=("inf       champsim_lru 1 1 6 6 0 0 1 1048576 1 1048576 lru")
 
-# 2D sweep: all (phist_N, bhist_N) combinations in this range, fully associative
+# 2D sweep: all (phist_N, bhist_N) combinations in this range
 for phist_n in "${phist_sizes[@]}"; do
   for bhist_n in "${bhist_sizes[@]}"; do
     for pol in lru lfu; do
-      name="${pol}_p${phist_n}_b${bhist_n}"
-      configs+=("${name} champsim_lru_mid 1 1 6 6 0 0 1 ${phist_n} 1 ${bhist_n} ${pol}")
+      configs+=("${pol}_p${phist_n}_b${bhist_n} champsim_lru 1 1 6 6 0 0 1 ${phist_n} 1 ${bhist_n} ${pol}")
     done
+    configs+=("hash_p${phist_n}_b${bhist_n} champsim_lru 1 1 6 6 1 1 ${phist_n} 1 ${bhist_n} 1 lru")
   done
 done
 

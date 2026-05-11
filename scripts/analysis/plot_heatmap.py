@@ -34,29 +34,21 @@ import os
 import re
 import sys
 
+import matplotlib
+matplotlib.use("Agg")
 import matplotlib.colors as mcolors
 import matplotlib.pyplot as plt
 import numpy as np
 
+from spec_weights import (
+    benchmark_weighted_geomean_pct,
+    benchmark_weighted_geomean_abs,
+    benchmark_weighted_mean_pct,
+)
+from champsim_utils import parse_ipc
+
 
 # ── Parsing ───────────────────────────────────────────────────────────────────
-
-def parse_ipc(filepath):
-    """Return ROI cumulative IPC, or None."""
-    in_roi = False
-    try:
-        with open(filepath) as f:
-            for line in f:
-                if "Region of Interest Statistics" in line:
-                    in_roi = True
-                if in_roi and "cumulative IPC:" in line:
-                    m = re.search(r"cumulative IPC:\s+([0-9.]+)", line)
-                    if m:
-                        return float(m.group(1))
-    except OSError:
-        pass
-    return None
-
 
 def parse_mpki(filepath):
     """Return ROI total MPKI (STLB + LLC misses per kilo-instruction), or None."""
@@ -202,27 +194,6 @@ METRIC_COLORS = {
 
 # ── Aggregation helpers ───────────────────────────────────────────────────────
 
-def geomean_ratios(pct_list):
-    """Geomean of a list of % speedup/reduction values (ratio-space average)."""
-    ratios = [v / 100.0 + 1.0 for v in pct_list if not np.isnan(v)]
-    if not ratios:
-        return float("nan")
-    return (np.exp(np.mean(np.log(ratios))) - 1.0) * 100.0
-
-
-def geomean_abs(vals):
-    """Geomean of a list of absolute values (e.g. MPKI)."""
-    pos = [v for v in vals if not np.isnan(v) and v > 0]
-    if not pos:
-        return float("nan")
-    return np.exp(np.mean(np.log(pos)))
-
-
-def mean_pct(vals):
-    """Arithmetic mean for bypass percentages (geomean breaks at 0%)."""
-    valid = [v for v in vals if not np.isnan(v)]
-    return float(np.mean(valid)) if valid else float("nan")
-
 
 # ── Plot helpers ──────────────────────────────────────────────────────────────
 
@@ -363,28 +334,31 @@ def main():
         else:  # mpki_abs, bypass_pct — absolute
             return val
 
-    def aggregate(vals):
-        """Aggregate a list of per-trace values into a single scalar."""
-        if not vals:
+    def aggregate(vals_by_trace: dict):
+        """Simpoint-weighted aggregate of per-trace values."""
+        if not vals_by_trace:
             return float("nan")
         if metric == "speedup_range":
-            return max(vals) - min(vals)
+            return max(vals_by_trace.values()) - min(vals_by_trace.values())
         elif metric in ("ipc", "mpki"):
-            return geomean_ratios(vals)
+            # vals are already % speedup; convert to ratios for weighted geomean
+            ratios = {t: v / 100.0 + 1.0 for t, v in vals_by_trace.items()
+                      if not np.isnan(v)}
+            return benchmark_weighted_geomean_pct(ratios)
         elif metric == "mpki_abs":
-            return geomean_abs(vals)
-        else:  # stlb_bypass_pct, llc_bypass_pct — arithmetic mean (can be 0%)
-            return mean_pct(vals)
+            return benchmark_weighted_geomean_abs(vals_by_trace)
+        else:  # stlb_bypass_pct, total_bypass_pct — arithmetic mean (can be 0%)
+            return benchmark_weighted_mean_pct(vals_by_trace)
 
     def collect(config_dir):
-        vals = []
+        vals: dict = {}
         for t in valid_traces:
             v = config_value(config_dir, t)
             if v is None:
                 print(f"  WARNING: missing: {os.path.join(base, config_dir, t, 'champsim.out')}",
                       file=sys.stderr)
             else:
-                vals.append(v)
+                vals[t] = v
         return aggregate(vals)
 
     # ── 1-D dpPred-only chart ─────────────────────────────────────────────────

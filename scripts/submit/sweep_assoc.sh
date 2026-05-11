@@ -33,23 +33,25 @@ BHIST_SIZE=4096
 
 token=""
 DEBUG=0
+TEST=0
 WARMUP_OVERRIDE=""
 SIM_OVERRIDE=""
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
     qmm|dpc3|google|test) token="${1,,}"; shift ;;
+    --test)    TEST=1; shift ;;
     --debug)   DEBUG=1; shift ;;
     --warmup)  WARMUP_OVERRIDE="$2"; shift 2 ;;
     --sim)     SIM_OVERRIDE="$2"; shift 2 ;;
     *) echo "Unknown argument: $1" >&2
-       echo "Usage: $0 {qmm|dpc3|google|test} [--debug] [--warmup N] [--sim N]" >&2
+       echo "Usage: $0 {qmm|dpc3|google|test} [--test] [--debug] [--warmup N] [--sim N]" >&2
        exit 2 ;;
   esac
 done
 
 if [ -z "$token" ]; then
-  echo "Usage: $0 {qmm|dpc3|google|test} [--debug] [--warmup N] [--sim N]" >&2
+  echo "Usage: $0 {qmm|dpc3|google|test} [--test] [--debug] [--warmup N] [--sim N]" >&2
   exit 2
 fi
 
@@ -72,7 +74,7 @@ case "$token" in
     TRACE_EXT="champsim.gz"
     ;;
   test)
-    WARMUP=1000000; SIM=5000000
+    WARMUP=25000000; SIM=50000000
     TRACE_DIR="${PROJECT_ROOT}/trace-files/TEST"
     TRACE_EXT="champsimtrace.xz"
     ;;
@@ -80,6 +82,7 @@ esac
 
 [ -n "$WARMUP_OVERRIDE" ] && WARMUP="$WARMUP_OVERRIDE"
 [ -n "$SIM_OVERRIDE" ]    && SIM="$SIM_OVERRIDE"
+[ "$TEST" -eq 1 ] && { WARMUP=25000000; SIM=50000000; }
 
 mapfile -t ALL_TRACES < <(find "${TRACE_DIR}" -name "*.${TRACE_EXT}" | sort)
 N_TRACES=${#ALL_TRACES[@]}
@@ -87,14 +90,17 @@ if [ "$N_TRACES" -eq 0 ]; then
   echo "ERROR: No traces found in ${TRACE_DIR}" >&2; exit 2
 fi
 
-if [ "$DEBUG" -eq 1 ]; then
+if [ "$TEST" -eq 1 ]; then
+  TASK_RANGE="1-$(( N_TRACES < 5 ? N_TRACES : 5 ))"
+elif [ "$DEBUG" -eq 1 ]; then
   TASK_RANGE="1-1"
 else
   TASK_RANGE="1-${N_TRACES}"
 fi
 
 DATE=$(date +%Y%m%d_%H%M)
-BASE_LABEL="${token}_assoc_p${PHIST_SIZE}_b${BHIST_SIZE}_${DATE}"
+TEST_TAG=$( [ "$TEST" -eq 1 ] && echo "_test" || echo "" )
+BASE_LABEL="${token}_assoc_p${PHIST_SIZE}_b${BHIST_SIZE}_${DATE}${TEST_TAG}"
 LOG_DIR="${PROJECT_ROOT}/logs/${BASE_LABEL}"
 mkdir -p "$LOG_DIR"
 
@@ -103,16 +109,16 @@ configs=()
 
 # References (both tables at FA)
 configs+=("baseline  champsim_lru     0 0 6 6 1 1 1 ${PHIST_SIZE} 1 ${BHIST_SIZE} lru")
-configs+=("hash_pred champsim_lru_mid 1 1 6 6 1 1 1 ${PHIST_SIZE} 1 ${BHIST_SIZE} lru")
-configs+=("fa_lru    champsim_lru_mid 1 1 6 6 0 0 1 ${PHIST_SIZE} 1 ${BHIST_SIZE} lru")
-configs+=("fa_lfu    champsim_lru_mid 1 1 6 6 0 0 1 ${PHIST_SIZE} 1 ${BHIST_SIZE} lfu")
+configs+=("hash_pred champsim_lru 1 1 6 6 1 1 1 ${PHIST_SIZE} 1 ${BHIST_SIZE} lru")
+configs+=("fa_lru    champsim_lru 1 1 6 6 0 0 1 ${PHIST_SIZE} 1 ${BHIST_SIZE} lru")
+configs+=("fa_lfu    champsim_lru 1 1 6 6 0 0 1 ${PHIST_SIZE} 1 ${BHIST_SIZE} lfu")
 
 # pHIST sweep: all power-of-2 levels, BHIST held at FA
 sets=$PHIST_SIZE
 while (( sets >= 1 )); do
   ways=$(( PHIST_SIZE / sets ))
   for pol in lru lfu; do
-    configs+=("phist_s${sets}_w${ways}_${pol} champsim_lru_mid 1 1 6 6 0 0 ${sets} ${ways} 1 ${BHIST_SIZE} ${pol}")
+    configs+=("phist_s${sets}_w${ways}_${pol} champsim_lru 1 1 6 6 0 0 ${sets} ${ways} 1 ${BHIST_SIZE} ${pol}")
   done
   (( sets /= 2 )) || true
 done
@@ -122,7 +128,7 @@ sets=$BHIST_SIZE
 while (( sets >= 1 )); do
   ways=$(( BHIST_SIZE / sets ))
   for pol in lru lfu; do
-    configs+=("bhist_s${sets}_w${ways}_${pol} champsim_lru_mid 1 1 6 6 0 0 1 ${PHIST_SIZE} ${sets} ${ways} ${pol}")
+    configs+=("bhist_s${sets}_w${ways}_${pol} champsim_lru 1 1 6 6 0 0 1 ${PHIST_SIZE} ${sets} ${ways} ${pol}")
   done
   (( sets /= 2 )) || true
 done

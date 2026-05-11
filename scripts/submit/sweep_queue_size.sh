@@ -22,23 +22,25 @@ PROJECT_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 
 token=""
 DEBUG=0
+TEST=0
 WARMUP_OVERRIDE=""
 SIM_OVERRIDE=""
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
     qmm|dpc3|google|test) token="${1,,}"; shift ;;
+    --test)    TEST=1; shift ;;
     --debug)   DEBUG=1; shift ;;
     --warmup)  WARMUP_OVERRIDE="$2"; shift 2 ;;
     --sim)     SIM_OVERRIDE="$2"; shift 2 ;;
     *) echo "Unknown argument: $1" >&2
-       echo "Usage: $0 {qmm|dpc3|google|test} [--debug] [--warmup N] [--sim N]" >&2
+       echo "Usage: $0 {qmm|dpc3|google|test} [--test] [--debug] [--warmup N] [--sim N]" >&2
        exit 2 ;;
   esac
 done
 
 if [ -z "$token" ]; then
-  echo "Usage: $0 {qmm|dpc3|google|test} [--debug] [--warmup N] [--sim N]" >&2
+  echo "Usage: $0 {qmm|dpc3|google|test} [--test] [--debug] [--warmup N] [--sim N]" >&2
   exit 2
 fi
 
@@ -61,7 +63,7 @@ case "$token" in
     TRACE_EXT="champsim.gz"
     ;;
   test)
-    WARMUP=1000000; SIM=5000000
+    WARMUP=25000000; SIM=50000000
     TRACE_DIR="${PROJECT_ROOT}/trace-files/TEST"
     TRACE_EXT="champsimtrace.xz"
     ;;
@@ -69,6 +71,7 @@ esac
 
 [ -n "$WARMUP_OVERRIDE" ] && WARMUP="$WARMUP_OVERRIDE"
 [ -n "$SIM_OVERRIDE" ]    && SIM="$SIM_OVERRIDE"
+[ "$TEST" -eq 1 ] && { WARMUP=25000000; SIM=50000000; }
 
 mapfile -t TRACES < <(find "${TRACE_DIR}" -name "*.${TRACE_EXT}" | sort)
 N_TRACES=${#TRACES[@]}
@@ -76,14 +79,17 @@ if [ "$N_TRACES" -eq 0 ]; then
   echo "ERROR: No traces found in ${TRACE_DIR}" >&2; exit 2
 fi
 
-if [ "$DEBUG" -eq 1 ]; then
-  TASK_RANGE="1-1"; MODE_TAG="_debug"
+if [ "$TEST" -eq 1 ]; then
+  TASK_RANGE="1-$(( N_TRACES < 5 ? N_TRACES : 5 ))"
+elif [ "$DEBUG" -eq 1 ]; then
+  TASK_RANGE="1-1"
 else
-  TASK_RANGE="1-${N_TRACES}"; MODE_TAG=""
+  TASK_RANGE="1-${N_TRACES}"
 fi
 
 DATE=$(date +%Y%m%d_%H%M)
-BASE_LABEL="${token}_queue_size_${DATE}${MODE_TAG}"
+TEST_TAG=$( [ "$TEST" -eq 1 ] && echo "_test" || echo "" )
+BASE_LABEL="${token}_queue_size_${DATE}${TEST_TAG}"
 LOG_DIR="${PROJECT_ROOT}/logs/${BASE_LABEL}"
 mkdir -p "$LOG_DIR"
 
@@ -97,16 +103,16 @@ configs+=("baseline champsim_lru 0 0 6 6 8 2")
 # PFQ sweep: scale PFQ from original size (8) upward, keep ST at original (2)
 for log_pfq in 3 4 5 6 7 8 9; do
   pfq=$((1 << log_pfq))
-  configs+=("pfq_${pfq} champsim_lru_mid 1 1 6 6 ${pfq} 2")
+  configs+=("pfq_${pfq} champsim_lru 1 1 6 6 ${pfq} 2")
 done
-configs+=("pfq_inf champsim_lru_mid 1 1 6 6 1048576 2")
+configs+=("pfq_inf champsim_lru 1 1 6 6 1048576 2")
 
 # ST sweep: scale ST from original size (2) upward, keep PFQ at original (8)
 for log_st in 1 2 3 4 5 6 7 8 9; do
   st=$((1 << log_st))
-  configs+=("st_${st} champsim_lru_mid 1 1 6 6 8 ${st}")
+  configs+=("st_${st} champsim_lru 1 1 6 6 8 ${st}")
 done
-configs+=("st_inf champsim_lru_mid 1 1 6 6 8 1048576")
+configs+=("st_inf champsim_lru 1 1 6 6 8 1048576")
 
 echo "Submitting ${#configs[@]} configurations × ${N_TRACES} traces (tasks ${TASK_RANGE})"
 echo "Warmup / Sim : ${WARMUP} / ${SIM}"

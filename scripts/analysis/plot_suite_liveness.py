@@ -20,7 +20,6 @@ Usage
 """
 
 import argparse
-import re
 import sys
 from pathlib import Path
 
@@ -30,124 +29,23 @@ import matplotlib.pyplot as plt
 import matplotlib.ticker as mticker
 import numpy as np
 
-# ── Simpoint weights ──────────────────────────────────────────────────────────
+from colors import SUITE_COLORS, LIVENESS_COLORS
+from liveness_utils import N_HIST_BINS, load_suite, load_suite_corr, load_suite_pc
+from spec_weights import benchmark_weighted_geomean_frac
 
-_DEFAULT_WEIGHTS_DIR = (
-    Path(__file__).parents[2] / ".." / "ChampSim-dev" / "trace-files" / "SPEC2006_weights"
-).resolve()
-
-
-def _load_spec_weights(weights_dir: Path) -> "dict[str, float]":
-    result: dict = {}
-    if not weights_dir.is_dir():
-        return result
-    for bm_dir in sorted(weights_dir.iterdir()):
-        if not bm_dir.is_dir():
-            continue
-        w_file = bm_dir / "weights.out"
-        s_file = bm_dir / "simpoints.out"
-        if not (w_file.exists() and s_file.exists()):
-            continue
-        w_vals = [float(x) for x in w_file.read_text().split()]
-        s_ids  = [int(x)   for x in s_file.read_text().split()]
-        for sp_id, w in zip(s_ids, w_vals):
-            result[f"{bm_dir.name}-{sp_id}B"] = w
-    return result
-
-
-def _spec_benchmark_name(wl: str) -> str:
-    m = re.match(r'^(.+)-\d+[A-Z]+$', wl)
-    return m.group(1) if m else wl
-
-
-_SPEC_WEIGHTS: "dict[str, float]" = _load_spec_weights(_DEFAULT_WEIGHTS_DIR)
-
-# ── Palette ───────────────────────────────────────────────────────────────────
-
-COLOR_DOA = "#5B7FA6"   # steel blue
-COLOR_MD  = "#E8A87C"   # soft peach
-COLOR_MA  = "#7CB9A8"   # soft teal
-
-SUITE_COLORS = ["#2C7BB6", "#D7191C", "#1A9641"]   # blue / red / green
+COLOR_DOA = LIVENESS_COLORS["doa"]
+COLOR_MD  = LIVENESS_COLORS["mostly_dead"]
+COLOR_MA  = LIVENESS_COLORS["mostly_alive"]
 
 CACHE_DISPLAY = {"cpu0_STLB": "STLB", "LLC": "LLC"}
-X_COMMON = np.linspace(0, 1, 1000)
-
-
-# ── Parsing ───────────────────────────────────────────────────────────────────
-
-N_HIST_BINS = 9
-HIST_LABELS = ["0", "1", "2", "3", "4", "5", "6", "7", "8+"]
-
-
-def parse_liveness_file(path: Path):
-    """Return dict { cache_name: {doa, mostly_dead, mostly_alive, total, hit_hist} }."""
-    text = path.read_text(errors="replace")
-    result = {}
-
-    evict_pat = re.compile(
-        r"^(\S+) LIVENESS EVICTIONS:\s+(\d+)"
-        r"\s+DOA:\s+(\d+)\s+\([\d.]+%\)"
-        r"\s+MOSTLY_DEAD:\s+(\d+)\s+\([\d.]+%\)"
-        r"\s+MOSTLY_ALIVE:\s+(\d+)\s+\([\d.]+%\)",
-        re.MULTILINE,
-    )
-    for m in evict_pat.finditer(text):
-        result[m.group(1)] = {
-            "total":        int(m.group(2)),
-            "doa":          int(m.group(3)),
-            "mostly_dead":  int(m.group(4)),
-            "mostly_alive": int(m.group(5)),
-            "hit_hist":     np.zeros(N_HIST_BINS, dtype=float),
-        }
-
-    hist_pat = re.compile(r"^(\S+) LIVENESS HIT_HIST:(.*)", re.MULTILINE)
-    for m in hist_pat.finditer(text):
-        name = m.group(1)
-        counts = re.findall(r"(\d+)\+?:(\d+)", m.group(2))
-        hist = np.zeros(N_HIST_BINS, dtype=float)
-        for idx_str, cnt_str in counts:
-            idx = min(int(idx_str), N_HIST_BINS - 1)
-            hist[idx] += int(cnt_str)
-        if name in result:
-            result[name]["hit_hist"] = hist
-
-    return result
-
-
-def load_suite(results_dir: Path):
-    """Load all champsim.out files. Returns list of (workload_name, data_dict)."""
-    files = sorted(results_dir.glob("*/champsim.out"))
-    nested = True
-    if not files:
-        files = sorted(results_dir.glob("*.out"))
-        nested = False
-    if not files:
-        sys.exit(f"ERROR: no output files found in {results_dir}")
-    rows = []
-    for f in files:
-        workload = f.parent.name if nested else f.stem
-        data = parse_liveness_file(f)
-        if not data:
-            print(f"  WARNING: no LIVENESS lines in {f} — skipped")
-            continue
-        rows.append((workload, data))
-    return rows
+HIST_LABELS   = ["0", "1", "2", "3", "4", "5", "6", "7", "8+"]
+X_COMMON      = np.linspace(0, 1, 1000)
 
 
 # ── Geomean helper ────────────────────────────────────────────────────────────
 
-def geomean(values, eps=1e-6):
-    arr = np.clip(np.asarray(values, dtype=float), eps, None)
-    return float(np.exp(np.mean(np.log(arr))))
-
-
 def suite_geomean_fracs(rows, cache):
-    """Return (gm_doa_pct, gm_md_pct, gm_ma_pct) renormalised to sum to 100.
-
-    Uses benchmark-weighted geomean for SPEC traces (simpoint weights found);
-    falls back to flat equal-weight geomean for other suites.
-    """
+    """Return (gm_doa_pct, gm_md_pct, gm_ma_pct) renormalised to sum to 100."""
     wl_names, doa_rates, md_rates, ma_rates = [], [], [], []
     for wl, data in rows:
         d = data.get(cache, {})
@@ -159,34 +57,9 @@ def suite_geomean_fracs(rows, cache):
     if not doa_rates:
         return None
 
-    eps = 1e-6
-
-    def _weighted_frac_gm(names, fracs):
-        """Benchmark-weighted geomean: weighted within SPEC benchmarks, equal-weight across."""
-        by_wl = dict(zip(names, fracs))
-        groups: dict = {}
-        for w in by_wl:
-            groups.setdefault(_spec_benchmark_name(w), []).append(w)
-        per_bench = []
-        for wl_list in groups.values():
-            if _SPEC_WEIGHTS:
-                pairs = [(by_wl[w], _SPEC_WEIGHTS.get(w)) for w in wl_list]
-                if any(wgt is not None for _, wgt in pairs):
-                    pairs = [(v, wgt) for v, wgt in pairs if wgt is not None]
-                    total_w = sum(wgt for _, wgt in pairs)
-                    if total_w > 0:
-                        per_bench.append(float(np.exp(
-                            sum((wgt / total_w) * np.log(max(v, eps)) for v, wgt in pairs))))
-                        continue
-            vals = [by_wl[w] for w in wl_list]
-            per_bench.append(float(np.exp(np.mean(np.log(np.clip(vals, eps, None))))))
-        if not per_bench:
-            return 0.0
-        return float(np.exp(np.mean(np.log(np.clip(per_bench, eps, None)))))
-
-    gm_doa = _weighted_frac_gm(wl_names, doa_rates)
-    gm_md  = _weighted_frac_gm(wl_names, md_rates)
-    gm_ma  = _weighted_frac_gm(wl_names, ma_rates)
+    gm_doa = benchmark_weighted_geomean_frac(wl_names, doa_rates)
+    gm_md  = benchmark_weighted_geomean_frac(wl_names, md_rates)
+    gm_ma  = benchmark_weighted_geomean_frac(wl_names, ma_rates)
     total  = gm_doa + gm_md + gm_ma
     if total == 0:
         return None
@@ -435,45 +308,6 @@ def plot_hit_cdf_per_workload(suites, cache, out_path: Path):
     print(f"Saved: {out_path}")
 
 
-# ── Correlation parsing ───────────────────────────────────────────────────────
-
-_CORR_STLB     = re.compile(r"cpu0_STLB LIVENESS EVICTIONS:\s+(\d+)\s+DOA:\s+(\d+)")
-_CORR_LLC_TOT  = re.compile(r"LLC LIVENESS EVICTIONS:\s+(\d+)\s+DOA:\s+(\d+)")
-_CORR_PAGE     = re.compile(r"LLC LIVENESS DOA_ON_DOA_STLB_PAGE:\s+(\d+)")
-
-
-def parse_correlation(path: Path):
-    """Return (stlb_doa_pct, llc_doa_pct, llc_doa_on_page_pct) or None."""
-    text = path.read_text(errors="replace")
-    sm = _CORR_STLB.search(text)
-    lm = _CORR_LLC_TOT.search(text)
-    pm = _CORR_PAGE.search(text)
-    if not (sm and lm and pm):
-        return None
-    stlb_total = int(sm.group(1)); stlb_doa = int(sm.group(2))
-    llc_total  = int(lm.group(1)); llc_doa  = int(lm.group(2))
-    llc_page   = int(pm.group(1))
-    if stlb_total == 0 or llc_doa == 0:
-        return None
-    return (100.0 * stlb_doa / stlb_total,
-            100.0 * llc_doa  / llc_total if llc_total > 0 else 0.0,
-            100.0 * llc_page / llc_doa)
-
-
-def load_suite_corr(results_dir: Path):
-    """Return list of (workload, stlb_doa_pct, llc_doa_pct, llc_on_page_pct)."""
-    files = sorted(results_dir.glob("*/champsim.out"))
-    if not files:
-        files = sorted(results_dir.glob("*.out"))
-    rows = []
-    for f in files:
-        wl = f.parent.name if f.name == "champsim.out" else f.stem
-        r = parse_correlation(f)
-        if r is not None:
-            rows.append((wl, r[0], r[1], r[2]))
-    return rows
-
-
 # ── Correlation plot ──────────────────────────────────────────────────────────
 
 def plot_corr_strip(suite_corr, out_path: Path):
@@ -521,70 +355,6 @@ def plot_corr_strip(suite_corr, out_path: Path):
     fig.savefig(out_path, dpi=200, bbox_inches="tight")
     plt.close(fig)
     print(f"Saved: {out_path}")
-
-
-# ── Per-PC parsing ───────────────────────────────────────────────────────────
-
-_PC_HEADER = re.compile(r"^(\S+) PER-PC LIVENESS \(\d+ PCs\):", re.MULTILINE)
-_PC_ROW    = re.compile(
-    r"^\s+(0x[0-9a-fA-F]+)\s+(\d+)\s+(\d+)\s+\([\d.]+%\)\s+(\d+)\s+\([\d.]+%\)\s+(\d+)",
-    re.MULTILINE,
-)
-
-
-def parse_per_pc(path: Path, cache: str):
-    """Return (evictions, doa, mostly_dead) arrays for every PC in cache's PER-PC block.
-
-    Tries two sources in order:
-      1. PER-PC LIVENESS text blocks in champsim.out (old format)
-      2. pc_liveness.csv written by the binary alongside champsim.out (new format)
-    """
-    text = path.read_text(errors="replace")
-    start = None
-    for m in _PC_HEADER.finditer(text):
-        if m.group(1) == cache:
-            start = m.end()
-            break
-    if start is not None:
-        next_hdr = _PC_HEADER.search(text, start)
-        section  = text[start: next_hdr.start() if next_hdr else len(text)]
-        rows = _PC_ROW.findall(section)
-        if rows:
-            return (np.array([int(r[1]) for r in rows], dtype=float),
-                    np.array([int(r[2]) for r in rows], dtype=float),
-                    np.array([int(r[3]) for r in rows], dtype=float))
-
-    # Fall back to pc_liveness.csv written directly by the binary
-    csv_path = path.parent / "pc_liveness.csv"
-    if csv_path.exists():
-        import csv as _csv
-        evictions, doa, md = [], [], []
-        with csv_path.open(newline="") as f:
-            for row in _csv.DictReader(f):
-                if row["cache"] == cache:
-                    evictions.append(int(row["evictions"]))
-                    doa.append(int(row["doa"]))
-                    md.append(int(row["mostly_dead"]))
-        if evictions:
-            return (np.array(evictions, dtype=float),
-                    np.array(doa, dtype=float),
-                    np.array(md, dtype=float))
-
-    return np.zeros(0), np.zeros(0), np.zeros(0)
-
-
-def load_suite_pc(results_dir: Path, cache: str):
-    """Return list of (workload, evictions_arr, doa_arr, md_arr) for workloads with PC data."""
-    files = sorted(results_dir.glob("*/champsim.out"))
-    if not files:
-        files = sorted(results_dir.glob("*.out"))
-    out = []
-    for f in files:
-        wl = f.parent.name if f.name == "champsim.out" else f.stem
-        ev, doa, md = parse_per_pc(f, cache)
-        if ev.size > 0:
-            out.append((wl, ev, doa, md))
-    return out
 
 
 # ── Per-PC Lorenz helpers ─────────────────────────────────────────────────────

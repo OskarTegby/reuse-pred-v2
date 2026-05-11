@@ -18,8 +18,6 @@ Usage
 """
 
 import argparse
-import re
-import sys
 from pathlib import Path
 
 import matplotlib
@@ -27,42 +25,17 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
 
+from colors import POLICY_COLORS
+from champsim_utils import parse_stats, geomean
+from spec_weights import SPEC_WEIGHTS, benchmark_name
+
 
 POLICIES       = ["lru_mid", "lru_mid_pred"]
 POLICY_LABELS  = ["lru_mid", "lru_mid+pred"]
-COLORS         = {"lru_mid": "#A67CB9", "lru_mid_pred": "#6A3D8A"}
 BASELINE       = "lru"
 
 
 # ── Parsing ───────────────────────────────────────────────────────────────────
-
-def parse_stats(path: Path):
-    in_roi = False
-    ipc = stlb_miss = llc_miss = instrs = None
-    try:
-        for line in path.read_text(errors="replace").splitlines():
-            if "Region of Interest Statistics" in line:
-                in_roi = True
-            if not in_roi:
-                continue
-            if ipc is None and "cumulative IPC:" in line:
-                m = re.search(r"cumulative IPC:\s+([0-9.]+)\s+instructions:\s+(\d+)", line)
-                if m:
-                    ipc, instrs = float(m.group(1)), int(m.group(2))
-            if stlb_miss is None and re.match(r"cpu0_STLB TOTAL\s+ACCESS:", line):
-                m = re.search(r"MISS:\s+(\d+)", line)
-                if m:
-                    stlb_miss = int(m.group(1))
-            if llc_miss is None and re.match(r"LLC TOTAL\s+ACCESS:", line):
-                m = re.search(r"MISS:\s+(\d+)", line)
-                if m:
-                    llc_miss = int(m.group(1))
-    except OSError:
-        pass
-    stlb_mpki = stlb_miss / (instrs / 1000) if stlb_miss and instrs else None
-    llc_mpki  = llc_miss  / (instrs / 1000) if llc_miss  and instrs else None
-    return ipc, stlb_mpki, llc_mpki
-
 
 def load_policy(policy_dir: Path):
     out = {}
@@ -72,32 +45,6 @@ def load_policy(policy_dir: Path):
             out[f.parent.name] = (ipc, stlb, llc)
     return out
 
-
-def benchmark_name(wl: str) -> str:
-    m = re.match(r'^(.+)-\d+[A-Z]+$', wl)
-    return m.group(1) if m else wl
-
-
-def load_spec_weights(weights_dir: Path):
-    result = {}
-    if not weights_dir.is_dir():
-        return result
-    for bm_dir in sorted(weights_dir.iterdir()):
-        if not bm_dir.is_dir():
-            continue
-        w_file, s_file = bm_dir / "weights.out", bm_dir / "simpoints.out"
-        if not (w_file.exists() and s_file.exists()):
-            continue
-        w_vals = [float(x) for x in w_file.read_text().split()]
-        s_ids  = [int(x)   for x in s_file.read_text().split()]
-        for sp_id, w in zip(s_ids, w_vals):
-            result[f"{bm_dir.name}-{sp_id}B"] = w
-    return result
-
-
-def geomean(vals):
-    v = [x for x in vals if x is not None and x > 0]
-    return float(np.exp(np.mean(np.log(v)))) if v else None
 
 
 def wmean(vals, weights):
@@ -191,7 +138,7 @@ def plot_ipc(labels, llc_rows, both_rows, out_path: Path):
     x = np.arange(n)
 
     for pi, (pol, plabel) in enumerate(zip(POLICIES, POLICY_LABELS)):
-        color = COLORS[pol]
+        color = POLICY_COLORS[pol]
         llc_pct  = [(r.get(pol, 1) - 1) * 100 for r in llc_rows]
         both_pct = [(r.get(pol, 1) - 1) * 100 for r in both_rows]
         _draw_bars(ax, x, pi, bar_w, off_llc[pi], off_both[pi],
@@ -225,7 +172,7 @@ def plot_mpki(labels, llc_stlb_rows, both_stlb_rows, llc_llc_rows, both_llc_rows
     ):
         x = np.arange(n)
         for pi, (pol, plabel) in enumerate(zip(POLICIES, POLICY_LABELS)):
-            color = COLORS[pol]
+            color = POLICY_COLORS[pol]
             llc_vals  = [r.get(pol, 0) or 0 for r in stlb_l]
             both_vals = [r.get(pol, 0) or 0 for r in stlb_b]
             _draw_bars(ax, x, pi, bar_w, off_llc[pi], off_both[pi],
@@ -260,8 +207,7 @@ def main():
     parser.add_argument("--out", default="results/plots/stlb_llc_comparison/suite_ipc.png")
     args = parser.parse_args()
 
-    _default_weights = Path(__file__).parents[2] / ".." / "ChampSim-dev" / "trace-files" / "SPEC2006_weights"
-    weights = load_spec_weights(_default_weights.resolve())
+    weights = SPEC_WEIGHTS
     if weights:
         print(f"Loaded simpoint weights for {len(set(benchmark_name(k) for k in weights))} benchmarks")
 

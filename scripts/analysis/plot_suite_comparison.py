@@ -20,7 +20,6 @@ Usage
 """
 
 import argparse
-import re
 import sys
 from pathlib import Path
 
@@ -29,6 +28,9 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import matplotlib.ticker as mticker
 import numpy as np
+
+from champsim_utils import parse_stats, geomean
+from spec_weights import benchmark_name, load_spec_weights
 
 
 # ── Policies ──────────────────────────────────────────────────────────────────
@@ -44,36 +46,6 @@ BASELINE      = "lru"
 
 
 # ── Parsing ───────────────────────────────────────────────────────────────────
-
-def parse_stats(path: Path):
-    """Return (ipc, stlb_mpki, llc_mpki) from a champsim.out file."""
-    in_roi = False
-    ipc = stlb_miss = llc_miss = instrs = None
-    try:
-        for line in path.read_text(errors="replace").splitlines():
-            if "Region of Interest Statistics" in line:
-                in_roi = True
-            if not in_roi:
-                continue
-            if ipc is None and "cumulative IPC:" in line:
-                m = re.search(r"cumulative IPC:\s+([0-9.]+)\s+instructions:\s+(\d+)", line)
-                if m:
-                    ipc = float(m.group(1))
-                    instrs = int(m.group(2))
-            if stlb_miss is None and re.match(r"cpu0_STLB TOTAL\s+ACCESS:", line):
-                m = re.search(r"MISS:\s+(\d+)", line)
-                if m:
-                    stlb_miss = int(m.group(1))
-            if llc_miss is None and re.match(r"LLC TOTAL\s+ACCESS:", line):
-                m = re.search(r"MISS:\s+(\d+)", line)
-                if m:
-                    llc_miss = int(m.group(1))
-    except OSError:
-        pass
-    stlb_mpki = stlb_miss / (instrs / 1000) if (stlb_miss is not None and instrs) else None
-    llc_mpki  = llc_miss  / (instrs / 1000) if (llc_miss  is not None and instrs) else None
-    return ipc, stlb_mpki, llc_mpki
-
 
 def load_policy_stats(policy_dir: Path):
     """Return dict { workload: (ipc, stlb_mpki, llc_mpki) }."""
@@ -94,51 +66,6 @@ def load_policy_stats(policy_dir: Path):
 def load_policy_ipcs(policy_dir: Path):
     """Return dict { workload: ipc } — kept for backward compat."""
     return {wl: v[0] for wl, v in load_policy_stats(policy_dir).items()}
-
-
-def geomean(vals):
-    v = [x for x in vals if x is not None and x > 0]
-    if not v:
-        return None
-    return float(np.exp(np.mean(np.log(v))))
-
-
-def benchmark_name(wl: str) -> str:
-    """Strip the slice suffix from a trace name to get the benchmark name.
-
-    SPEC CPU2017:  602.gcc_s-734B  -> 602.gcc_s   (strip -<digits><letters>)
-    All other suites (Google, QMM, …) are left unchanged — we only group traces
-    when we have real simpoint weights to go with the grouping.
-    """
-    m = re.match(r'^(.+)-\d+[A-Z]+$', wl)
-    if m:
-        return m.group(1)
-    return wl
-
-
-def load_spec_weights(weights_dir: Path) -> "dict[str, float]":
-    """Load simpoint weights from weights_dir/{benchmark}/{weights.out,simpoints.out}.
-
-    Returns {trace_name: weight} e.g. {'602.gcc_s-734B': 0.641196, ...}.
-    Weights within each benchmark sum to 1.0 in the source files.
-    Returns an empty dict if weights_dir does not exist.
-    """
-    result: dict[str, float] = {}
-    if not weights_dir.is_dir():
-        return result
-    for bm_dir in sorted(weights_dir.iterdir()):
-        if not bm_dir.is_dir():
-            continue
-        w_file = bm_dir / "weights.out"
-        s_file = bm_dir / "simpoints.out"
-        if not (w_file.exists() and s_file.exists()):
-            continue
-        w_vals = [float(x) for x in w_file.read_text().split()]
-        s_ids  = [int(x)   for x in s_file.read_text().split()]
-        bm_name = bm_dir.name
-        for sp_id, w in zip(s_ids, w_vals):
-            result[f"{bm_name}-{sp_id}B"] = w
-    return result
 
 
 def _weighted_geomean(pairs: "list[tuple[float, float]]") -> "float | None":

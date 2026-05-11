@@ -3,12 +3,9 @@
 # Usage: ./run_local.sh {maz|qmm} [--debug] [--warmup N] [--sim N] [--jobs N]
 #
 # --debug       Run only srv_128 (quick sanity check)
-# --warmup N    Warmup instructions   (default: 1000000)
-# --sim    N    Simulation instructions (default: 5000000)
+# --warmup N    Warmup instructions   (default: 25000000)
+# --sim    N    Simulation instructions (default: 50000000)
 # --jobs   N    Max parallel processes  (default: nproc - 1)
-#
-# Defaults are intentionally small so a local run finishes in minutes.
-# Use the cluster values (--warmup 50000000 --sim 100000000) for full fidelity.
 
 set -euo pipefail
 
@@ -18,26 +15,28 @@ PROJECT_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 # ── Argument parsing ──────────────────────────────────────────────────────────
 token=""
 DEBUG=0
-WARMUP=1000000
-SIM=5000000
+TEST=0
+WARMUP=25000000
+SIM=50000000
 MAX_JOBS=$(( $(nproc) - 1 ))
 MAX_JOBS=$(( MAX_JOBS < 1 ? 1 : MAX_JOBS ))
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
     maz|mazumdar|qmm) token="${1,,}"; shift ;;
+    --test)           TEST=1; shift ;;
     --debug)          DEBUG=1; shift ;;
     --warmup)         WARMUP="$2"; shift 2 ;;
     --sim)            SIM="$2"; shift 2 ;;
     --jobs)           MAX_JOBS="$2"; shift 2 ;;
     *) echo "Unknown argument: $1" >&2
-       echo "Usage: $0 {maz|qmm} [--debug] [--warmup N] [--sim N] [--jobs N]" >&2
+       echo "Usage: $0 {maz|qmm} [--test] [--debug] [--warmup N] [--sim N] [--jobs N]" >&2
        exit 2 ;;
   esac
 done
 
 if [ -z "$token" ]; then
-  echo "Usage: $0 {maz|qmm} [--debug] [--warmup N] [--sim N] [--jobs N]" >&2
+  echo "Usage: $0 {maz|qmm} [--test] [--debug] [--warmup N] [--sim N] [--jobs N]" >&2
   exit 2
 fi
 
@@ -62,23 +61,15 @@ if [ "$N" -eq 0 ]; then
   exit 2
 fi
 
+[ "$TEST" -eq 1 ] && { WARMUP=25000000; SIM=50000000; DEBUG=1; }
+
 if [ "$DEBUG" -eq 1 ]; then
-  FILTERED=()
-  for t in "${TRACES[@]}"; do
-    [[ "$t" == *srv_128* ]] && FILTERED+=("$t")
-  done
-  if [ ${#FILTERED[@]} -eq 0 ]; then
-    echo "WARNING: srv_128 not found — using first trace" >&2
-    FILTERED=("${TRACES[0]}")
-  fi
-  TRACES=("${FILTERED[@]}")
-  MODE_TAG="_debug"
-else
-  MODE_TAG=""
+  TRACES=("${TRACES[0]}")
 fi
 
 DATE=$(date +%Y%m%d_%H%M)
-BASE_LABEL="${token}_${DATE}${MODE_TAG}_local"
+TEST_TAG=$( [ "$TEST" -eq 1 ] && echo "_test" || echo "" )
+BASE_LABEL="${token}_${DATE}${TEST_TAG}_local"
 
 # ── Build config list ─────────────────────────────────────────────────────────
 configs=()
@@ -121,9 +112,11 @@ warmup=${WARMUP}
 sim=${SIM}
 INFO
 
+  PC_STATS_ARG=()
+  [ "${PC_STATS:-0}" = "1" ] && PC_STATS_ARG=(--pc-stats="${run_dir}/pc_liveness.csv")
   DPPRED=$dppred CBPRED=$cbpred PCONF_THD=$pconf_thd BCONF_THD=$bconf_thd \
     "$BIN" --warmup_instructions "$WARMUP" --simulation_instructions "$SIM" \
-    --pc-stats "${run_dir}/pc_liveness.csv" "$trace_file" \
+    "${PC_STATS_ARG[@]}" "$trace_file" \
     > "${run_dir}/champsim.out" 2> "${run_dir}/champsim.err"
 
   echo "  done: ${exp_name} / ${trace_name} (exit $?)"
