@@ -346,11 +346,12 @@ def main():
     # lru is the baseline — shown as a reference line, not as a redundant bar
     sfx = args.suffix  # e.g. "" or "_paper_pref"
     ordered = ["lru_mid", "lru_mid_pred", "lru_pred",
-               "srrip", "srrip_pred"]
+               "srrip", "srrip_pred", "srrip_live"]
     display_labels = {
         "srrip": "srrip", "lru_mid": "lru_mid",
         "lru_pred": "lru+pred", "srrip_pred": "srrip+pred",
         "lru_mid_pred": "lru_mid+pred",
+        "srrip_live": "srrip_live",
     }
 
     present = [p for p in ordered

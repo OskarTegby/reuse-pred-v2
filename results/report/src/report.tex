@@ -11,6 +11,7 @@
 \usepackage{hyperref}
 \usepackage{libertine}
 \usepackage[libertine]{newtxmath}
+\usepackage{xspace}
 
 \hypersetup{colorlinks=true, linkcolor=black, urlcolor=black, citecolor=black}
 \setcounter{tocdepth}{1}
@@ -32,7 +33,7 @@
 \setlength{\@fpbot}{0pt plus 1fil}
 \makeatother
 
-\newcommand{\lrumid}{$LRU_\text{mid}$}
+\newcommand{\lrumid}{$LRU_\text{mid}$\xspace}
 
 \title{Insertion Policy Research:\\[0.4em]
        \large Results, Discussion, and Planning}
@@ -62,7 +63,7 @@ and further research into \lrumid also remains.
 This document presents experimental results from an investigation into using per-PC liveness history to guide
 LLC and STLB replacement. The work covers three directions: a characterisation of cache block liveness across
 three benchmark suites (SPEC CPU2006, Google Warehouse, and Qualcomm Mobile), an analysis of the LLC--STLB
-bypass predictor, and a study of liveness-guided insertion policies (\lrumid{} and SRRIP\textsubscript{live}).
+bypass predictor, and a study of liveness-guided insertion policies (\lrumid and SRRIP\textsubscript{live}).
 
 % ─────────────────────────────────────────────────────────────────────────────
 \section{Definitions}
@@ -92,9 +93,10 @@ bypass predictor, and a study of liveness-guided insertion policies (\lrumid{} a
     \begin{equation}
       \text{DoA correlation} = \frac{\text{Number of DoA LLC blocks on a DoA STLB page}}
                                     {\text{Number of DoA LLC blocks}}
+      \label{eq:correlation}
     \end{equation}
     Here, we define "on a DoA STLB page" as the corresponding page being DoA when the DoA LLC cache block is being evicted.
-  \item We have defined the \lrumid\ replacement policy by inserting an entry into the middle of the recency stack
+  \item We have defined the \lrumid replacement policy by inserting an entry into the middle of the recency stack
     we have seen $m>N$ evictions as DoA or mostly-dead, where $N$ is a parameter to be set empirically. 
 \end{enumerate}
 
@@ -150,15 +152,16 @@ what we insert never gets touched again both for the LLC and STLB.
   \centering
   \includegraphics[width=\linewidth,height=0.40\textheight,keepaspectratio]{../../plots/liveness/qmm_liveness_all.png}
   \caption{Per-workload liveness breakdown for Qualcomm (STLB top, LLC
-           bottom). Rightmost bar is the equal-weight geomean over all 45.}
+           bottom). Rightmost bar is the equal-weight geomean over all 45 workloads.}
   \label{fig:liveness_qmm}
 \end{figure}
 
 In Figure \ref{fig:liveness_google} and \ref{fig:liveness_qmm}, we find that the
 per-workload distribution is very even for both Google and Qualcomm. Both suites
-have more mostly-dead entries in the STLB than in the LLC. We find that Google has 
-about half as many mostly-alive entries in the STLB as Qualcomm, but it is doubtful
-that this has any real significance.
+have more mostly-dead entries in the STLB than in the LLC.
+
+We find that Google has  about half as many mostly-alive entries in the STLB as
+Qualcomm, but this is probably insignificant as they are qualtatively the same.
 
 \subsection{Per-workload liveness --- SPEC}
 
@@ -212,18 +215,18 @@ is not dramatic.
   \includegraphics[width=0.85\linewidth]{../../plots/liveness/liveness_corr_strip.png}
   \caption{Percentage of DoA blocks and pages in the LLC and STLB, and the
            correlation between a DoA LLC block and its corresponding STLB page
-           also being DoA. Correlation is computed as
-           $[\text{DoA LLC blocks on a DoA STLB page}] \,/\, [\text{All DoA LLC blocks}]$.}
+           also being DoA. Correlation is given by Equation \ref{eq:correlation}.}
   \label{fig:liveness_corr}
 \end{figure}
 
 Figure \ref{fig:liveness_corr} adds a third metric. Namely, what fraction of DoA
 LLC blocks map to a STLB page that is also DoA (where ``DoA'' for the STLB
 page means the Accessed bit is unset at check time, following the same
-convention as in the paper). The correlation is strong for SPEC but very
-weak for Google and Qualcomm. This should mean that the predictor is less
-well-guided in the LLC for those two suites since the STLB signal it relies
-on does not track LLC behaviour there.
+convention as in the paper). 
+
+The correlation is strong for SPEC but very weak for Google and Qualcomm. This
+should mean that the predictor is less well-guided in the LLC for those two suites
+since the STLB signal it relies on does not track LLC behaviour there.
 
 % ─────────────────────────────────────────────────────────────────────────────
 \section{Bypass Predictor Study}
@@ -234,10 +237,25 @@ on does not track LLC behaviour there.
 \label{subsec:fixed_thd}
 
 Three predictor configurations were swept across all three suites under the
-current cache configuration (L2C~256\,KB, 11\,cy; LLC~2\,MB, 40\,cy, aligned
-to Mazumdar~2021 Table~I): plain LRU (no bypass), dpPred only
-(STLB bypass, CBPRED$=0$), and the full dpPred+cbPred system (STLB and LLC
-bypass, $\text{pconf}=\text{bconf}=6$).
+current cache hierarchy (L2C~256\,KB, 11\,cy; LLC~2\,MB, 40\,cy, aligned to
+Mazumdar~2021 Table~I), summarised in Table~\ref{tab:pred_configs}.
+
+\begin{table}[htbp]
+  \centering
+  \caption{Predictor configurations evaluated in this section.
+           CBPRED$=0$ disables LLC bypass; pconf and bconf are the dpPred and
+           cbPred confidence thresholds.}
+  \label{tab:pred_configs}
+  \begin{tabular}{lccc}
+    \toprule
+    Configuration  & STLB bypass & LLC bypass & (pconf, bconf) \\
+    \midrule
+    LRU (baseline) & No          & No         & ---            \\
+    dpPred only    & Yes         & No         & (6, ---)       \\
+    dpPred+cbPred  & Yes         & Yes        & (6, 6)         \\
+    \bottomrule
+  \end{tabular}
+\end{table}
 
 \begin{figure}[htbp]
   \centering
@@ -252,20 +270,31 @@ bypass, $\text{pconf}=\text{bconf}=6$).
   \label{fig:bypass_pred}
 \end{figure}
 
-Figure~\ref{fig:bypass_pred} shows the results.
-For SPEC, the PFQ hit rate is moderate at $23.3\%$, consistent with the
-moderate DoA correlation of $35.0\%$ seen in Figure~\ref{fig:liveness_corr}.
-cbPred adds $+0.17\%$ geomean IPC over dpPred alone on SPEC, the largest
-marginal gain of any suite.
-For Google and Qualcomm the DoA correlation is near zero ($4.7\%$ and $1.8\%$
-respectively), the PFQ hit rate drops to roughly $4\%$, and cbPred provides
-essentially no additional benefit ($<0.03\%$ marginal geomean IPC gain).
-Across suites, the marginal benefit of cbPred is nearly perfectly correlated
-with the PFQ hit rate ($r=0.99$), confirming that cbPred's effectiveness is
-directly gated by how well dpPred's bypassed-page set predicts which LLC blocks
-will also be dead on arrival.
+Figure~\ref{fig:bypass_pred} shows the results; Table~\ref{tab:bypass_results}
+collects the key per-suite metrics.
+
+\begin{table}[htbp]
+  \centering
+  \caption{Per-suite summary for the current cache configuration. "Marginal cbPred gain" is the
+          geomean IPC of dpPred+cbPred minus dpPred alone.}
+  \label{tab:bypass_results}
+  \begin{tabular}{lccc}
+    \toprule
+    Suite        & DoA correlation & PFQ hit rate        & Marginal cbPred gain \\
+    \midrule
+    SPEC CPU2006 & $35.0\%$        & $23.3\%$            & $+0.17\%$            \\
+    Google       & $4.7\%$         & ${\approx}4\%$      & $<0.03\%$            \\
+    Qualcomm     & $1.8\%$         & ${\approx}4\%$      & $<0.03\%$            \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+The marginal benefit of cbPred is nearly perfectly correlated with the PFQ hit
+rate across suites ($r=0.99$): where the STLB signal aligns with LLC liveness
+(SPEC), cbPred contributes; where it does not (Google, Qualcomm), it adds
+essentially nothing.
 The overall speedups are small in absolute terms (at most $0.17\%$ geomean),
-for reasons that are explored in the next section.
+for reasons explored in the next section.
 
 \subsection{Impact of cache hierarchy configuration}
 \label{subsec:cfg_comparison}
@@ -331,77 +360,17 @@ pattern: the best configurations sit at intermediate-to-high pthd values and
 aggressive cbPred ($\text{bthd}=0$), and fully aggressive bypassing
 ($\text{pthd}=0$) can slightly hurt performance.
 
-Figures~\ref{fig:opt_dpc3}--\ref{fig:opt_qmm} show, for each benchmark or
-workload family, the individually optimal threshold and the resulting speedup.
-Each figure has two panels: the top panel shows the dpPred-only result (pthd
-optimised, cbPred off), and the bottom panel adds cbPred (both pthd and bthd
-optimised jointly).  In every panel the coloured bar is the speedup at the
-optimal threshold — annotated with the threshold value inside the bar and the
-percentage gain over the default printed in black above the tip — while the
-grey bar shows the speedup at the default setting.  Bar colour encodes the
-optimal pthd on the green (aggressive, pthd$=0$) to red (conservative,
-pthd$=6$) scale.  Figure~\ref{fig:cbpred_dist} collects the (pthd,~bthd)
-distribution heatmaps for all three suites.
-
-For SPEC (Figure~\ref{fig:opt_dpc3}), only 8 of 20 benchmarks respond
-meaningfully ($\geq 0.2\,\%$); the remainder are omitted for clarity while the
-geomean lines still cover all 20.  Adding cbPred to dpPred-only barely moves
-the bars, confirming that LLC bypass contributes little on top of STLB bypass
-for SPEC.  The distribution heatmap (Figure~\ref{fig:cbpred_dist}a) shows the
-majority of SPEC benchmarks preferring $(0,0)$, while the default $(6,6)$
-attracts none.
-
-For Google (Figure~\ref{fig:opt_google}), the cbPred panel adds noticeable
-gain over dpPred-only: optimal pairs concentrate at high pthd and low bthd,
-meaning a conservative STLB predictor paired with an aggressive LLC predictor
-is best.  The default $(6,6)$ lies outside this cluster, and the default bars
-are systematically lower than the optimal bars.
-
-For Qualcomm (Figure~\ref{fig:opt_qmm}), both panels show that full
-aggression is best: 42 of 45 traces prefer $(0,0)$ for the combined
-optimum, confirming the large gradient visible in Figure~\ref{fig:thd_heatmaps}a.
-The top-10 most-responsive traces are shown.
-
-\begin{figure}[htbp]
-  \centering
-  \includegraphics[width=\linewidth]{../../plots/dp_cbpred_study/dpc3_both_optimal.png}
-  \caption{SPEC CPU2006: per-benchmark dpPred-only (top) and dpPred+cbPred
-           (bottom) optimal threshold analysis.  Benchmarks with optimal
-           speedup $<0.2\,\%$ are omitted from the bars; geomean lines
-           cover all 20 benchmarks.  Threshold annotated as pthd (top) or
-           \texttt{(pthd,bthd)} (bottom) inside each bar.}
-  \label{fig:opt_dpc3}
-\end{figure}
-
-\begin{figure}[htbp]
-  \centering
-  \includegraphics[width=\linewidth]{../../plots/dp_cbpred_study/google_both_optimal.png}
-  \caption{Google Warehouse: same layout as Figure~\ref{fig:opt_dpc3} for
-           the 9 workload families (each bar is the geomean of its traces).}
-  \label{fig:opt_google}
-\end{figure}
+As we see in Figure \ref{fig:opt_qmm}, the performance improvements over using the 
+default threshold to bypass are quite significant: We see a speedup going from last than
+2\% to over 10\% in some cases. However, the results for Google and SPEC are omitted as 
+they didn't see more than an improvement over 0.2\%.
 
 \begin{figure}[htbp]
   \centering
   \includegraphics[width=\linewidth]{../../plots/dp_cbpred_study/qmm_both_optimal.png}
-  \caption{Qualcomm Mobile: same layout as Figure~\ref{fig:opt_dpc3}.
-           Top 10 traces by optimal speedup are shown (of 45 total).}
+  \caption{The performance difference between the default and optimal threshold choice for the Qualcomm 
+  traces with the most pronounced speedup.}
   \label{fig:opt_qmm}
-\end{figure}
-
-\begin{figure}[htbp]
-  \centering
-  \includegraphics[width=\linewidth]{../../plots/dp_cbpred_study/cbpred_dist_combined.png}
-  \caption{Distribution of the optimal (pthd, bthd) pair across benchmarks for
-           \textbf{(a)}~SPEC CPU2006 (all 20 benchmarks),
-           \textbf{(b)}~Google (all 43 individual traces), and
-           \textbf{(c)}~Qualcomm (all 45 traces).
-           Cell value = number of benchmarks/traces that prefer that pair;
-           red border marks the default $(6,6)$.
-           SPEC and Qualcomm cluster strongly at $(0,0)$; Google concentrates
-           at high pthd and low bthd, reflecting its distinct memory access
-           pattern.}
-  \label{fig:cbpred_dist}
 \end{figure}
 
 % ─────────────────────────────────────────────────────────────────────────────
