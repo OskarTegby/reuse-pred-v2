@@ -95,25 +95,87 @@ def load_suite(results_dir) -> list:
 
 _CORR_STLB    = re.compile(r"cpu0_STLB LIVENESS EVICTIONS:\s+(\d+)\s+DOA:\s+(\d+)")
 _CORR_LLC_TOT = re.compile(r"LLC LIVENESS EVICTIONS:\s+(\d+)\s+DOA:\s+(\d+)")
-_CORR_PAGE    = re.compile(r"LLC LIVENESS DOA_ON_DOA_STLB_PAGE:\s+(\d+)")
+
+# New 4-bucket format (plain_printer.cc):
+#   LLC LIVENESS DOA/STLB CORRELATION (denom = LLC DoA):
+#     resident_doa=N (X%)  resident_alive=N (X%)
+#     evicted_doa=N (X%)   evicted_alive=N (X%)   uncovered=N (X%)
+_CORR_V2 = re.compile(
+    r"LLC LIVENESS DOA/STLB CORRELATION[^:]*:"
+    r".*?resident_doa=(\d+)"
+    r".*?resident_alive=(\d+)"
+    r".*?evicted_doa=(\d+)"
+    r".*?evicted_alive=(\d+)"
+    r".*?uncovered=(\d+)",
+    re.DOTALL,
+)
 
 
-def parse_correlation(path) -> "tuple | None":
-    """Return (stlb_doa_pct, llc_doa_pct, llc_doa_on_page_pct) or None."""
+def parse_correlation_full(path) -> "dict | None":
+    """Parse the full 4-bucket DoA/STLB correlation from a champsim.out file.
+
+    Returns a dict with keys:
+        stlb_total, stlb_doa,
+        llc_total,  llc_doa,
+        resident_doa, resident_alive,
+        evicted_doa,  evicted_alive,
+        uncovered,
+        coverage_pct,     # (covered / llc_doa) × 100
+        precision_pct,    # ((resident_doa + evicted_doa) / covered) × 100; NaN if covered==0
+        stlb_doa_pct,     # stlb_doa / stlb_total × 100
+        llc_doa_pct,      # llc_doa  / llc_total  × 100
+    or None if the required lines are absent.
+    """
     text = Path(path).read_text(errors="replace")
     sm = _CORR_STLB.search(text)
     lm = _CORR_LLC_TOT.search(text)
-    pm = _CORR_PAGE.search(text)
-    if not (sm and lm and pm):
+    cm = _CORR_V2.search(text)
+    if not (sm and lm and cm):
         return None
+
     stlb_total = int(sm.group(1)); stlb_doa = int(sm.group(2))
     llc_total  = int(lm.group(1)); llc_doa  = int(lm.group(2))
-    llc_page   = int(pm.group(1))
-    if stlb_total == 0 or llc_doa == 0:
+    resident_doa   = int(cm.group(1))
+    resident_alive = int(cm.group(2))
+    evicted_doa    = int(cm.group(3))
+    evicted_alive  = int(cm.group(4))
+    uncovered      = int(cm.group(5))
+
+    if llc_doa == 0:
         return None
-    return (100.0 * stlb_doa / stlb_total,
-            100.0 * llc_doa  / llc_total if llc_total > 0 else 0.0,
-            100.0 * llc_page / llc_doa)
+
+    covered = resident_doa + resident_alive + evicted_doa + evicted_alive
+    precision = float("nan") if covered == 0 else \
+        100.0 * (resident_doa + evicted_doa) / covered
+
+    return {
+        "stlb_total":     stlb_total,
+        "stlb_doa":       stlb_doa,
+        "llc_total":      llc_total,
+        "llc_doa":        llc_doa,
+        "resident_doa":   resident_doa,
+        "resident_alive": resident_alive,
+        "evicted_doa":    evicted_doa,
+        "evicted_alive":  evicted_alive,
+        "uncovered":      uncovered,
+        "coverage_pct":   100.0 * covered / llc_doa,
+        "precision_pct":  precision,
+        "stlb_doa_pct":   100.0 * stlb_doa / stlb_total if stlb_total > 0 else 0.0,
+        "llc_doa_pct":    100.0 * llc_doa  / llc_total  if llc_total  > 0 else 0.0,
+    }
+
+
+def parse_correlation(path) -> "tuple | None":
+    """Return (stlb_doa_pct, llc_doa_pct, llc_doa_on_page_pct) or None.
+
+    llc_doa_on_page_pct is the resident_doa fraction (= original stat, now
+    one of four buckets).  Use parse_correlation_full() for the full breakdown.
+    """
+    d = parse_correlation_full(path)
+    if d is None:
+        return None
+    on_page_pct = 100.0 * d["resident_doa"] / d["llc_doa"] if d["llc_doa"] > 0 else 0.0
+    return (d["stlb_doa_pct"], d["llc_doa_pct"], on_page_pct)
 
 
 def load_suite_corr(results_dir) -> list:
@@ -128,6 +190,21 @@ def load_suite_corr(results_dir) -> list:
         r = parse_correlation(f)
         if r is not None:
             rows.append((wl, r[0], r[1], r[2]))
+    return rows
+
+
+def load_suite_corr_full(results_dir) -> list:
+    """Return [(workload, corr_dict)] for every trace that has correlation data."""
+    base = Path(results_dir)
+    files = sorted(base.glob("*/champsim.out"))
+    if not files:
+        files = sorted(base.glob("*.out"))
+    rows = []
+    for f in files:
+        wl = f.parent.name if f.name == "champsim.out" else f.stem
+        d = parse_correlation_full(f)
+        if d is not None:
+            rows.append((wl, d))
     return rows
 
 

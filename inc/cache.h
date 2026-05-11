@@ -80,9 +80,17 @@ struct cache_stats {
   //                    valid, but the measurement carries no useful timing info.
   uint64_t evict_zero_residence = 0;
 
-  // LLC DoA blocks whose PFN has a currently-resident DoA STLB entry.
-  // Denominator is evict_doa.  Only meaningful for LLC.
-  uint64_t evict_doa_on_doa_stlb_page = 0;
+  // LLC DoA blocks cross-referenced against STLB state.  Denominator is
+  // evict_doa for all four.  Only meaningful for LLC.
+  //
+  // Lookup order: live STLB first; if not found, stlb_evict_log (pages
+  // recently evicted from the STLB that have not yet been re-inserted).
+  // "alive" means the STLB entry had at least one hit (hit_count > 0).
+  uint64_t evict_doa_on_doa_stlb_page    = 0; // live STLB, page was DoA
+  uint64_t evict_doa_stlb_resident_alive = 0; // live STLB, page had hits
+  uint64_t evict_doa_stlb_evicted_doa    = 0; // evict log, was DoA on STLB eviction
+  uint64_t evict_doa_stlb_evicted_alive  = 0; // evict log, had hits on STLB eviction
+  // uncovered = evict_doa − sum of the four above (derived at print time)
 
   // Hit-count distribution at eviction.
   // Bin i = evicted with exactly i hits; bin HIT_HIST_BINS-1 = that many or more.
@@ -211,6 +219,11 @@ class CACHE : public champsim::operable, public MemoryRequestConsumer, public Me
 
   // Set by cpu0_STLB at initialize(); used by LLC to scan for DoA page correlations.
   inline static const CACHE* stlb_ptr = nullptr;
+
+  // PFN → was_doa: populated when an STLB entry is evicted; entries removed
+  // when the page is re-inserted into the STLB.  Gives LLC the ability to
+  // cross-reference against pages that have already left the STLB.
+  inline static std::map<uint64_t, bool> stlb_evict_log{};
 
   std::map<uint64_t, std::map<uint64_t,    hist_entry>> phist;      // [vpn_hash][pc_hash] → entry  (hashed)
   std::map<uint64_t, std::map<phist_key_t, hist_entry>> phist_full; // [pc_set][{pc_tag,vpn}] → entry (full-key)
@@ -377,7 +390,7 @@ public:
   const std::bitset<NUM_REPLACEMENT_MODULES> repl_type;
   const std::bitset<NUM_PREFETCH_MODULES> pref_type;
 
-  ~CACHE() { if (stlb_ptr == this) stlb_ptr = nullptr; }
+  ~CACHE() { if (stlb_ptr == this) { stlb_ptr = nullptr; stlb_evict_log.clear(); } }
 
   // constructor
   CACHE(std::string v1, double freq_scale, uint32_t v2, uint32_t v3, uint32_t v8, uint32_t fill_lat, long int max_tag, long int max_fill, unsigned offset_bits,

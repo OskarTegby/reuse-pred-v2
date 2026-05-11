@@ -243,18 +243,37 @@ void CACHE::record_eviction_liveness(const BLOCK& victim, liveness_class lv)
     case liveness_class::mostly_alive: s.evict_mostly_alive++; break;
   }
 
-  // For LLC DoA blocks: check whether the evicted block's PFN has a
-  // currently-resident STLB entry that is also DoA (hit_count == 0).
-  // This measures how often a dead cache block maps onto a dead page translation.
+  // STLB: record this page's DoA status in the evict log so the LLC can
+  // cross-reference it even after it leaves the STLB.
+  if (NAME == "cpu0_STLB") {
+    stlb_evict_log[victim.data >> LOG2_PAGE_SIZE] = (lv == liveness_class::doa);
+  }
+
+  // For LLC DoA blocks: check whether the evicted block's PFN has STLB info.
+  // Coverage breakdown:
+  //   live STLB, DoA    → evict_doa_on_doa_stlb_page    (true-positive)
+  //   live STLB, alive  → evict_doa_stlb_resident_alive (true-negative)
+  //   evict log, DoA    → evict_doa_stlb_evicted_doa    (extended true-positive)
+  //   evict log, alive  → evict_doa_stlb_evicted_alive  (extended true-negative)
+  //   not found         → uncovered (derived: evict_doa − the four above)
   if (NAME == "LLC" && lv == liveness_class::doa && stlb_ptr != nullptr) {
     const uint64_t pfn = victim.address >> LOG2_PAGE_SIZE;
-    const bool on_doa_stlb_page = std::any_of(
+
+    const auto it_stlb = std::find_if(
         stlb_ptr->block.begin(), stlb_ptr->block.end(),
-        [pfn](const BLOCK& b) {
-          return b.valid && b.hit_count == 0 && (b.data >> LOG2_PAGE_SIZE) == pfn;
-        });
-    if (on_doa_stlb_page)
-      s.evict_doa_on_doa_stlb_page++;
+        [pfn](const BLOCK& b) { return b.valid && (b.data >> LOG2_PAGE_SIZE) == pfn; });
+
+    if (it_stlb != stlb_ptr->block.end()) {
+      if (it_stlb->hit_count == 0) s.evict_doa_on_doa_stlb_page++;
+      else                          s.evict_doa_stlb_resident_alive++;
+    } else {
+      const auto it_log = stlb_evict_log.find(pfn);
+      if (it_log != stlb_evict_log.end()) {
+        if (it_log->second) s.evict_doa_stlb_evicted_doa++;
+        else                s.evict_doa_stlb_evicted_alive++;
+      }
+      // else: uncovered — no STLB information available for this PFN
+    }
   }
 }
 
@@ -494,6 +513,11 @@ bool CACHE::handle_fill(const PACKET& fill_mshr)
       way->v_address = fill_mshr.v_address;
       way->data = fill_mshr.data;
       way->ip = fill_mshr.ip;
+
+      // STLB re-insertion: remove this PFN from the evict log so future LLC
+      // DoA lookups use the live STLB entry instead of the stale log entry.
+      if (NAME == "cpu0_STLB")
+        stlb_evict_log.erase(fill_mshr.data >> LOG2_PAGE_SIZE);
 
       metadata_thru =
           impl_prefetcher_cache_fill(pkt_address, get_set_index(fill_mshr.address), way_idx, fill_mshr.type == PREFETCH, evicting_address, metadata_thru);
@@ -960,7 +984,10 @@ void CACHE::end_phase(unsigned finished_cpu)
   roi_stats.back().evict_mostly_alive = sim_stats.back().evict_mostly_alive;
   roi_stats.back().evict_zero_residence = sim_stats.back().evict_zero_residence;
   roi_stats.back().evict_hit_hist     = sim_stats.back().evict_hit_hist;
-  roi_stats.back().evict_doa_on_doa_stlb_page = sim_stats.back().evict_doa_on_doa_stlb_page;
+  roi_stats.back().evict_doa_on_doa_stlb_page    = sim_stats.back().evict_doa_on_doa_stlb_page;
+  roi_stats.back().evict_doa_stlb_resident_alive = sim_stats.back().evict_doa_stlb_resident_alive;
+  roi_stats.back().evict_doa_stlb_evicted_doa    = sim_stats.back().evict_doa_stlb_evicted_doa;
+  roi_stats.back().evict_doa_stlb_evicted_alive  = sim_stats.back().evict_doa_stlb_evicted_alive;
 
   roi_stats.back().llt_pc_stats = std::move(sim_stats.back().llt_pc_stats);
   roi_stats.back().llc_pc_stats = std::move(sim_stats.back().llc_pc_stats);
