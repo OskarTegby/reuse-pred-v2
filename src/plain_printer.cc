@@ -115,10 +115,21 @@ void champsim::plain_printer::print(CACHE::stats_type stats)
              << std::endl;
       if (s.name == "LLC") {
         const double doa_total = static_cast<double>(s.evict_doa ? s.evict_doa : 1);
-        stream << s.name << " LIVENESS DOA_ON_DOA_STLB_PAGE: "
-               << s.evict_doa_on_doa_stlb_page
-               << " (" << std::fixed << std::setprecision(1)
-               << 100.0 * s.evict_doa_on_doa_stlb_page / doa_total << "% of LLC DoA)"
+        const uint64_t covered = s.evict_doa_on_doa_stlb_page + s.evict_doa_stlb_resident_alive
+                               + s.evict_doa_stlb_evicted_doa + s.evict_doa_stlb_evicted_alive;
+        const uint64_t uncovered = s.evict_doa - covered;
+        stream << s.name << " LIVENESS DOA/STLB CORRELATION (denom = LLC DoA):"
+               << std::fixed << std::setprecision(1)
+               << "  resident_doa="   << s.evict_doa_on_doa_stlb_page
+               << " (" << 100.0 * s.evict_doa_on_doa_stlb_page    / doa_total << "%)"
+               << "  resident_alive=" << s.evict_doa_stlb_resident_alive
+               << " (" << 100.0 * s.evict_doa_stlb_resident_alive  / doa_total << "%)"
+               << "  evicted_doa="    << s.evict_doa_stlb_evicted_doa
+               << " (" << 100.0 * s.evict_doa_stlb_evicted_doa     / doa_total << "%)"
+               << "  evicted_alive="  << s.evict_doa_stlb_evicted_alive
+               << " (" << 100.0 * s.evict_doa_stlb_evicted_alive   / doa_total << "%)"
+               << "  uncovered="      << uncovered
+               << " (" << 100.0 * uncovered / doa_total << "%)"
                << std::endl;
       }
       stream << s.name << " LIVENESS HIT_HIST:";
