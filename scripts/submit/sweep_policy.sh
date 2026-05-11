@@ -14,34 +14,29 @@
 #               Requires champsim_{policy}_paper_pref binaries built with ./build_all.sh --paper-pref.
 #
 # Configurations submitted (default, 8 configs):
-#   lru            – champsim_lru,     DPPRED=0, CBPRED=0  (vanilla LRU + liveness stats)
-#   srrip          – champsim_srrip,   DPPRED=0, CBPRED=0
-#   drrip          – champsim_drrip,   DPPRED=0, CBPRED=0
-#   lru_mid        – champsim_lru_mid, DPPRED=0, CBPRED=0  (liveness baseline; = LRU)
-#   lru_dp_only    – champsim_lru,     DPPRED=1, CBPRED=0  (dpPred/STLB-bypass only, no LLC bypass)
-#   lru_pred       – champsim_lru,     DPPRED=1, CBPRED=1  (bypass predictor on plain LRU)
-#   lru_mid_pred   – champsim_lru_mid, DPPRED=1, CBPRED=1  (full system: lru_mid + predictor)
-#   srrip_pred     – champsim_srrip,   DPPRED=1, CBPRED=1
-#   drrip_pred     – champsim_drrip,   DPPRED=1, CBPRED=1
+#   lru            – champsim_lru,        DPPRED=0, CBPRED=0  (vanilla LRU + liveness stats)
+#   srrip          – champsim_srrip,      DPPRED=0, CBPRED=0
+#   srrip_live     – champsim_srrip_live, DPPRED=0, CBPRED=0  (liveness-informed SRRIP)
+#   lru_mid        – champsim_lru_mid,    DPPRED=0, CBPRED=0  (liveness baseline; = LRU)
+#   lru_dp_only    – champsim_lru,        DPPRED=1, CBPRED=0  (dpPred/STLB-bypass only, no LLC bypass)
+#   lru_pred       – champsim_lru,        DPPRED=1, CBPRED=1  (bypass predictor on plain LRU)
+#   lru_mid_pred   – champsim_lru_mid,    DPPRED=1, CBPRED=1  (full system: lru_mid + predictor)
+#   srrip_pred     – champsim_srrip,      DPPRED=1, CBPRED=1
 # With --pref, 8 additional configs (same policies, _pref binaries):
 #   lru_pref       – champsim_lru_pref,     DPPRED=0, CBPRED=0
 #   srrip_pref     – champsim_srrip_pref,   DPPRED=0, CBPRED=0
-#   drrip_pref     – champsim_drrip_pref,   DPPRED=0, CBPRED=0
 #   lru_mid_pref   – champsim_lru_mid_pref, DPPRED=0, CBPRED=0
 #   lru_pred_pref        – champsim_lru_pref,     DPPRED=1, CBPRED=1
 #   lru_mid_pred_pref    – champsim_lru_mid_pref, DPPRED=1, CBPRED=1
 #   srrip_pred_pref      – champsim_srrip_pref,   DPPRED=1, CBPRED=1
-#   drrip_pred_pref      – champsim_drrip_pref,   DPPRED=1, CBPRED=1
-# With --paper-pref, 8 additional configs (same policies, _paper_pref binaries):
+# With --paper-pref, 6 additional configs (same policies, _paper_pref binaries):
 #   lru_paper_pref       – champsim_lru_paper_pref,     DPPRED=0, CBPRED=0
 #   srrip_paper_pref     – champsim_srrip_paper_pref,   DPPRED=0, CBPRED=0
-#   drrip_paper_pref     – champsim_drrip_paper_pref,   DPPRED=0, CBPRED=0
 #   lru_mid_paper_pref   – champsim_lru_mid_paper_pref, DPPRED=0, CBPRED=0
 #   lru_pred_paper_pref      – champsim_lru_paper_pref,     DPPRED=1, CBPRED=1
 #   lru_mid_pred_paper_pref  – champsim_lru_mid_paper_pref, DPPRED=1, CBPRED=1
 #   srrip_pred_paper_pref    – champsim_srrip_paper_pref,   DPPRED=1, CBPRED=1
-#   drrip_pred_paper_pref    – champsim_drrip_paper_pref,   DPPRED=1, CBPRED=1
-# Total: 8, 16, or 24 configs
+# Total: 8, 14, or 20 configs
 
 set -euo pipefail
 
@@ -162,15 +157,14 @@ configs=()
 # Base (no-prefetch) configs — skipped with --no-base
 if [ "${WITH_BASE}" -eq 1 ]; then
   configs+=(
-    "lru          champsim_lru      0 0 6 6"
-    "srrip         champsim_srrip    0 0 6 6"
-    "drrip         champsim_drrip    0 0 6 6"
-    "lru_mid       champsim_lru_mid  0 0 6 6"
-    "lru_dp_only   champsim_lru      1 0 6 6"
-    "lru_pred      champsim_lru      1 1 6 6"
-    "lru_mid_pred  champsim_lru_mid  1 1 6 6"
-    "srrip_pred    champsim_srrip    1 1 6 6"
-    "drrip_pred    champsim_drrip    1 1 6 6"
+    "lru           champsim_lru           0 0 6 6"
+    "srrip         champsim_srrip         0 0 6 6"
+    "srrip_live    champsim_srrip_live    0 0 6 6"
+    "lru_mid       champsim_lru_mid       0 0 6 6"
+    "lru_dp_only   champsim_lru           1 0 6 6"
+    "lru_pred      champsim_lru           1 1 6 6"
+    "lru_mid_pred  champsim_lru_mid       1 1 6 6"
+    "srrip_pred    champsim_srrip         1 1 6 6"
   )
 fi
 
@@ -179,12 +173,10 @@ if [ "${WITH_PREF}" -eq 1 ]; then
   configs+=(
     "lru_pref          champsim_lru_pref      0 0 6 6"
     "srrip_pref        champsim_srrip_pref    0 0 6 6"
-    "drrip_pref        champsim_drrip_pref    0 0 6 6"
     "lru_mid_pref      champsim_lru_mid_pref  0 0 6 6"
     "lru_pred_pref     champsim_lru_pref      1 1 6 6"
     "lru_mid_pred_pref champsim_lru_mid_pref  1 1 6 6"
     "srrip_pred_pref   champsim_srrip_pref    1 1 6 6"
-    "drrip_pred_pref   champsim_drrip_pref    1 1 6 6"
   )
 fi
 
@@ -193,12 +185,10 @@ if [ "${WITH_PAPER_PREF}" -eq 1 ]; then
   configs+=(
     "lru_paper_pref          champsim_lru_paper_pref      0 0 6 6"
     "srrip_paper_pref        champsim_srrip_paper_pref    0 0 6 6"
-    "drrip_paper_pref        champsim_drrip_paper_pref    0 0 6 6"
     "lru_mid_paper_pref      champsim_lru_mid_paper_pref  0 0 6 6"
     "lru_pred_paper_pref     champsim_lru_paper_pref      1 1 6 6"
     "lru_mid_pred_paper_pref champsim_lru_mid_paper_pref  1 1 6 6"
     "srrip_pred_paper_pref   champsim_srrip_paper_pref    1 1 6 6"
-    "drrip_pred_paper_pref   champsim_drrip_paper_pref    1 1 6 6"
   )
 fi
 
