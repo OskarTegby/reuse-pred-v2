@@ -444,6 +444,22 @@ bool CACHE::handle_fill(const PACKET& fill_mshr)
     if (bypassed) {
       predictor_bypassed = true;
       way = set_end;
+      // Record in per-set bypass shadow for regret analysis.
+      if (NAME == "cpu0_STLB" || NAME == "LLC") {
+        const auto set_idx = get_set_index(fill_mshr.address);
+        auto& q = bypass_shadow[set_idx];
+        // Expire stale entries from the front (oldest inserted = earliest to expire).
+        while (!q.empty() && bypass_per_set_fills[set_idx] - q.front().fills_at_bypass > NUM_WAY) {
+          sim_stats.back().bypass_correct++;
+          q.pop_front();
+        }
+        // Cap at 2×NUM_WAY entries; drop oldest if full.
+        if (q.size() >= 2 * NUM_WAY) {
+          q.pop_front();
+          sim_stats.back().bypass_shadow_overflow++;
+        }
+        q.push_back({fill_mshr.address >> OFFSET_BITS, bypass_per_set_fills[set_idx]});
+      }
     } else {
       // Classify liveness once; share the result between stats recording and
       // history-table updates so the two stay in sync.
@@ -493,6 +509,17 @@ bool CACHE::handle_fill(const PACKET& fill_mshr)
     }
 
     if (success) {
+      // Track fills that evict a valid line: way->valid is still the old value here.
+      if ((NAME == "cpu0_STLB" || NAME == "LLC") && way->valid) {
+        const auto fill_set_idx = get_set_index(fill_mshr.address);
+        bypass_per_set_fills[fill_set_idx]++;
+        auto& fq = bypass_shadow[fill_set_idx];
+        while (!fq.empty() && bypass_per_set_fills[fill_set_idx] - fq.front().fills_at_bypass > NUM_WAY) {
+          sim_stats.back().bypass_correct++;
+          fq.pop_front();
+        }
+      }
+
       auto evicting_address = (ever_seen_data ? way->address : way->v_address) & ~champsim::bitmask(match_offset_bits ? 0 : OFFSET_BITS);
 
       if (way->prefetch)
@@ -625,6 +652,26 @@ bool CACHE::handle_miss(const PACKET& handle_pkt)
   }
 
   cpu = handle_pkt.cpu;
+
+  // Bypass regret: if this demand miss is for a previously-bypassed line that
+  // would still have been resident, count it as a regret.
+  if ((NAME == "cpu0_STLB" || NAME == "LLC") && handle_pkt.type != PREFETCH) {
+    const auto set_idx = get_set_index(handle_pkt.address);
+    const uint64_t tag = handle_pkt.address >> OFFSET_BITS;
+    auto& q = bypass_shadow[set_idx];
+    // Expire stale front entries.
+    while (!q.empty() && bypass_per_set_fills[set_idx] - q.front().fills_at_bypass > NUM_WAY) {
+      sim_stats.back().bypass_correct++;
+      q.pop_front();
+    }
+    // Check for a matching bypassed address anywhere in the (fresh) queue.
+    auto match = std::find_if(q.begin(), q.end(),
+        [tag](const BypassShadowEntry& e) { return e.addr_tag == tag; });
+    if (match != q.end()) {
+      sim_stats.back().bypass_incorrect++;
+      q.erase(match);
+    }
+  }
 
   // check mshr
   auto mshr_entry = std::find_if(MSHR.begin(), MSHR.end(), eq_addr<PACKET>(handle_pkt.address, OFFSET_BITS));
@@ -968,6 +1015,10 @@ void CACHE::end_phase(unsigned finished_cpu)
 
   roi_stats.back().llt_bypasses = sim_stats.back().llt_bypasses;
   roi_stats.back().llc_bypasses = sim_stats.back().llc_bypasses;
+
+  roi_stats.back().bypass_incorrect          = sim_stats.back().bypass_incorrect;
+  roi_stats.back().bypass_correct         = sim_stats.back().bypass_correct;
+  roi_stats.back().bypass_shadow_overflow = sim_stats.back().bypass_shadow_overflow;
   roi_stats.back().pfq_probes   = sim_stats.back().pfq_probes;
   roi_stats.back().pfq_hits     = sim_stats.back().pfq_hits;
 

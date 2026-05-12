@@ -104,6 +104,21 @@ void champsim::plain_printer::print(CACHE::stats_type stats)
         stream << stats.name << " BHIST LOOKUPS: " << std::setw(10) << stats.bhist_lookups
                << "  HITS: " << std::setw(10) << stats.bhist_hits << std::endl;
     }
+    if ((stats.name == "cpu0_STLB" || stats.name == "LLC") &&
+        (stats.bypass_incorrect + stats.bypass_correct + stats.bypass_shadow_overflow > 0)) {
+      const uint64_t resolved = stats.bypass_incorrect + stats.bypass_correct;
+      stream << stats.name << " BYPASS ACCURACY:"
+             << std::fixed << std::setprecision(1)
+             << "  incorrect=" << stats.bypass_incorrect;
+      if (resolved > 0)
+        stream << " (" << 100.0 * stats.bypass_incorrect / resolved << "%)";
+      stream << "  correct=" << stats.bypass_correct;
+      if (resolved > 0)
+        stream << " (" << 100.0 * stats.bypass_correct / resolved << "%)";
+      if (stats.bypass_shadow_overflow > 0)
+        stream << "  shadow_overflow=" << stats.bypass_shadow_overflow;
+      stream << std::endl;
+    }
 
     if (stats.name == "cpu0_STLB" || stats.name == "LLC") {
       const auto& s = stats;

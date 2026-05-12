@@ -60,6 +60,14 @@ struct cache_stats {
   uint64_t pfq_probes   = 0;   // LLC fills checked against PFQ (CBPRED=1 only)
   uint64_t pfq_hits     = 0;   // subset of pfq_probes whose page was in PFQ
 
+  // ── Bypass regret (LLC and STLB only; only populated when bypass is active) ──
+  // bypass_incorrect – bypassed line demanded while it would still have been resident
+  // bypass_correct   – bypassed line aged out (≥ NUM_WAY set-accesses) without being demanded
+  // bypass_shadow_overflow – shadow was full; entry dropped unresolved
+  uint64_t bypass_incorrect          = 0;
+  uint64_t bypass_correct         = 0;
+  uint64_t bypass_shadow_overflow = 0;
+
   uint64_t phist_lookups = 0, phist_hits = 0;  // dpPred prediction queries (DPPRED=1 only)
   uint64_t bhist_lookups = 0, bhist_hits = 0;  // cbPred prediction queries (CBPRED=1 only)
   uint64_t st_lookups    = 0, st_hits    = 0;  // shadow-table lookups (DPPRED=1 only)
@@ -387,6 +395,18 @@ public:
 
 #include "cache_modules.inc"
 
+  // ── Bypass regret tracking (LLC and STLB only) ───────────────────────────────
+  // Per-set fill counter (incremented each time a valid line is evicted by a new
+  // fill).  Used to decide whether a bypassed line would still be resident:
+  // > NUM_WAY fills since bypass → line would have been evicted (correct bypass).
+  // Per-set shadow: FIFO of at most 2×NUM_WAY bypass records; front = oldest.
+  struct BypassShadowEntry {
+    uint64_t addr_tag;           // address >> OFFSET_BITS
+    uint64_t fills_at_bypass; // bypass_per_set_fills[set] at bypass time
+  };
+  std::vector<uint64_t>                      bypass_per_set_fills;
+  std::vector<std::deque<BypassShadowEntry>> bypass_shadow;  // per-set FIFO, oldest = front
+
   const std::bitset<NUM_REPLACEMENT_MODULES> repl_type;
   const std::bitset<NUM_PREFETCH_MODULES> pref_type;
 
@@ -398,7 +418,9 @@ public:
         std::bitset<NUM_PREFETCH_MODULES> pref, std::bitset<NUM_REPLACEMENT_MODULES> repl)
       : champsim::operable(freq_scale), MemoryRequestProducer(ll), NAME(v1), NUM_SET(v2), NUM_WAY(v3), MSHR_SIZE(v8), FILL_LATENCY(fill_lat),
         OFFSET_BITS(offset_bits), MAX_TAG(max_tag), MAX_FILL(max_fill), prefetch_as_load(pref_load), match_offset_bits(wq_full_addr), virtual_prefetch(va_pref),
-        pref_activate_mask(pref_mask), queues(queue_set), repl_type(repl), pref_type(pref)
+        pref_activate_mask(pref_mask), queues(queue_set),
+        bypass_per_set_fills(v2, 0), bypass_shadow(v2),
+        repl_type(repl), pref_type(pref)
   {
     load_predictor_settings();
   }
