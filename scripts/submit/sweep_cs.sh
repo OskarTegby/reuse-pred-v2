@@ -123,6 +123,8 @@ BASE_LABEL="${token}${PREF_TAG}_${DATE}${TEST_TAG}"
 
 LOG_DIR="${PROJECT_ROOT}/logs/${BASE_LABEL}"
 mkdir -p "$LOG_DIR"
+source "${SCRIPT_DIR}/_manifest.sh"
+write_manifest
 
 # ── Build config list: (exp_name dppred cbpred pconf_thd bconf_thd) ──────────
 configs=()

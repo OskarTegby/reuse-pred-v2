@@ -123,6 +123,8 @@ TEST_TAG=$( [ "$TEST" -eq 1 ] && echo "_test" || echo "" )
 BASE_LABEL="${token}_hist_${range}_${DATE}${TEST_TAG}"
 LOG_DIR="${PROJECT_ROOT}/logs/${BASE_LABEL}"
 mkdir -p "$LOG_DIR"
+source "${SCRIPT_DIR}/_manifest.sh"
+write_manifest
 
 # Config format: exp_name binary dppred cbpred pconf_thd bconf_thd phist_hash bhist_hash phist_sets phist_ways bhist_sets bhist_ways repl_pol
 configs=()

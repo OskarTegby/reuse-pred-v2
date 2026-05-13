@@ -178,6 +178,8 @@ BASE_LABEL="${token}_${CACHE_TAG}mid_${MID_KEY_STR}${PROMOTE_TAG}${PREF_TAG}_${D
 
 LOG_DIR="${PROJECT_ROOT}/logs/${BASE_LABEL}"
 mkdir -p "$LOG_DIR"
+source "${SCRIPT_DIR}/_manifest.sh"
+write_manifest
 
 # ── Submit LRU baseline ───────────────────────────────────────────────────────
 RUN_LABEL="${BASE_LABEL}/lru"

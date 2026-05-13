@@ -109,4 +109,13 @@ rc=$?
 
 date
 echo "Exit code: $rc"
+
+# Append one completion line to the parent-level log so the whole suite's
+# progress can be followed with: tail -f results/<label>/completed.log
+LOG_BASE="${RUN_LABEL%/*}"
+[ "$LOG_BASE" != "$RUN_LABEL" ] && \
+    printf '%s  exit=%d  %-20s  [%s]\n' \
+        "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$rc" "$TRACE_NAME" "${RUN_LABEL##*/}" \
+        >> "${PROJECT_ROOT}/results/${LOG_BASE}/completed.log"
+
 exit $rc

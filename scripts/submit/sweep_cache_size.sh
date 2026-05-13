@@ -94,6 +94,8 @@ TEST_TAG=$( [ "$TEST" -eq 1 ] && echo "_test" || echo "" )
 BASE_LABEL="${token}_cache_size_${DATE}${TEST_TAG}"
 LOG_DIR="${PROJECT_ROOT}/logs/${BASE_LABEL}"
 mkdir -p "$LOG_DIR"
+source "${SCRIPT_DIR}/_manifest.sh"
+write_manifest
 
 # (exp_name, binary) — one entry per point; baseline uses champsim_lru
 configs=(
