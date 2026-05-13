@@ -224,6 +224,87 @@ weak for Google and Qualcomm. This should mean that the predictor is less
 well-guided in the LLC for those two suites since the STLB signal it relies
 on does not track LLC behaviour there.
 
+\subsection{Cache and TLB Size Sensitivity}
+\label{sec:cache_size}
+
+To understand how the liveness signal responds to changes in hardware capacity,
+each cache and TLB component was varied independently at half and double its
+baseline size while all other components are held fixed.  The LLC was swept
+from 1024 to 4096 sets (1--4\,MB), the L2C from 256 to 1024 sets, the STLB
+from 64 to 256 entries, the DTLB from 8 to 32 entries, and the ITLB from 16
+to 64 entries.  All configurations use plain LRU so that the measured liveness
+reflects the unmodified eviction distribution.
+
+\begin{figure}[htbp]
+  \centering
+  \includegraphics[width=\linewidth]{../../plots/cache_size_study/dpc3/liveness_dpc3.png}
+  \caption{LLC DoA, LLC mostly-dead, STLB DoA, and STLB mostly-dead eviction
+           fractions at half ($\div 2$), baseline, and double ($\times 2$)
+           capacity for each component --- SPEC CPU2006 (DPC3).  Each column
+           varies one component independently; all others remain at baseline.}
+  \label{fig:cs_liveness_dpc3}
+\end{figure}
+
+\begin{figure}[htbp]
+  \centering
+  \includegraphics[width=\linewidth]{../../plots/cache_size_study/google/liveness_google.png}
+  \caption{Same as Figure~\ref{fig:cs_liveness_dpc3} for Google.}
+  \label{fig:cs_liveness_google}
+\end{figure}
+
+\begin{figure}[htbp]
+  \centering
+  \includegraphics[width=\linewidth]{../../plots/cache_size_study/qmm/liveness_qmm.png}
+  \caption{Same as Figure~\ref{fig:cs_liveness_dpc3} for Qualcomm.}
+  \label{fig:cs_liveness_qmm}
+\end{figure}
+
+Figures~\ref{fig:cs_liveness_dpc3}--\ref{fig:cs_liveness_qmm} show the liveness
+breakdown at each capacity point.  The LLC column is the most informative: a
+larger LLC reduces the DoA eviction fraction as more blocks get reused before
+eviction, while a smaller LLC increases it --- the liveness signal strengthens
+when capacity is tighter.  The TLB components (DTLB, ITLB) have comparatively
+little effect on LLC liveness, as expected given the page-versus-block granularity
+difference.  The STLB column shows a similar but weaker trend for its own DoA
+fraction.
+
+\begin{figure}[htbp]
+  \centering
+  \includegraphics[width=\linewidth]{../../plots/cache_size_study/dpc3/correlation_dpc3.png}
+  \caption{Fraction of LLC DoA blocks decomposed by the state of their
+           corresponding STLB page at eviction time, shown at half, baseline,
+           and double capacity for each component --- SPEC CPU2006 (DPC3).
+           Buckets: the STLB page is still resident and DoA, still resident
+           and alive, has already been evicted DoA, has already been evicted
+           alive, or the correlation is uncovered (STLB entry not present).}
+  \label{fig:cs_corr_dpc3}
+\end{figure}
+
+\begin{figure}[htbp]
+  \centering
+  \includegraphics[width=\linewidth]{../../plots/cache_size_study/google/correlation_google.png}
+  \caption{Same as Figure~\ref{fig:cs_corr_dpc3} for Google.}
+  \label{fig:cs_corr_google}
+\end{figure}
+
+\begin{figure}[htbp]
+  \centering
+  \includegraphics[width=\linewidth]{../../plots/cache_size_study/qmm/correlation_qmm.png}
+  \caption{Same as Figure~\ref{fig:cs_corr_dpc3} for Qualcomm.}
+  \label{fig:cs_corr_qmm}
+\end{figure}
+
+Figures~\ref{fig:cs_corr_dpc3}--\ref{fig:cs_corr_qmm} show how the DoA--STLB
+correlation changes with capacity.  For SPEC, the resident-DoA fraction is
+reasonably stable across LLC sizes, while the evicted-DoA and uncovered fractions
+shift as the STLB becomes more or less pressured.  For Google and Qualcomm the
+overall correlation remains low regardless of component size, consistent with the
+near-zero LLC--STLB DoA correlation already noted in Figure~\ref{fig:liveness_corr}
+--- the two levels do not share enough of the same working-set structure for the
+STLB page state to predict LLC block liveness, and increasing either capacity does
+not change that.  Increasing the STLB size modestly reduces the uncovered fraction
+but does not raise the resident-DoA rate meaningfully.
+
 % ─────────────────────────────────────────────────────────────────────────────
 \section{Bypass Predictor Study}
 \label{sec:bypass_pred}
@@ -253,7 +334,7 @@ bypass, $\text{pconf}=\text{bconf}=6$).
 
 Figure~\ref{fig:bypass_pred} shows the results.
 For SPEC, the PFQ hit rate is moderate at $23.3\%$, consistent with the
-moderate DoA correlation of $35.0\%$ seen in Figure~\ref{fig:liveness_corr}.
+moderate DoA correlation of $35.0\%$ shown in the top-left panel.
 cbPred adds $+0.17\%$ geomean IPC over dpPred alone on SPEC, the largest
 marginal gain of any suite.
 For Google and Qualcomm the DoA correlation is near zero ($4.7\%$ and $1.8\%$
@@ -763,6 +844,328 @@ For Qualcomm (Figure \ref{fig:google_pref_ipc} and \ref{fig:google_pref_mpki}),
 SRRIP gains the most from prefetching across individual workloads, but the MPKI
 is not improved that much.
 
+
+% ─────────────────────────────────────────────────────────────────────────────
+\section{Liveness-Guided SRRIP (\texttt{srrip\_live})}
+\label{sec:srrip_live}
+% ─────────────────────────────────────────────────────────────────────────────
+
+\texttt{srrip\_live} applies the liveness-guided mid-point insertion concept
+of \lrumid on top of SRRIP rather than LRU: when the per-address eviction
+history shows at least $\text{mid\_thd}$ consecutive DoA or mostly-dead
+evictions, newly installed blocks are inserted below the MRU position rather
+than at the default SRRIP recency.  No bypass predictor is used; the policy
+relies entirely on the local eviction history.  The default threshold is
+$\text{mid\_thd}=1$, meaning mid-insertion is triggered after a single
+observed DoA or mostly-dead eviction.
+
+\subsection{Policy Comparison at Default Threshold}
+\label{sec:srrip_live_pol}
+
+\begin{figure}[htbp]
+  \centering
+  \includegraphics[width=\linewidth]{../../plots/srrip_live_suite_comparison.png}
+  \caption{Suite-level benchmark-weighted geomean IPC speedup over LRU for all
+           policies at the default threshold ($\text{mid\_thd}=1$).}
+  \label{fig:srrip_live_suite}
+\end{figure}
+
+Figure~\ref{fig:srrip_live_suite} shows the suite-level geomean at the default
+threshold.  \texttt{srrip\_live} at $\text{mid\_thd}=1$ significantly
+underperforms all other policies: $-0.44\%$ on SPEC, $-10.01\%$ on Google,
+and $-0.70\%$ on Qualcomm.  Google is by far the most affected, with a $10\%$
+regression relative to LRU.  By contrast, plain SRRIP achieves $+0.14\%$,
+$+0.98\%$, and $+1.28\%$ on the three suites respectively, and SRRIP$+$pred
+is the strongest predictor-augmented variant at $+0.43\%$, $+0.97\%$, and
+$+1.38\%$.  The result makes clear that the default threshold is far too
+aggressive: a single observed DoA eviction is not sufficient evidence to justify
+inserting the next block mid-stack in SRRIP.
+
+The Google regression for \texttt{srrip\_live} is broadly distributed across
+workloads rather than driven by a few outliers, indicating a structural mismatch
+between $\text{mid\_thd}=1$ and Google's memory access pattern.  \lrumid also
+underperforms on Google ($-1.58\%$), suggesting that over-aggressive
+mid-insertion is consistently harmful on that suite regardless of the underlying
+eviction policy.  SRRIP is the most consistent baseline across all three suites.
+
+\subsection{Threshold Sensitivity}
+\label{sec:srrip_live_thd}
+
+\begin{figure}[htbp]
+  \centering
+  \includegraphics[width=\linewidth]{../../plots/srrip_live_thd.png}
+  \caption{Benchmark-weighted geomean IPC speedup over LRU for
+           \texttt{srrip\_live} at $\text{mid\_thd} \in \{1,2,4,8,16\}$
+           alongside plain SRRIP (reference bar), for all three suites.
+           Bars are shaded light to dark for increasing threshold.
+           The thd$=1$ result is taken from the policy sweep;
+           thd$=2$--$16$ are from the dedicated threshold sweep.}
+  \label{fig:srrip_live_thd}
+\end{figure}
+
+Figure~\ref{fig:srrip_live_thd} sweeps $\text{mid\_thd}$ from~1 to~16.
+The trend is consistent across all three suites: higher thresholds monotonically
+improve performance, and the SRRIP reference bar shows clearly at which point
+\texttt{srrip\_live} crosses from worse to better than plain SRRIP.
+
+For Google, the sensitivity is extreme.  The default $\text{mid\_thd}=1$ yields
+$-10.01\%$; raising the threshold to~4 brings performance back to neutral
+($+0.01\%$), and thd$=8$ and thd$=16$ give $+2.51\%$ and $+2.70\%$ respectively,
+comfortably above SRRIP's $+0.98\%$.
+
+For Qualcomm, performance transitions from $-0.70\%$ at thd$=1$ to $+2.73\%$ at
+thd$=4$, with gains plateauing between thd$=4$ and thd$=16$.  SRRIP sits at
+$+1.28\%$, so any threshold at~2 or above already beats SRRIP.
+
+For SPEC, the improvement is smaller but still monotonic: $-0.44\%$ at thd$=1$
+rising to $+1.13\%$ at thd$=16$.  SRRIP is at $+0.14\%$, so thd$=2$ already
+surpasses it.  Unlike Qualcomm, SPEC does not plateau, suggesting the optimal
+threshold may be higher still.
+
+The contrast with the \lrumid results in Section~\ref{sec:scope_mid_thd} is
+notable.  For \lrumid, low thresholds ($N=1$--$2$) were generally better,
+particularly for SPEC and Qualcomm.  For \texttt{srrip\_live}, the optimal
+threshold is substantially higher for every suite.  A likely explanation is
+that SRRIP's existing recency-prediction already encodes some of the liveness
+signal: a block observed to be dead is more likely already at a low RRIP value,
+so the marginal benefit of mid-insertion is small and the cost of overriding a
+correct SRRIP decision is larger.  Requiring more evidence before overriding
+SRRIP's prediction reduces these harmful interventions.
+
+At the optimal threshold, \texttt{srrip\_live} at thd$=16$ achieves $+1.13\%$,
+$+2.70\%$, and $+2.64\%$ on SPEC, Google, and Qualcomm --- substantially better
+than SRRIP$+$pred ($+0.43\%$, $+0.97\%$, $+1.38\%$) on all three suites without
+using any bypass predictor hardware.
+
+\subsubsection{Per-PC History Keying}
+\label{sec:srrip_live_thd_pc}
+
+\begin{figure}[htbp]
+  \centering
+  \includegraphics[width=\linewidth]{../../plots/srrip_live_thd_pc.png}
+  \caption{Same as Figure~\ref{fig:srrip_live_thd} but with the history table
+           keyed by PC instead of by address.  The thd$=1$--$16$ results all use
+           the PC-keyed table; the SRRIP bar is the same address-keyed reference.}
+  \label{fig:srrip_live_thd_pc}
+\end{figure}
+
+Figure~\ref{fig:srrip_live_thd_pc} repeats the threshold sweep with the history
+table indexed by PC rather than by address.  The qualitative trend is the same
+--- higher thresholds help on every suite --- but the magnitudes differ.
+
+For Google and Qualcomm, PC-keyed lookup \emph{improves} peak performance:
+Google reaches $+4.17\%$ at thd$=8$ (versus $+2.70\%$ addr-keyed) and
+Qualcomm $+3.83\%$ at thd$=4$ (versus $+2.73\%$ addr-keyed).  The interpretation
+is that a PC-keyed table captures instruction-level access patterns more cleanly
+than an address-keyed table, which conflates accesses from different PCs to the
+same cache line.  For server-style and memory-intensive workloads where many
+unique PCs share the same hot lines, PC keying gives a stronger liveness signal.
+
+For SPEC, the picture reverses: all thresholds are negative (best is $-0.23\%$
+at thd$=16$), well below the addr-keyed results.  SPEC's memory-bound benchmarks
+rely on a small number of high-stride loop PCs, so the PC-keyed table saturates
+quickly on the same few entries and the liveness estimate becomes noisier than
+the address-keyed variant.
+
+\begin{figure}[htbp]
+  \centering
+  \includegraphics[width=\linewidth]{../../plots/optimal_thd_per_benchmark_pc.png}
+  \caption{Per-benchmark IPC speedup over LRU for \texttt{srrip\_live} with
+           PC-keyed history at the threshold that maximises each benchmark's
+           speedup (green bars, shaded by optimal threshold) and plain SRRIP
+           (orange bars).  Same layout as Figure~\ref{fig:srrip_live_optimal_per_bm}.}
+  \label{fig:srrip_live_optimal_per_bm_pc}
+\end{figure}
+
+Figure~\ref{fig:srrip_live_optimal_per_bm_pc} breaks down the PC-keyed results
+per benchmark.  For Google, the improvement is uniform: every trace gains over
+SRRIP, with \texttt{sierra.a.*} and \texttt{tango.*} workloads delivering
+$+5$--$+9\%$, all at thd$=8$.  For Qualcomm, the picture is similarly clean ---
+all traces positive, all preferring thd$=4$--$8$ --- confirming that server
+workloads benefit consistently from PC-keyed liveness.  For SPEC, the split
+is sharper: \texttt{605.mcf\_s} reaches $+16.6\%$ and \texttt{623.xalancbmk\_s}
+$+6.0\%$ (both at thd$=8$), but several benchmarks are now negative at any
+threshold (\texttt{619.lbm\_s} at $-4.4\%$, \texttt{607.cactuBSSN\_s} at
+$-3.5\%$), which pulls the SPEC geomean below zero.  These workloads are
+dominated by streaming accesses from a single or very few PCs; the PC-keyed
+table treats every access from that PC as ``dead'', killing prefetcher-friendly
+reuse that addr-keying would have preserved.
+
+\begin{figure}[htbp]
+  \centering
+  \includegraphics[width=\linewidth]{../../plots/optimal_thd_per_benchmark.png}
+  \caption{Per-benchmark IPC speedup over LRU for \texttt{srrip\_live} at the
+           threshold that maximises each benchmark's speedup (green bars, shaded
+           by optimal threshold), plain SRRIP (orange bars), and \lrumid (purple
+           bars), for all three suites.  Benchmarks are sorted by
+           \texttt{srrip\_live} speedup in descending order; the rightmost column
+           is the geomean.  SPEC (DPC3) traces are aggregated to benchmark level
+           using SimPoint weights.}
+  \label{fig:srrip_live_optimal_per_bm}
+\end{figure}
+
+Figure~\ref{fig:srrip_live_optimal_per_bm} decomposes the aggregate numbers from
+Figure~\ref{fig:srrip_live_thd} to the individual benchmark level, assigning
+each benchmark its personal best threshold.
+
+For SPEC, the gains are highly concentrated.  \texttt{605.mcf\_s} alone yields
+$+16.42\%$ with \texttt{srrip\_live} versus only $+2.56\%$ for SRRIP, and
+\texttt{623.xalancbmk\_s} adds $+7.84\%$ against SRRIP's $+1.55\%$.  Most
+remaining benchmarks cluster near zero, and a handful (\texttt{607.cactuBSSN\_s},
+\texttt{620.omnetpp\_s}) are mildly negative under both policies.  The diversity
+of optimal thresholds --- thd$=1$ for \texttt{602.gcc\_s} and
+\texttt{627.cam4\_s}, thd$=16$ for \texttt{605.mcf\_s} --- confirms that a
+single fixed threshold is a genuine compromise on SPEC, and that per-benchmark
+profiling could recover additional gains.
+
+For Google, \texttt{srrip\_live} beats SRRIP on every workload.  The orange
+SRRIP bars are consistently roughly half the height of the green bars, and no
+Google trace shows SRRIP winning.  The optimal threshold is thd$=8$ or thd$=16$
+for all 43 traces, reinforcing the finding that Google's workloads require a high
+evidence threshold before mid-insertion is beneficial.
+
+For Qualcomm, the picture is equally uniform but with an interesting sub-cluster.
+The six \texttt{srv\_s*} workloads prefer thd$=2$ and are the top performers
+($+3.6\%$--$+5.1\%$), while the remainder converge on thd$=4$ or thd$=8$ at
+$+2.0\%$--$+4.1\%$.  SRRIP trails \texttt{srrip\_live} by roughly
+1--2 percentage points on every single workload without exception.
+
+\subsection{LLC Eviction Liveness Under \texttt{srrip\_live}}
+\label{sec:srrip_live_liveness}
+
+\begin{figure}[htbp]
+  \centering
+  \includegraphics[width=\linewidth]{../../plots/policy_liveness.png}
+  \caption{LLC eviction liveness breakdown for LRU (muted palette) versus
+           \texttt{srrip\_live} at thd$=16$ (vivid palette).  Each stacked bar
+           shows the fraction of evicted lines that were Dead-on-Arrival (DoA),
+           Mostly-dead, or Mostly-alive.  Benchmarks are sorted by LRU DoA
+           fraction (descending); the rightmost column is the geomean.}
+  \label{fig:srrip_live_liveness}
+\end{figure}
+
+Figure~\ref{fig:srrip_live_liveness} shows how \texttt{srrip\_live} changes the
+composition of LLC evictions relative to LRU.  The key observation is that the
+DoA fraction of evictions \emph{increases} under \texttt{srrip\_live}.  This is
+the \emph{intended} effect of the policy, not a pathology.
+
+Under LRU, a line that was predicted dead but happened to be inserted near the
+MRU position will survive in the cache for a long time, eventually being evicted
+with zero hits (DoA) only after crowding out genuinely useful lines.
+\texttt{srrip\_live} short-circuits this process: predicted-dead lines are
+inserted at the mid-RRIP position and therefore cycle out of the cache quickly,
+before they can displace alive lines.  The result is that \emph{dead lines appear
+more frequently as evictions} because they no longer linger --- they are evicted
+promptly after insertion rather than surviving to later, LRU-driven evictions.
+
+The more diagnostic metric is the Mostly-alive fraction.  Under LRU, a
+substantial share of evictions are lines that were still being actively accessed
+(Mostly-alive), representing genuinely wasted capacity.  Under
+\texttt{srrip\_live} this fraction decreases, particularly on the memory-bound
+SPEC benchmarks such as \texttt{605.mcf\_s} and \texttt{623.xalancbmk\_s} where
+the IPC gains are largest.  Fewer alive-line evictions mean the LLC retains more
+useful data, which directly increases the hit rate and drives the IPC
+improvements observed in the previous sections.  The increase in DoA\% is
+therefore a symptom of the policy working correctly: dead lines are being
+flushed efficiently, and alive lines are being protected.
+
+\subsection{Effect of Cache and TLB Size on Liveness and Correlation}
+\label{sec:size_study}
+
+\begin{figure}[htbp]
+  \centering
+  \includegraphics[width=\linewidth]{../../plots/size_study/size_study.png}
+  \caption{Change in four metrics when each cache or TLB is halved
+           ($\blacktriangledown$) or doubled ($\blacktriangle$) in isolation,
+           expressed as $\Delta$ percentage points from the baseline run.
+           \emph{Top-left}: LLC DoA fraction vs.\ L2C (driver, bold) and LLC
+           (flat reference, italic).  \emph{Top-right}: STLB DoA fraction
+           vs.\ DTLB and ITLB (drivers) and STLB (flat reference).
+           \emph{Bottom-left}: DoA--STLB coverage --- the fraction of LLC DoA
+           blocks that match \emph{any} STLB DoA event (recall) ---
+           vs.\ DTLB and L2C (drivers) and STLB, ITLB, LLC (flat references).
+           \emph{Bottom-right}: DoA correlation --- of LLC DoA blocks that
+           \emph{have} an STLB entry, the fraction whose page is also DoA
+           (precision, i.e.\ conditional accuracy of the STLB signal) ---
+           vs.\ DTLB, ITLB, and L2C (drivers) and STLB, LLC (flat references).
+           Each dumbbell represents one suite
+           (SPEC~=~blue, Google~=~orange, Qualcomm~=~green).
+           The baseline absolute value for each suite is annotated
+           above each driver-component dumbbell for scale.}
+  \label{fig:size_study}
+\end{figure}
+
+Figure~\ref{fig:size_study} shows how component sizes affect LLC DoA fraction,
+STLB DoA fraction, DoA--STLB coverage (recall), and DoA correlation (precision).
+
+\textbf{LLC DoA is driven exclusively by L2C size.}  Doubling the L2C raises
+the LLC DoA fraction by 3--5\,pp across all three suites; halving it lowers it
+by a similar margin.  A larger L2C absorbs more medium-lived traffic before it
+reaches the LLC, leaving only the truly dead blocks to spill through.  Varying
+the LLC, STLB, DTLB, or ITLB in isolation produces no measurable change.
+
+\textbf{STLB DoA is governed by DTLB size.}  A larger DTLB absorbs more
+data-TLB accesses before they reach the STLB, so each STLB entry sees fewer
+hits and its DoA fraction rises by up to 11\,pp (DPC3, DTLB doubled).  A
+smaller DTLB has the opposite effect.  ITLB size produces a secondary effect on
+some suites.  The STLB itself and every cache component have no effect.
+
+\textbf{DoA--STLB coverage (recall) tracks DTLB size.}  Coverage measures what
+fraction of LLC DoA blocks have a matching STLB DoA event at all.  A larger DTLB
+produces more STLB-DoA entries, raising coverage by up to 19\,pp (DPC3).
+L2C size has a small inverse effect: a larger L2C increases the LLC DoA
+denominator faster than the absolute match count grows, slightly diluting
+coverage.  STLB and LLC sizes are flat references.
+
+\textbf{DoA correlation (precision) is also DTLB-dominated.}  Precision
+measures the conditional accuracy of the STLB signal: of LLC DoA blocks that
+\emph{have} an STLB entry, what fraction reside on a DoA page?  Because
+coverage (the probability of having an STLB entry at all) is essentially flat
+across all components --- around 74--78\,\% regardless of which component is
+resized --- precision and recall move together, and the correlation signal is
+dominated by whether STLB pages are DoA, which is controlled by DTLB size.
+Doubling the DTLB lifts precision by up to 27\,pp (DPC3), while halving it
+suppresses it by 7--11\,pp.  ITLB has a moderate secondary effect on Google.
+LLC and STLB sizes leave precision unchanged.
+
+\textbf{The DoA--STLB correlation is hardware-accessible only for SPEC.}
+Figure~\ref{fig:stlb_coverage_breakdown} shows where the STLB signal comes
+from for each suite.  The top panel stacks five mutually exclusive buckets
+across 100\,\% of LLC DoA evictions (summed across all traces): pages still
+resident in the STLB at eviction time (solid segments) and pages whose status
+is retrieved from the STLB eviction log --- an unbounded software table that
+records every page as it leaves the STLB (hatched segments) --- each split
+by whether the page is also DoA (green) or still alive (orange), plus a grey
+\emph{no data} fraction.  Green segments contribute to the DoA--STLB
+correlation: a DoA LLC block maps to a DoA page.
+
+\begin{figure}[htbp]
+  \centering
+  \includegraphics[width=\linewidth]{../../plots/size_study/stlb_coverage_breakdown.png}
+  \caption{\emph{Top}: breakdown of LLC DoA evictions by STLB signal source
+           (summed across all traces in each suite).
+           Solid segments: live STLB lookup (hardware-accessible).
+           Hatched segments: STLB eviction log (not hardware-feasible).
+           Green = page is DoA (contributes to correlation);
+           orange = page is alive (does not);
+           grey = no STLB record.
+           \emph{Bottom}: DoA--STLB correlation (fraction of LLC DoA blocks
+           whose page is also DoA in the STLB), shown as per-workload mean,
+           split into the live-STLB contribution (solid) and the
+           eviction-log addition (hatched).
+           The boxed value above each bar is the total mean (live + eviction log).}
+  \label{fig:stlb_coverage_breakdown}
+\end{figure}
+
+The bottom panel makes the eviction log's contribution immediately visible.
+For SPEC the live STLB yields a mean correlation of 45\,\%; the eviction
+log adds a further 16\,pp, reaching 61\,\% total.  For Google and Qualcomm
+the gap is far larger: live correlation is only 5\,\% and 2\,\% respectively,
+while the eviction log inflates those numbers to 51\,\% and 35\,\%.  In
+other words, almost all of the DoA--STLB correlation measured for Google and
+Qualcomm relies on a software log that a real hardware predictor cannot have.
+Even for SPEC, roughly a quarter of the measured correlation comes from the
+log rather than the live STLB.
 
 % ─────────────────────────────────────────────────────────────────────────────
 \clearpage
