@@ -20,8 +20,10 @@
 #     champsim_srrip         — LRU for STLB, SRRIP for LLC
 #     champsim_srrip_live    — LRU for STLB, liveness-informed SRRIP for LLC
 #     champsim_drrip         — LRU for STLB, DRRIP for LLC
-#   STLB-only (built with --nopref stlb_lru_mid):
-#     champsim_stlb_lru_mid  — mid-insertion LRU for STLB, LRU for LLC
+#   STLB-only (built with --nopref stlb_lru_mid / stlb_srrip / stlb_srrip_live):
+#     champsim_stlb_lru_mid   — mid-insertion LRU for STLB, LRU for LLC
+#     champsim_stlb_srrip     — SRRIP for STLB, LRU for LLC
+#     champsim_stlb_srrip_live — srrip_live for STLB, LRU for LLC
 #   LLC+STLB (built with --nopref lru_mid_both):
 #     champsim_lru_mid_both  — mid-insertion LRU for both STLB and LLC
 #   With-prefetch (L1I=next_line_instr, L1D=ip_stride, L2C=spp_dev):

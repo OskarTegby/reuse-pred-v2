@@ -16,14 +16,18 @@ HASH_COLOR = "#d73027"
 
 POLICY_COLORS = {
     "srrip":        "#E8A87C",  # soft peach
+    "srrip_live":   "#2E8B6A",  # teal green
     "lru_mid":      "#A67CB9",  # muted purple
+    "lru_dp_only":  "#5B9BD5",  # cornflower blue
     "lru_pred":     "#2C5F8A",  # deep blue
     "srrip_pred":   "#C46A30",  # burnt orange
     "lru_mid_pred": "#6A3D8A",  # deep purple
 }
 POLICY_HATCHES = {
     "srrip":        "",
+    "srrip_live":   "xx",
     "lru_mid":      "",
+    "lru_dp_only":  "..",
     "lru_pred":     "//",
     "srrip_pred":   "//",
     "lru_mid_pred": "//",

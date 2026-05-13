@@ -345,11 +345,15 @@ def main():
     # Discover policies in a fixed display order
     # lru is the baseline — shown as a reference line, not as a redundant bar
     sfx = args.suffix  # e.g. "" or "_paper_pref"
-    ordered = ["lru_mid", "lru_mid_pred", "lru_pred",
-               "srrip", "srrip_pred"]
+    ordered = ["srrip", "srrip_live", "lru_mid", "lru_dp_only",
+               "lru_pred", "srrip_pred", "lru_mid_pred"]
     display_labels = {
-        "srrip": "srrip", "lru_mid": "lru_mid",
-        "lru_pred": "lru+pred", "srrip_pred": "srrip+pred",
+        "srrip":        "srrip",
+        "srrip_live":   "srrip_live",
+        "lru_mid":      "lru_mid",
+        "lru_dp_only":  "lru+dp",
+        "lru_pred":     "lru+pred",
+        "srrip_pred":   "srrip+pred",
         "lru_mid_pred": "lru_mid+pred",
     }
 

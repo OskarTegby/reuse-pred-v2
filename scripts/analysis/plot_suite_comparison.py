@@ -35,13 +35,16 @@ from spec_weights import benchmark_name, load_spec_weights
 
 # ── Policies ──────────────────────────────────────────────────────────────────
 
-POLICIES      = ["lru_mid", "lru_mid_pred", "lru_pred",
-                 "srrip", "srrip_pred", "drrip", "drrip_pred"]
-POLICY_LABELS = ["lru_mid", "lru_mid+pred", "lru+pred",
-                 "SRRIP", "SRRIP+pred", "DRRIP", "DRRIP+pred"]
-POLICY_COLORS = ["#A67CB9", "#6A3D8A", "#2C5F8A",
-                 "#E8A87C", "#C46A30",  "#7CB9A8", "#3D8A78"]
-POLICY_HATCHES = ["", "//", "//", "", "//", "", "//"]
+POLICIES      = ["srrip", "srrip_live", "lru_mid", "lru_dp_only",
+                 "lru_pred", "srrip_pred", "lru_mid_pred",
+                 "drrip", "drrip_pred"]
+POLICY_LABELS = ["SRRIP", "srrip_live", "lru_mid", "lru+dp",
+                 "lru+pred", "SRRIP+pred", "lru_mid+pred",
+                 "DRRIP", "DRRIP+pred"]
+POLICY_COLORS = ["#E8A87C", "#2E8B6A", "#A67CB9", "#5B9BD5",
+                 "#2C5F8A", "#C46A30",  "#6A3D8A",
+                 "#7CB9A8", "#3D8A78"]
+POLICY_HATCHES = ["", "xx", "", "..", "//", "//", "//", "", "//"]
 BASELINE      = "lru"
 
 

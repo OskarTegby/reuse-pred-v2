@@ -256,16 +256,27 @@ void CACHE::record_eviction_liveness(const BLOCK& victim, liveness_class lv)
   //   evict log, DoA    → evict_doa_stlb_evicted_doa    (extended true-positive)
   //   evict log, alive  → evict_doa_stlb_evicted_alive  (extended true-negative)
   //   not found         → uncovered (derived: evict_doa − the four above)
+  //
+  // Live-STLB check uses any_of over ALL entries for the PFN: a page is DoA
+  // if any translation for it is DoA, which matches the upper-bound semantics
+  // of "what could hardware learn from the STLB about this physical page?"
+  // (find_if would stop at the first matching entry, giving arbitrary results
+  // when multiple virtual aliases of the same PFN are resident simultaneously.)
   if (NAME == "LLC" && lv == liveness_class::doa && stlb_ptr != nullptr) {
     const uint64_t pfn = victim.address >> LOG2_PAGE_SIZE;
 
-    const auto it_stlb = std::find_if(
+    const bool stlb_resident = std::any_of(
         stlb_ptr->block.begin(), stlb_ptr->block.end(),
         [pfn](const BLOCK& b) { return b.valid && (b.data >> LOG2_PAGE_SIZE) == pfn; });
 
-    if (it_stlb != stlb_ptr->block.end()) {
-      if (it_stlb->hit_count == 0) s.evict_doa_on_doa_stlb_page++;
-      else                          s.evict_doa_stlb_resident_alive++;
+    if (stlb_resident) {
+      const bool stlb_doa = std::any_of(
+          stlb_ptr->block.begin(), stlb_ptr->block.end(),
+          [pfn](const BLOCK& b) {
+            return b.valid && (b.data >> LOG2_PAGE_SIZE) == pfn && b.hit_count == 0;
+          });
+      if (stlb_doa) s.evict_doa_on_doa_stlb_page++;
+      else          s.evict_doa_stlb_resident_alive++;
     } else {
       const auto it_log = stlb_evict_log.find(pfn);
       if (it_log != stlb_evict_log.end()) {
