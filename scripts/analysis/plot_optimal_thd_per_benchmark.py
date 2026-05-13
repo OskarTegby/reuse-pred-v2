@@ -38,6 +38,7 @@ SRRIP_LIVE_COLOR = "#2E8B6A"
 SRRIP_COLOR      = "#E8A87C"
 LRU_MID_COLOR    = "#A67CB9"
 THD_VALUES       = [1, 2, 4, 8, 16]
+STLB_POLICIES    = ["stlb_srrip", "stlb_srrip_live", "stlb_lru_mid"]
 
 
 def shade(hex_color, i, n_total):
@@ -129,6 +130,77 @@ def load_suite(thd_dir: Path, pol_dir: Path):
             "thd_speedup":     thd_speedup,
         }
 
+    return benchmarks
+
+
+def load_suite_stlb_thd(thd_dir: Path, pol_dir: Path) -> dict:
+    """Load STLB threshold sweep — per-benchmark speedup at optimal threshold."""
+    lru_dir = pol_dir / "lru"
+    if not lru_dir.is_dir():
+        sys.exit(f"ERROR: no lru/ in {pol_dir}")
+    lru_ipc = _load_ipc(lru_dir)
+
+    stlb_srrip_ipc   = _load_ipc(pol_dir / "stlb_srrip")   if (pol_dir / "stlb_srrip").is_dir()   else {}
+    stlb_lru_mid_ipc = _load_ipc(pol_dir / "stlb_lru_mid") if (pol_dir / "stlb_lru_mid").is_dir() else {}
+
+    thd_ipc = {}
+    for thd in THD_VALUES:
+        sub = thd_dir / f"stlb_srrip_live_thd{thd}"
+        if sub.is_dir():
+            thd_ipc[thd] = _load_ipc(sub)
+
+    groups: dict = {}
+    for wl in lru_ipc:
+        groups.setdefault(benchmark_name(wl), []).append(wl)
+
+    benchmarks = {}
+    for bm, wl_list in sorted(groups.items()):
+        thd_speedup = {}
+        for thd, ipc_map in thd_ipc.items():
+            s = _bench_speedup_pct(wl_list, ipc_map, lru_ipc)
+            if s is not None:
+                thd_speedup[thd] = s
+        if not thd_speedup:
+            continue
+        best_thd     = max(thd_speedup, key=thd_speedup.get)
+        best_speedup = thd_speedup[best_thd]
+        benchmarks[bm] = {
+            "optimal_speedup": best_speedup,
+            "optimal_thd":     best_thd,
+            "srrip_speedup":   _bench_speedup_pct(wl_list, stlb_srrip_ipc,   lru_ipc),
+            "lru_mid_speedup": _bench_speedup_pct(wl_list, stlb_lru_mid_ipc, lru_ipc),
+            "thd_speedup":     thd_speedup,
+        }
+    return benchmarks
+
+
+def load_suite_stlb(stlb_dir: Path) -> dict:
+    lru_dir = stlb_dir / "lru"
+    if not lru_dir.is_dir():
+        sys.exit(f"ERROR: no lru/ in {stlb_dir}")
+    lru_ipc = _load_ipc(lru_dir)
+
+    pol_ipc = {}
+    for pol in STLB_POLICIES:
+        pol_dir = stlb_dir / pol
+        pol_ipc[pol] = _load_ipc(pol_dir) if pol_dir.is_dir() else {}
+
+    groups: dict = {}
+    for wl in lru_ipc:
+        groups.setdefault(benchmark_name(wl), []).append(wl)
+
+    benchmarks = {}
+    for bm, wl_list in sorted(groups.items()):
+        live_sp = _bench_speedup_pct(wl_list, pol_ipc.get("stlb_srrip_live", {}), lru_ipc)
+        if live_sp is None:
+            continue
+        benchmarks[bm] = {
+            "optimal_speedup": live_sp,
+            "optimal_thd":     16,   # maps to darkest shade = full SRRIP_LIVE_COLOR
+            "srrip_speedup":   _bench_speedup_pct(wl_list, pol_ipc.get("stlb_srrip", {}), lru_ipc),
+            "lru_mid_speedup": _bench_speedup_pct(wl_list, pol_ipc.get("stlb_lru_mid", {}), lru_ipc),
+            "thd_speedup":     {},
+        }
     return benchmarks
 
 
@@ -307,17 +379,139 @@ def draw_panel(ax, benchmarks, suite_label, clip_outliers=True, bm_order=None):
 def main():
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--thd-dirs",        nargs="+", required=True)
-    ap.add_argument("--pol-dirs",        nargs="+", required=True)
+    ap.add_argument("--thd-dirs",         nargs="+", default=None)
+    ap.add_argument("--pol-dirs",         nargs="+", default=None)
+    ap.add_argument("--stlb-thd-dirs",   nargs="+", default=None,
+                    help="stlb_srrip_live threshold sweep dirs, one per suite")
+    ap.add_argument("--stlb-pol-dirs",   nargs="+", default=None,
+                    help="STLB policy dirs providing lru+stlb_srrip+stlb_lru_mid")
+    ap.add_argument("--stlb-dirs",        nargs="+", default=None,
+                    help="STLB policy sweep result dirs, one per suite (single-threshold mode)")
     ap.add_argument("--sort-by-thd-dirs", nargs="+", default=None,
-                    help="If given, use these dirs to determine benchmark sort order "
-                         "(same length as --thd-dirs). Useful to make PC-keyed plots "
-                         "match the addr-keyed sort order.")
+                    help="Reference dirs for benchmark sort order (threshold mode only)")
     ap.add_argument("--sort-by-pol-dirs", nargs="+", default=None)
     ap.add_argument("--labels",   nargs="+", default=None)
-    ap.add_argument("--out", default="results/plots/optimal_thd_per_benchmark.png")
+    ap.add_argument("--out", default=None)
     args = ap.parse_args()
 
+    stlb_thd_mode = args.stlb_thd_dirs is not None
+    stlb_mode     = args.stlb_dirs is not None
+
+    # ── STLB threshold sweep mode ──────────────────────────────────────────────
+    if stlb_thd_mode:
+        if not args.stlb_pol_dirs:
+            sys.exit("ERROR: --stlb-thd-dirs requires --stlb-pol-dirs")
+        if len(args.stlb_thd_dirs) != len(args.stlb_pol_dirs):
+            sys.exit("ERROR: --stlb-thd-dirs and --stlb-pol-dirs must have the same length")
+        n_suites = len(args.stlb_thd_dirs)
+        labels   = args.labels or [Path(d).name.split("_")[0].upper()
+                                    for d in args.stlb_thd_dirs]
+
+        suites = []
+        for thd_d, pol_d, label in zip(args.stlb_thd_dirs, args.stlb_pol_dirs, labels):
+            print(f"Loading '{label}' ...")
+            bms = load_suite_stlb_thd(Path(thd_d), Path(pol_d))
+            print(f"  {len(bms)} benchmarks")
+            for bm, d in bms.items():
+                sl = d["optimal_speedup"]
+                sr = d["srrip_speedup"]
+                sr_str = f"{sr:+.3f}%" if sr is not None else "N/A"
+                print(f"  {bm:<35} opt_thd={d['optimal_thd']:<3} "
+                      f"sl={sl:+.3f}%  stlb_srrip={sr_str}")
+            suites.append({"label": label, "benchmarks": bms, "ref_order": None})
+
+        max_bms = max(len(s["benchmarks"]) for s in suites)
+        fig_w   = max(14, min(22, max_bms * 0.45 + 2))
+        fig, axes = plt.subplots(n_suites, 1,
+                                 figsize=(fig_w, 5.5 * n_suites), sharey=False)
+        if n_suites == 1:
+            axes = [axes]
+
+        for ax, suite in zip(axes, suites):
+            is_spec = any(k in suite["benchmarks"] for k in ("605.mcf_s", "623.xalancbmk_s"))
+            draw_panel(ax, suite["benchmarks"], suite["label"],
+                       clip_outliers=not is_spec, bm_order=suite["ref_order"])
+
+        thd_patches = [
+            mpatches.Patch(facecolor=shade(SRRIP_LIVE_COLOR, i, len(THD_VALUES)),
+                           edgecolor="black", linewidth=0.4,
+                           label=f"stlb_srrip_live  thd={thd}  (optimal)")
+            for i, thd in enumerate(THD_VALUES)
+        ]
+        srrip_patch   = mpatches.Patch(facecolor=SRRIP_COLOR,   edgecolor="black",
+                                       linewidth=0.4, label="STLB-SRRIP")
+        lru_mid_patch = mpatches.Patch(facecolor=LRU_MID_COLOR, edgecolor="black",
+                                       linewidth=0.4, label="stlb_lru_mid")
+        fig.legend(handles=thd_patches + [srrip_patch, lru_mid_patch],
+                   loc="lower center", ncol=len(THD_VALUES) + 2, fontsize=9,
+                   framealpha=0.9, bbox_to_anchor=(0.5, 0.0))
+        fig.suptitle(
+            "Per-benchmark IPC speedup vs LRU: stlb_srrip_live at optimal threshold",
+            fontsize=11, fontweight="bold",
+        )
+        fig.tight_layout(rect=[0, 0.05, 1, 1])
+
+        out = Path(args.out or "results/plots/stlb_thd_per_benchmark.png")
+        out.parent.mkdir(parents=True, exist_ok=True)
+        fig.savefig(out, dpi=180, bbox_inches="tight")
+        print(f"\nSaved: {out}")
+        return
+
+    # ── STLB policy comparison mode ────────────────────────────────────────────
+    if stlb_mode:
+        n_suites = len(args.stlb_dirs)
+        labels   = args.labels or [Path(d).name.split("_")[0].upper()
+                                    for d in args.stlb_dirs]
+
+        suites = []
+        for stlb_d, label in zip(args.stlb_dirs, labels):
+            print(f"Loading '{label}' ...")
+            bms = load_suite_stlb(Path(stlb_d))
+            print(f"  {len(bms)} benchmarks")
+            for bm, d in bms.items():
+                sl = d["optimal_speedup"]
+                sr = d["srrip_speedup"]
+                sr_str = f"{sr:+.3f}%" if sr is not None else "N/A"
+                print(f"  {bm:<35} sl={sl:+.3f}%  stlb_srrip={sr_str}")
+            suites.append({"label": label, "benchmarks": bms, "ref_order": None})
+
+        max_bms = max(len(s["benchmarks"]) for s in suites)
+        fig_w   = max(10, min(22, max_bms * 0.45 + 2))
+        fig, axes = plt.subplots(n_suites, 1,
+                                 figsize=(fig_w, 5.5 * n_suites),
+                                 sharey=False)
+        if n_suites == 1:
+            axes = [axes]
+
+        for ax, suite in zip(axes, suites):
+            is_spec = any(k in suite["benchmarks"] for k in ("605.mcf_s", "623.xalancbmk_s"))
+            draw_panel(ax, suite["benchmarks"], suite["label"],
+                       clip_outliers=not is_spec, bm_order=suite["ref_order"])
+
+        srrip_live_patch = mpatches.Patch(facecolor=SRRIP_LIVE_COLOR, edgecolor="black",
+                                          linewidth=0.4, label="STLB-srrip_live")
+        srrip_patch      = mpatches.Patch(facecolor=SRRIP_COLOR,      edgecolor="black",
+                                          linewidth=0.4, label="STLB-SRRIP")
+        lru_mid_patch    = mpatches.Patch(facecolor=LRU_MID_COLOR,    edgecolor="black",
+                                          linewidth=0.4, label="STLB-lru_mid")
+        fig.legend(handles=[srrip_live_patch, srrip_patch, lru_mid_patch],
+                   loc="lower center", ncol=3, fontsize=10,
+                   framealpha=0.9, bbox_to_anchor=(0.5, 0.0))
+        fig.suptitle(
+            "Per-benchmark IPC speedup vs LRU: STLB replacement policy comparison",
+            fontsize=11, fontweight="bold",
+        )
+        fig.tight_layout(rect=[0, 0.05, 1, 1])
+
+        out = Path(args.out or "results/plots/stlb_policy_per_benchmark.png")
+        out.parent.mkdir(parents=True, exist_ok=True)
+        fig.savefig(out, dpi=180, bbox_inches="tight")
+        print(f"\nSaved: {out}")
+        return
+
+    # ── Threshold sweep mode ───────────────────────────────────────────────────
+    if not args.thd_dirs or not args.pol_dirs:
+        sys.exit("ERROR: --thd-dirs and --pol-dirs are required (or use --stlb-dirs)")
     if len(args.thd_dirs) != len(args.pol_dirs):
         sys.exit("ERROR: --thd-dirs and --pol-dirs must match in length")
     if (args.sort_by_thd_dirs is None) != (args.sort_by_pol_dirs is None):
@@ -328,7 +522,6 @@ def main():
     n_suites = len(args.thd_dirs)
     labels   = args.labels or [Path(d).name.split("_")[0].upper() for d in args.thd_dirs]
 
-    # Load reference sort order (if provided) — one per suite
     ref_orders = []
     if args.sort_by_thd_dirs:
         for ref_thd, ref_pol in zip(args.sort_by_thd_dirs, args.sort_by_pol_dirs):
@@ -352,7 +545,6 @@ def main():
                   f"sl={sl:+.3f}%  srrip={sr_str}")
         suites.append({"label": label, "benchmarks": bms, "ref_order": ref_order})
 
-    # Figure width: scale with the largest suite
     max_bms = max(len(s["benchmarks"]) for s in suites)
     fig_w   = max(14, min(22, max_bms * 0.45 + 2))
     fig, axes = plt.subplots(n_suites, 1,
@@ -362,12 +554,10 @@ def main():
         axes = [axes]
 
     for ax, suite in zip(axes, suites):
-        # Don't clip SPEC — mcf_s (+16%) and xalancbmk_s (+7.8%) are real peaks
         is_spec = any(k in suite["benchmarks"] for k in ("605.mcf_s", "623.xalancbmk_s"))
         draw_panel(ax, suite["benchmarks"], suite["label"],
                    clip_outliers=not is_spec, bm_order=suite["ref_order"])
 
-    # Legend
     thd_patches = [
         mpatches.Patch(facecolor=shade(SRRIP_LIVE_COLOR, i, len(THD_VALUES)),
                        edgecolor="black", linewidth=0.4,
@@ -388,7 +578,7 @@ def main():
     )
     fig.tight_layout(rect=[0, 0.05, 1, 1])
 
-    out = Path(args.out)
+    out = Path(args.out or "results/plots/optimal_thd_per_benchmark.png")
     out.parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(out, dpi=180, bbox_inches="tight")
     print(f"\nSaved: {out}")
