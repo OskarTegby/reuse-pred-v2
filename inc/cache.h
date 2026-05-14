@@ -281,6 +281,7 @@ class CACHE : public champsim::operable, public MemoryRequestConsumer, public Me
   void record_eviction_liveness(const BLOCK& victim, liveness_class lv); // record aggregate liveness stats
   void record_pc_liveness(const BLOCK& victim, liveness_class lv);       // accumulate per-PC liveness event counts
   bool needs_mid_insertion(uint64_t full_addr, uint64_t ip) const;        // true → insert/refresh at set midpoint
+  liveness_class predict_liveness(uint64_t full_addr, uint64_t ip) const; // 3-way insertion prediction for ipv_live
 
 public:
   struct NonTranslatingQueues : public champsim::operable {

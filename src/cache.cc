@@ -379,6 +379,28 @@ bool CACHE::needs_mid_insertion(uint64_t full_addr, uint64_t ip) const
   return false;
 }
 
+// 3-way liveness prediction for ipv_live: DoA → mostly_dead → mostly_alive.
+// Uses the same history tables and mid_thd threshold as needs_mid_insertion(),
+// but distinguishes DoA from mostly_dead instead of collapsing them.
+// DoA takes priority: if both counters meet the threshold, returns doa.
+CACHE::liveness_class CACHE::predict_liveness(uint64_t full_addr, uint64_t ip) const
+{
+  auto classify = [this](const std::map<uint64_t, hist_entry>& tbl, uint64_t key) -> liveness_class {
+    const auto it = tbl.find(key);
+    if (it == tbl.end())                      return liveness_class::mostly_alive;
+    if (it->second.doa >= mid_thd)            return liveness_class::doa;
+    if (it->second.mostly_dead >= mid_thd)    return liveness_class::mostly_dead;
+    return liveness_class::mostly_alive;
+  };
+  if (NAME == "LLC")
+    return (mid_key == mid_key_t::pc) ? classify(llc_mid_hist_pc,   ip)
+                                      : classify(llc_mid_hist_addr,  full_addr >> OFFSET_BITS);
+  if (NAME == "cpu0_STLB")
+    return (mid_key == mid_key_t::pc) ? classify(stlb_mid_hist_pc,  ip)
+                                      : classify(stlb_mid_hist_addr, full_addr >> OFFSET_BITS);
+  return liveness_class::mostly_alive;
+}
+
 // Reads environment variables to enable dpPred/cbPred and tune their
 // thresholds and table sizes. Called once from the CACHE constructor.
 // Variables (all optional; defaults match the header initializers):
