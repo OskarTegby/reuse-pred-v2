@@ -5,14 +5,16 @@
 // The class is predicted using the same history tables and mid_thd threshold
 // that drive needs_mid_insertion() / lru_mid / srrip_live.
 //
-// Default vectors (qualified guesses grounded in srrip_live behaviour):
+// Default vectors use graduated promotion: the more confident we are a block
+// is dead, the more hits it must earn before reaching RRPV=0.
 //
-//   ipv_doa         = {0, 2, 2, 2, 3}   insert at maxRRPV; cap hits at maxRRPV-1
-//   ipv_mostly_dead = {0, 1, 1, 2, 3}   insert at maxRRPV; more generous on hits
-//   ipv_mostly_alive= {0, 0, 0, 0, 2}   standard SRRIP (insert at maxRRPV-1, hit→0)
+//   ipv_doa         = {0, 0, 1, 2, 3}   3 hits to reach RRPV=0 (slow ramp)
+//   ipv_mostly_dead = {0, 0, 0, 2, 3}   2 hits to reach RRPV=0
+//   ipv_mostly_alive= {0, 0, 0, 0, 2}   1 hit  to reach RRPV=0 (standard SRRIP)
 //
-// The DoA default reproduces the dead-predicted path of srrip_live (MID_PROMOTE=0),
-// so this policy is a strict generalisation of srrip_live.
+// All vectors are strictly monotone (a hit never increases RRPV).  Compared to
+// srrip_live, DoA blocks that are mispredicted as dead can eventually earn full
+// cache priority instead of being capped at maxRRPV-1 indefinitely.
 //
 // Runtime configuration
 // ---------------------
@@ -40,8 +42,8 @@ std::unordered_map<CACHE*, std::vector<int>> rrpv_values;
 
 using ipv_t = std::array<int, 5>;
 
-ipv_t g_ipv_doa          = {0, 2, 2, 2, maxRRPV};
-ipv_t g_ipv_mostly_dead  = {0, 1, 1, 2, maxRRPV};
+ipv_t g_ipv_doa          = {0, 0, 1, 2, maxRRPV};
+ipv_t g_ipv_mostly_dead  = {0, 0, 0, 2, maxRRPV};
 ipv_t g_ipv_mostly_alive = {0, 0, 0, 0, maxRRPV - 1};
 bool  g_parsed = false;
 
