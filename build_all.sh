@@ -22,6 +22,7 @@
 #     champsim_drrip         — LRU for STLB, DRRIP for LLC
 #     champsim_ipv           — LRU for STLB, IPV for LLC (IPV=a,b,c,d,e configures the vector)
 #     champsim_ipv_live      — LRU for STLB, IPV_LIVE for LLC (IPV_DOA / IPV_MOSTLY_DEAD / IPV_MOSTLY_ALIVE)
+#     champsim_pacipv        — LRU for STLB, PACIPV for LLC (PACIPV_DEMAND / PACIPV_PREFETCH)
 #   STLB-only (built with --nopref stlb_lru_mid / stlb_srrip / stlb_srrip_live):
 #     champsim_stlb_lru_mid   — mid-insertion LRU for STLB, LRU for LLC
 #     champsim_stlb_srrip     — SRRIP for STLB, LRU for LLC
@@ -46,7 +47,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR"
 
-ALL_POLICIES=(lru lru_mid srrip srrip_live drrip ipv ipv_live)
+ALL_POLICIES=(lru lru_mid srrip srrip_live drrip ipv ipv_live pacipv)
 
 BUILD_NOPREF=1
 BUILD_PREF=1
