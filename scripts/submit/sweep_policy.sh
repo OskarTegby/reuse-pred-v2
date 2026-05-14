@@ -53,8 +53,8 @@ WITH_PAPER_PREF=0
 WARMUP_OVERRIDE=""
 SIM_OVERRIDE=""
 MID_THD=1
-MID_KEY_STR="addr"
-MID_KEY_VAL=0
+MID_KEY_STR=""   # set per-token below; overridable with --mid-key
+MID_KEY_VAL=""
 MID_PROMOTE_VAL=0
 
 while [[ $# -gt 0 ]]; do
@@ -92,35 +92,25 @@ SHARED_TRACES=/home/users/shared/traces
 # ── Trace-set settings ────────────────────────────────────────────────────────
 case "$token" in
   maz|mazumdar)
-    WARMUP=100000000
-    SIM=100000000
-    TRACE_DIR="${PROJECT_ROOT}/trace-files/MAZUMDAR"
-    TRACE_EXT="champsimtrace.xz"
-    ;;
+    WARMUP=100000000; SIM=100000000
+    TRACE_DIR="${PROJECT_ROOT}/trace-files/MAZUMDAR"; TRACE_EXT="champsimtrace.xz"
+    [ -z "$MID_KEY_STR" ] && { MID_KEY_STR="pc";   MID_KEY_VAL=1; } ;;
   qmm)
-    WARMUP=50000000
-    SIM=100000000
-    TRACE_DIR="${PROJECT_ROOT}/trace-files/QMM"
-    TRACE_EXT="champsimtrace.xz"
-    ;;
+    WARMUP=50000000; SIM=100000000
+    TRACE_DIR="${PROJECT_ROOT}/trace-files/QMM";     TRACE_EXT="champsimtrace.xz"
+    [ -z "$MID_KEY_STR" ] && { MID_KEY_STR="pc";   MID_KEY_VAL=1; } ;;
   dpc3)
-    WARMUP=50000000
-    SIM=100000000
-    TRACE_DIR="${SHARED_TRACES}/dpc3_traces"
-    TRACE_EXT="champsimtrace.xz"
-    ;;
+    WARMUP=50000000; SIM=100000000
+    TRACE_DIR="${SHARED_TRACES}/dpc3_traces";        TRACE_EXT="champsimtrace.xz"
+    [ -z "$MID_KEY_STR" ] && { MID_KEY_STR="addr"; MID_KEY_VAL=0; } ;;
   google)
-    WARMUP=50000000
-    SIM=100000000
-    TRACE_DIR="${SHARED_TRACES}/Google_Traces_v2"
-    TRACE_EXT="champsim.gz"
-    ;;
+    WARMUP=50000000; SIM=100000000
+    TRACE_DIR="${SHARED_TRACES}/Google_Traces_v2";   TRACE_EXT="champsim.gz"
+    [ -z "$MID_KEY_STR" ] && { MID_KEY_STR="pc";   MID_KEY_VAL=1; } ;;
   test)
-    WARMUP=25000000
-    SIM=50000000
-    TRACE_DIR="${PROJECT_ROOT}/trace-files/TEST"
-    TRACE_EXT="champsimtrace.xz"
-    ;;
+    WARMUP=25000000; SIM=50000000
+    TRACE_DIR="${PROJECT_ROOT}/trace-files/TEST";    TRACE_EXT="champsimtrace.xz"
+    [ -z "$MID_KEY_STR" ] && { MID_KEY_STR="addr"; MID_KEY_VAL=0; } ;;
 esac
 
 [ -n "$WARMUP_OVERRIDE" ] && WARMUP="$WARMUP_OVERRIDE"
@@ -162,6 +152,8 @@ if [ "${WITH_BASE}" -eq 1 ]; then
     "lru           champsim_lru           0 0 6 6"
     "srrip         champsim_srrip         0 0 6 6"
     "srrip_live    champsim_srrip_live    0 0 6 6"
+    "ipv_live      champsim_ipv_live      0 0 6 6"
+    "pacipv        champsim_pacipv        0 0 6 6"
     "lru_mid       champsim_lru_mid       0 0 6 6"
     "lru_dp_only   champsim_lru           1 0 6 6"
     "lru_pred      champsim_lru           1 1 6 6"

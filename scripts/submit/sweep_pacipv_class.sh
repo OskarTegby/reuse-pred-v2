@@ -29,6 +29,8 @@ DEBUG=0
 MAX_TRACES=8
 WARMUP_OVERRIDE=""
 SIM_OVERRIDE=""
+MID_KEY_STR=""   # set per-token below; overridable with --mid-key
+MID_KEY_VAL=""
 
 DOA_D="0,0,1,2,3";  DOA_P="0,0,0,2,3"
 MD_D="0,0,0,2,3";   MD_P="0,0,0,2,3"
@@ -48,6 +50,13 @@ while [[ $# -gt 0 ]]; do
     --debug)          DEBUG=1;          shift ;;
     --warmup)         WARMUP_OVERRIDE="$2"; shift 2 ;;
     --sim)            SIM_OVERRIDE="$2";    shift 2 ;;
+    --mid-key)
+      case "$2" in
+        addr) MID_KEY_STR="addr"; MID_KEY_VAL=0 ;;
+        pc)   MID_KEY_STR="pc";   MID_KEY_VAL=1 ;;
+        *) echo "Unknown --mid-key value: $2 (expected addr or pc)" >&2; exit 2 ;;
+      esac
+      shift 2 ;;
     *) echo "Unknown argument: $1" >&2; exit 2 ;;
   esac
 done
@@ -63,20 +72,20 @@ SHARED_TRACES=/home/users/shared/traces
 case "$token" in
   dpc3)
     WARMUP=50000000; SIM=100000000
-    TRACE_DIR="${SHARED_TRACES}/dpc3_traces"
-    TRACE_EXT="champsimtrace.xz" ;;
+    TRACE_DIR="${SHARED_TRACES}/dpc3_traces";      TRACE_EXT="champsimtrace.xz"
+    [ -z "$MID_KEY_STR" ] && { MID_KEY_STR="addr"; MID_KEY_VAL=0; } ;;
   google)
     WARMUP=50000000; SIM=100000000
-    TRACE_DIR="${SHARED_TRACES}/Google_Traces_v2"
-    TRACE_EXT="champsim.gz" ;;
+    TRACE_DIR="${SHARED_TRACES}/Google_Traces_v2"; TRACE_EXT="champsim.gz"
+    [ -z "$MID_KEY_STR" ] && { MID_KEY_STR="pc";   MID_KEY_VAL=1; } ;;
   qmm)
     WARMUP=50000000; SIM=100000000
-    TRACE_DIR="${PROJECT_ROOT}/trace-files/QMM"
-    TRACE_EXT="champsimtrace.xz" ;;
+    TRACE_DIR="${PROJECT_ROOT}/trace-files/QMM";   TRACE_EXT="champsimtrace.xz"
+    [ -z "$MID_KEY_STR" ] && { MID_KEY_STR="pc";   MID_KEY_VAL=1; } ;;
   test)
     WARMUP=25000000; SIM=50000000
-    TRACE_DIR="${PROJECT_ROOT}/trace-files/TEST"
-    TRACE_EXT="champsimtrace.xz" ;;
+    TRACE_DIR="${PROJECT_ROOT}/trace-files/TEST";  TRACE_EXT="champsimtrace.xz"
+    [ -z "$MID_KEY_STR" ] && { MID_KEY_STR="addr"; MID_KEY_VAL=0; } ;;
 esac
 
 [ -n "$WARMUP_OVERRIDE" ] && WARMUP="$WARMUP_OVERRIDE"
@@ -159,7 +168,7 @@ CLASS_DEMAND_VAR="$DEMAND_VAR",CLASS_PREFETCH_VAR="$PREFETCH_VAR",\
 PACIPV_DOA_DEMAND="$DOA_D",PACIPV_DOA_PREFETCH="$DOA_P",\
 PACIPV_MOSTLY_DEAD_DEMAND="$MD_D",PACIPV_MOSTLY_DEAD_PREFETCH="$MD_P",\
 PACIPV_MOSTLY_ALIVE_DEMAND="$MA_D",PACIPV_MOSTLY_ALIVE_PREFETCH="$MA_P",\
-MID_THD=1,MID_KEY=0,MID_PROMOTE=0 \
+MID_THD=1,MID_KEY="$MID_KEY_VAL",MID_PROMOTE=0 \
            "${PROJECT_ROOT}/scripts/submit/run_pacipv_search.sh")
 
 jid=$(echo "$raw" | awk '/Your job/ {print $3}' | cut -d. -f1)
