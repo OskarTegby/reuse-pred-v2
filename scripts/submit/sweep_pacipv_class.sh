@@ -91,7 +91,24 @@ fi
 N_SEARCH=$(( MAX_TRACES < N_TOTAL ? MAX_TRACES : N_TOTAL ))
 [ "$DEBUG" -eq 1 ] && N_SEARCH=1
 
-# ── Generate params file (all 96×96 IPV pairs) ───────────────────────────────
+# ── Map class to env var names and liveness ordering constraints ──────────────
+# Constraint: doa[k] >= mostly_dead[k] >= mostly_alive[k] for all k.
+# When sweeping mostly_dead, each candidate vector must be >= the fixed
+# mostly_alive vector (element-wise).  When sweeping doa, it must be >=
+# the fixed mostly_dead vector.  mostly_alive is unconstrained.
+case "$CLASS" in
+  doa)
+    DEMAND_VAR="PACIPV_DOA_DEMAND";         PREFETCH_VAR="PACIPV_DOA_PREFETCH"
+    MIN_D="$MD_D";  MIN_P="$MD_P" ;;
+  mostly_dead)
+    DEMAND_VAR="PACIPV_MOSTLY_DEAD_DEMAND"; PREFETCH_VAR="PACIPV_MOSTLY_DEAD_PREFETCH"
+    MIN_D="$MA_D";  MIN_P="$MA_P" ;;
+  mostly_alive)
+    DEMAND_VAR="PACIPV_MOSTLY_ALIVE_DEMAND";PREFETCH_VAR="PACIPV_MOSTLY_ALIVE_PREFETCH"
+    MIN_D="";       MIN_P="" ;;
+esac
+
+# ── Generate params file (all valid IPV pairs for this class) ─────────────────
 BINARY="champsim_pacipv"
 if [ ! -x "${PROJECT_ROOT}/bin/${BINARY}" ]; then
   echo "ERROR: binary not found: bin/${BINARY}" >&2
@@ -105,21 +122,16 @@ RESULTS_DIR="${PROJECT_ROOT}/results/${BASE_LABEL}"
 mkdir -p "$LOG_DIR" "$RESULTS_DIR"
 
 PARAMS_FILE="${RESULTS_DIR}/params.tsv"
-python3 "${PROJECT_ROOT}/scripts/analysis/enumerate_ipvs.py" | \
+MIN_D_ARG=(); [ -n "$MIN_D" ] && MIN_D_ARG=(--min-ipv "$MIN_D")
+MIN_P_ARG=(); [ -n "$MIN_P" ] && MIN_P_ARG=(--min-ipv "$MIN_P")
+python3 "${PROJECT_ROOT}/scripts/analysis/enumerate_ipvs.py" "${MIN_D_ARG[@]}" | \
   while read -r d; do
-    python3 "${PROJECT_ROOT}/scripts/analysis/enumerate_ipvs.py" | \
+    python3 "${PROJECT_ROOT}/scripts/analysis/enumerate_ipvs.py" "${MIN_P_ARG[@]}" | \
       while read -r p; do printf '%s\t%s\n' "$d" "$p"; done
   done > "$PARAMS_FILE"
 
 N_PAIRS=$(wc -l < "$PARAMS_FILE")
 N_TASKS=$(( N_PAIRS * N_SEARCH ))
-
-# ── Map class to env var names ────────────────────────────────────────────────
-case "$CLASS" in
-  doa)         DEMAND_VAR="PACIPV_DOA_DEMAND";         PREFETCH_VAR="PACIPV_DOA_PREFETCH" ;;
-  mostly_dead) DEMAND_VAR="PACIPV_MOSTLY_DEAD_DEMAND"; PREFETCH_VAR="PACIPV_MOSTLY_DEAD_PREFETCH" ;;
-  mostly_alive)DEMAND_VAR="PACIPV_MOSTLY_ALIVE_DEMAND";PREFETCH_VAR="PACIPV_MOSTLY_ALIVE_PREFETCH" ;;
-esac
 
 echo "Suite         : ${token}"
 echo "Class         : ${CLASS}  (sweeping ${DEMAND_VAR} / ${PREFETCH_VAR})"
