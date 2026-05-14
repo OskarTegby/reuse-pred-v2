@@ -1169,6 +1169,123 @@ log rather than the live STLB.
 
 % ─────────────────────────────────────────────────────────────────────────────
 \clearpage
+\section{PACIPV: Liveness-Guided IPV Selection}
+\label{sec:pacipv}
+% ─────────────────────────────────────────────────────────────────────────────
+
+\subsection{Background: Insertion and Promotion Vectors}
+\label{sec:pacipv_background}
+
+An \emph{Insertion and Promotion Vector} (IPV) fully parameterises a
+RRIP-family replacement policy as a five-element integer array.  Elements
+$\text{ipv}[k]$ for $k=0\ldots3$ specify the new RRPV assigned to a line when
+it is hit at $\text{RRPV}=k$ (promotion); element $\text{ipv}[4]$ specifies the
+RRPV assigned on a fill (insertion).  With $\text{maxRRPV}=3$, SRRIP
+corresponds to $\{0,0,0,0,2\}$ (always promote to 0, insert one step from
+eviction) and BRRIP to $\{0,0,0,0,3\}$ (insert at eviction priority).
+
+A valid IPV obeys the monotonicity constraint $\text{ipv}[k]\le k$ for all $k$:
+a cache hit can only improve (lower) a line's RRPV, never worsen it.  This
+leaves $2\times3\times4\times4=96$ valid vectors per role.
+
+PACIPV~\cite{mostofi2025pacipv} splits the single IPV into two: one for demand
+accesses and one for prefetches.  Prefetched lines are typically less reused, so
+they benefit from a more conservative (higher-RRPV) insertion strategy.
+
+\subsection{Extension to Per-Liveness-Class IPVs}
+\label{sec:pacipv_extension}
+
+We extend the demand/prefetch split with the liveness dimension, giving one IPV
+per liveness class per access type: a $3\times2$ table of six vectors in total.
+
+\begin{center}
+\begin{tabular}{lll}
+\hline
+\textbf{Class} & \textbf{Demand IPV} & \textbf{Prefetch IPV} \\
+\hline
+mostly-alive & $\text{ipv}^{\text{ma}}_d$ & $\text{ipv}^{\text{ma}}_p$ \\
+mostly-dead  & $\text{ipv}^{\text{md}}_d$ & $\text{ipv}^{\text{md}}_p$ \\
+DoA          & $\text{ipv}^{\text{doa}}_d$ & $\text{ipv}^{\text{doa}}_p$ \\
+\hline
+\end{tabular}
+\end{center}
+
+When a line is accessed, the predictor classifies it into one of the three
+liveness classes (Section~\ref{sec:liveness_class}) and selects the
+corresponding demand or prefetch IPV.  The liveness prediction uses the same
+history tables as \texttt{srrip\_live}.
+
+\subsection{Liveness Ordering Constraint}
+\label{sec:pacipv_constraint}
+
+A less-alive class should always be at least as cautious as a more-alive one:
+a line predicted mostly-dead should receive a higher RRPV than a mostly-alive
+line at the same current RRPV, and DoA lines should be treated yet more
+conservatively.  Formally, for every position $k=0\ldots4$:
+
+\begin{equation}
+  \text{ipv}^{\text{doa}}[k] \;\ge\;
+  \text{ipv}^{\text{md}}[k]  \;\ge\;
+  \text{ipv}^{\text{ma}}[k]
+  \label{eq:ordering}
+\end{equation}
+
+The constraint holds independently for demand and prefetch vectors.  Enforcing
+it during the IPV search (Section~\ref{sec:pacipv_training}) eliminates
+configurations that violate the physical semantics of liveness prediction and
+sharply reduces the constrained search space for the dependent classes.
+
+\subsection{Training via Coordinate Descent}
+\label{sec:pacipv_training}
+
+Finding the six optimal vectors jointly is intractable: the unconstrained space
+has $96^6 \approx 8\times10^{11}$ configurations.  We use coordinate descent,
+sweeping one liveness class at a time while holding the other two fixed.
+
+\paragraph{Initialisation.}  All six vectors are seeded with the paper defaults
+from~\cite{mostofi2025pacipv} (mostly-alive) and physically motivated
+conservative values for mostly-dead and DoA.
+
+\paragraph{Class sweep order.}  Within each round the classes are swept in the
+order mostly-alive $\to$ mostly-dead $\to$ DoA.  This order respects the
+dependency chain in the ordering constraint~(\ref{eq:ordering}): the
+mostly-alive vectors bound the valid space for mostly-dead, which in turn bounds
+DoA.  Sweeping in the reverse direction would require knowing the optimal
+downstream vectors before they have been found.
+
+\paragraph{Constrained enumeration.}  When sweeping class $c$, the valid demand
+and prefetch vectors are restricted to those satisfying the lower bound imposed
+by the previously fixed class below $c$ in the ordering.  The sweep therefore
+exhausts every valid configuration for $c$: there is no pruning beyond the
+ordering constraint, so no local-optima risk within a single class sweep.  The
+unconstrained mostly-alive sweep covers all $96\times96=9{,}216$ demand/prefetch
+pairs; the constrained sweeps are typically much smaller, though the exact count
+depends on the converged mostly-alive vectors.
+
+\paragraph{Convergence.}  After all three class sweeps complete one round, the
+new vectors are compared element-wise to those from the previous round.  If no
+vector changed, the search has converged.  Otherwise a new round begins with the
+updated fixed vectors.  In practice, inter-class coupling is weak --- each class
+is used only for accesses classified into that category --- so convergence
+typically occurs within two rounds.
+
+\paragraph{Procedure summary.}  Let $\theta = (\text{ma}_d, \text{ma}_p,
+\text{md}_d, \text{md}_p, \text{doa}_d, \text{doa}_p)$ denote the six-vector
+state.
+
+\begin{enumerate}
+  \item Initialise $\theta$ to defaults.
+  \item Sweep mostly-alive with $(\text{md}, \text{doa})$ fixed; update
+        $(\text{ma}_d, \text{ma}_p)$ with the best pair found.
+  \item Sweep mostly-dead with $(\text{ma}, \text{doa})$ fixed, constrained by
+        the new $\text{ma}$; update $(\text{md}_d, \text{md}_p)$.
+  \item Sweep DoA with $(\text{ma}, \text{md})$ fixed, constrained by the new
+        $\text{md}$; update $(\text{doa}_d, \text{doa}_p)$.
+  \item If $\theta$ changed, go to step~2.  Otherwise output $\theta$.
+\end{enumerate}
+
+% ─────────────────────────────────────────────────────────────────────────────
+\clearpage
 \section{Analysis and Open Questions}
 % ─────────────────────────────────────────────────────────────────────────────
 
