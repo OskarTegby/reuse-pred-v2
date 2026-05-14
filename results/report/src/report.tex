@@ -1284,6 +1284,37 @@ state.
   \item If $\theta$ changed, go to step~2.  Otherwise output $\theta$.
 \end{enumerate}
 
+\subsection{Training Strategy}
+\label{sec:pacipv_training_strategy}
+
+Following the approach of~\cite{mostofi2025pacipv}, we train on one suite
+and evaluate generalisation to the others rather than computing a separate
+optimal vector set per suite.
+
+\paragraph{Training suite: Google.}  Google is our primary training target.
+It is the largest and most diverse of the three server suites, and it
+represents the data-heavy workload class for which the paper's instruction-heavy
+defaults are least likely to be optimal.
+
+\paragraph{Validation suites.}  After training, we evaluate the converged
+vectors on Qualcomm without retraining.  Google and Qualcomm share the same
+server/cloud character, so successful transfer there confirms the vectors are
+not overfit to Google-specific behaviour.  We also check that DPC3/SPEC does
+not regress relative to the paper defaults: since DPC3 is instruction-heavy and
+the paper already optimised for that class, our goal there is to avoid harm
+rather than to improve.
+
+\paragraph{Trace budget.}  Google comprises 43 traces, but using all of them
+is impractical: the mostly-alive sweep alone would require
+$9{,}216 \times 43 = 396{,}288$ SGE tasks, far above cluster limits.
+We use a random subset of 8 traces for each coordinate-descent sweep
+($9{,}216 \times 8 = 73{,}728$ tasks for mostly-alive), then validate the
+winner on all 43 traces before treating it as the final result.
+Eight traces is a thin sample out of 43, but the coordinate-descent sweeps
+are repeated across rounds; any trace-sampling noise that pushes a suboptimal
+vector to the front will tend to wash out when the validated geomean on the
+full set is checked.
+
 % ─────────────────────────────────────────────────────────────────────────────
 \clearpage
 \section{Analysis and Open Questions}
