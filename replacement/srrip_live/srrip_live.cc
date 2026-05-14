@@ -11,20 +11,22 @@
 //
 // Policy rules
 // ------------
-// needs_mid_insertion() is consulted on every LLC/STLB fill or hit (same
-// predicate used by lru_mid).  It returns true when the block's history shows
-// doa or mostly_dead >= mid_thd evictions.
+// predict_liveness() is consulted on every LLC/STLB fill or hit and returns
+// one of three classes based on the block's eviction history:
 //
-//   Dead-predicted fill:   RRPV = maxRRPV     (immediate eviction candidate)
-//   Dead-predicted hit:    RRPV = maxRRPV-1   (partial promotion, MID_PROMOTE=0)
-//                       or RRPV = 0           (full promotion,    MID_PROMOTE=1)
-//   Normal fill:           RRPV = maxRRPV-1   (standard SRRIP)
-//   Normal hit:            RRPV = 0           (standard SRRIP)
+//   DoA fill:          RRPV = maxRRPV     (immediate eviction candidate)
+//   DoA hit:           RRPV = maxRRPV-1   (partial promotion, MID_PROMOTE=0)
+//                   or RRPV = 0           (full promotion,    MID_PROMOTE=1)
 //
-// MID_PROMOTE=0 (default) caps the promotion of dead-predicted blocks on a
-// hit to maxRRPV-1 rather than 0, keeping them near the eviction frontier
-// even after proving a single hit.  MID_PROMOTE=1 gives them full credit.
+//   Mostly-dead fill:  RRPV = maxRRPV     (same skeptical insertion as DoA)
+//   Mostly-dead hit:   RRPV = 0           (full promotion — a hit after a
+//                                          mostly-dead prediction is strong
+//                                          evidence the block is alive)
 //
+//   Mostly-alive fill: RRPV = maxRRPV-1   (standard SRRIP)
+//   Mostly-alive hit:  RRPV = 0           (standard SRRIP)
+//
+// MID_PROMOTE applies only to DoA blocks (same semantics as before).
 // find_victim() and the aging loop are identical to plain SRRIP.
 // For caches other than the LLC and STLB the policy degrades to plain SRRIP.
 
@@ -70,11 +72,18 @@ void CACHE::update_replacement_state(uint32_t triggering_cpu, uint32_t set, uint
 
   auto& rrpv = ::rrpv_values[this][set * NUM_WAY + way];
 
-  if ((NAME == "cpu0_STLB" || NAME == "LLC") && needs_mid_insertion(full_addr, ip)) {
-    if (hit)
-      rrpv = mid_promote_on_hit ? 0 : ::maxRRPV - 1;
-    else
-      rrpv = ::maxRRPV;
+  if (NAME == "cpu0_STLB" || NAME == "LLC") {
+    switch (predict_liveness(full_addr, ip)) {
+      case liveness_class::doa:
+        rrpv = hit ? (mid_promote_on_hit ? 0 : ::maxRRPV - 1) : ::maxRRPV;
+        break;
+      case liveness_class::mostly_dead:
+        rrpv = hit ? 0 : ::maxRRPV;
+        break;
+      default: // mostly_alive
+        rrpv = hit ? 0 : ::maxRRPV - 1;
+        break;
+    }
   } else {
     rrpv = hit ? 0 : ::maxRRPV - 1;
   }
