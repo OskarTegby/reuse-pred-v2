@@ -6,7 +6,10 @@
 #   ipv             : champsim_ipv              (LLC=IPV,          STLB=LRU)
 #   ipv_live        : champsim_ipv_live         (LLC=ipv_live,     STLB=LRU)
 #   stlb_ipv_live   : champsim_stlb_ipv_live    (STLB=ipv_live,    LLC=LRU)
-#   ipv_live_both   : champsim_ipv_live_both     (STLB=ipv_live,    LLC=ipv_live)
+#   ipv_live_both   : champsim_ipv_live_both    (STLB=ipv_live,    LLC=ipv_live)
+#   srrip_both      : champsim_srrip_both       (STLB=srrip,       LLC=srrip)
+#   stlb_ipv        : champsim_stlb_ipv         (STLB=IPV,         LLC=LRU)
+#   ipv_both        : champsim_ipv_both         (STLB=IPV,         LLC=IPV)
 #
 # MID_THD defaults (used for srrip_live_both and ipv_live):
 #   dpc3    → addr-keyed, thd=16  (matches best LLC thd from srrip_live_thd sweep)
@@ -85,7 +88,7 @@ esac
 [ -n "$SIM_OVERRIDE" ]    && SIM="$SIM_OVERRIDE"
 [ "$TEST" -eq 1 ] && { WARMUP=25000000; SIM=50000000; }
 
-for bin in champsim_srrip_live_both champsim_ipv champsim_ipv_live champsim_stlb_ipv_live champsim_ipv_live_both; do
+for bin in champsim_srrip_live_both champsim_ipv champsim_ipv_live champsim_stlb_ipv_live champsim_ipv_live_both champsim_srrip_both champsim_stlb_ipv champsim_ipv_both; do
   if [ ! -x "${PROJECT_ROOT}/bin/${bin}" ]; then
     echo "ERROR: binary not found: bin/${bin}" >&2
     echo "Run: ./build_all.sh" >&2
@@ -139,6 +142,9 @@ submit_one "ipv"              "champsim_ipv"               1
 submit_one "ipv_live"         "champsim_ipv_live"          "$MID_THD"
 submit_one "stlb_ipv_live"    "champsim_stlb_ipv_live"     "$MID_THD"
 submit_one "ipv_live_both"    "champsim_ipv_live_both"     "$MID_THD"
+submit_one "srrip_both"       "champsim_srrip_both"        1
+submit_one "stlb_ipv"         "champsim_stlb_ipv"          1
+submit_one "ipv_both"         "champsim_ipv_both"          1
 
 echo ""
 echo "Monitor with: qstat -u \$USER"
@@ -150,3 +156,6 @@ echo "  ln -s \$(pwd)/results/${BASE_LABEL}/ipv               results/combined_s
 echo "  ln -s \$(pwd)/results/${BASE_LABEL}/ipv_live          results/combined_stlb_llc_comparison/${token}/ipv_live"
 echo "  ln -s \$(pwd)/results/${BASE_LABEL}/stlb_ipv_live     results/combined_stlb_llc_comparison/${token}/stlb_ipv_live"
 echo "  ln -s \$(pwd)/results/${BASE_LABEL}/ipv_live_both     results/combined_stlb_llc_comparison/${token}/ipv_live_both"
+echo "  ln -s \$(pwd)/results/${BASE_LABEL}/srrip_both        results/combined_stlb_llc_comparison/${token}/srrip_both"
+echo "  ln -s \$(pwd)/results/${BASE_LABEL}/stlb_ipv          results/combined_stlb_llc_comparison/${token}/stlb_ipv"
+echo "  ln -s \$(pwd)/results/${BASE_LABEL}/ipv_both          results/combined_stlb_llc_comparison/${token}/ipv_both"
