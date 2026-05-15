@@ -1224,6 +1224,15 @@ $\text{mid\_thd}=8$ throughout (from Section~\ref{sec:stlb_pol}); the LLC and
 combined variants use per-suite optimal thresholds from the respective threshold
 sweeps (SPEC: thd$=16$, Google: thd$=8$, Qualcomm: thd$=4$).
 
+\begin{figure}[htbp]
+  \centering
+  \includegraphics[width=\linewidth]{../../plots/stlb_llc_comparison/stlb_llc_geomean.png}
+  \caption{Benchmark-weighted geomean IPC speedup vs.\ LRU for all six policies,
+           per suite and overall.  Each liveness policy uses its per-suite optimal
+           \texttt{mid\_thd}.}
+  \label{fig:llc_stlb_geomean}
+\end{figure}
+
 \begin{figure}[p]
   \centering
   \includegraphics[width=\linewidth]{../../plots/stlb_llc_comparison/dpc3_stlb_llc_comparison_ipc.png}
@@ -1250,21 +1259,20 @@ sweeps (SPEC: thd$=16$, Google: thd$=8$, Qualcomm: thd$=4$).
 
 Figures~\ref{fig:llc_stlb_dpc3}--\ref{fig:llc_stlb_qmm} present the results.
 For SPEC and Google the LLC component alone accounts for nearly all the gain:
-\texttt{srrip\_live} (LLC only) reaches $+2.54\%$ and $+4.17\%$ respectively,
-while the STLB-only variant contributes at most $+0.10\%$ and $+0.07\%$.
-Combining both gives $+2.63\%$ on SPEC and $+4.09\%$ on Google, i.e., no
+\texttt{srrip\_live} (LLC only) reaches $+1.13\%$ and $+4.17\%$ respectively,
+while the STLB-only variant contributes at most $+0.07\%$ on either suite.
+Combining both gives $+1.29\%$ on SPEC and $+4.09\%$ on Google --- no
 meaningful improvement over LLC-only.  The STLB liveness signal carries no
 independent information beyond what the LLC already acts on for these suites.
 
 Qualcomm is the exception.  LLC-only contributes $+3.83\%$ and STLB-only
 $+4.44\%$ in isolation; together they reach $+8.11\%$, which is close to the
-sum of the two.  The gains are nearly additive, which means the two levels are
-largely predicting different sets of DoA lines and pages --- the STLB's
-page-level liveness signal adds information that the block-level LLC history
-cannot infer.
+sum of the two.  The gains are nearly additive, meaning the two levels predict
+largely disjoint sets of DoA lines and pages --- the STLB's page-level signal
+adds information that the block-level LLC history cannot infer.
 
 \texttt{ipv\_live} matches \texttt{srrip\_live} (LLC only) closely on SPEC
-($+2.54\%$ each) and Google ($+4.02\%$ vs.\ $+4.17\%$), and slightly exceeds
+($+1.13\%$ each) and Google ($+4.02\%$ vs.\ $+4.17\%$), and slightly exceeds
 it on Qualcomm ($+4.23\%$ vs.\ $+3.83\%$), making it a competitive alternative
 LLC replacement policy with no meaningful downside relative to
 \texttt{srrip\_live}.
