@@ -235,75 +235,23 @@ from 64 to 256 entries, the DTLB from 8 to 32 entries, and the ITLB from 16
 to 64 entries.  All configurations use plain LRU so that the measured liveness
 reflects the unmodified eviction distribution.
 
-\begin{figure}[htbp]
-  \centering
-  \includegraphics[width=\linewidth]{../../plots/cache_size_study/dpc3/liveness_dpc3.png}
-  \caption{LLC DoA, LLC mostly-dead, STLB DoA, and STLB mostly-dead eviction
-           fractions at half ($\div 2$), baseline, and double ($\times 2$)
-           capacity for each component --- SPEC CPU2006 (DPC3).  Each column
-           varies one component independently; all others remain at baseline.}
-  \label{fig:cs_liveness_dpc3}
-\end{figure}
-
-\begin{figure}[htbp]
-  \centering
-  \includegraphics[width=\linewidth]{../../plots/cache_size_study/google/liveness_google.png}
-  \caption{Same as Figure~\ref{fig:cs_liveness_dpc3} for Google.}
-  \label{fig:cs_liveness_google}
-\end{figure}
-
-\begin{figure}[htbp]
-  \centering
-  \includegraphics[width=\linewidth]{../../plots/cache_size_study/qmm/liveness_qmm.png}
-  \caption{Same as Figure~\ref{fig:cs_liveness_dpc3} for Qualcomm.}
-  \label{fig:cs_liveness_qmm}
-\end{figure}
-
-Figures~\ref{fig:cs_liveness_dpc3}--\ref{fig:cs_liveness_qmm} show the liveness
-breakdown at each capacity point.  The LLC column is the most informative: a
-larger LLC reduces the DoA eviction fraction as more blocks get reused before
-eviction, while a smaller LLC increases it --- the liveness signal strengthens
+The liveness breakdown at each capacity point shows that the LLC column is the most
+informative: a larger LLC reduces the DoA eviction fraction as more blocks get reused
+before eviction, while a smaller LLC increases it --- the liveness signal strengthens
 when capacity is tighter.  The TLB components (DTLB, ITLB) have comparatively
 little effect on LLC liveness, as expected given the page-versus-block granularity
 difference.  The STLB column shows a similar but weaker trend for its own DoA
 fraction.
 
-\begin{figure}[htbp]
-  \centering
-  \includegraphics[width=\linewidth]{../../plots/cache_size_study/dpc3/correlation_dpc3.png}
-  \caption{Fraction of LLC DoA blocks decomposed by the state of their
-           corresponding STLB page at eviction time, shown at half, baseline,
-           and double capacity for each component --- SPEC CPU2006 (DPC3).
-           Buckets: the STLB page is still resident and DoA, still resident
-           and alive, has already been evicted DoA, has already been evicted
-           alive, or the correlation is uncovered (STLB entry not present).}
-  \label{fig:cs_corr_dpc3}
-\end{figure}
-
-\begin{figure}[htbp]
-  \centering
-  \includegraphics[width=\linewidth]{../../plots/cache_size_study/google/correlation_google.png}
-  \caption{Same as Figure~\ref{fig:cs_corr_dpc3} for Google.}
-  \label{fig:cs_corr_google}
-\end{figure}
-
-\begin{figure}[htbp]
-  \centering
-  \includegraphics[width=\linewidth]{../../plots/cache_size_study/qmm/correlation_qmm.png}
-  \caption{Same as Figure~\ref{fig:cs_corr_dpc3} for Qualcomm.}
-  \label{fig:cs_corr_qmm}
-\end{figure}
-
-Figures~\ref{fig:cs_corr_dpc3}--\ref{fig:cs_corr_qmm} show how the DoA--STLB
-correlation changes with capacity.  For SPEC, the resident-DoA fraction is
-reasonably stable across LLC sizes, while the evicted-DoA and uncovered fractions
-shift as the STLB becomes more or less pressured.  For Google and Qualcomm the
-overall correlation remains low regardless of component size, consistent with the
-near-zero LLC--STLB DoA correlation already noted in Figure~\ref{fig:liveness_corr}
---- the two levels do not share enough of the same working-set structure for the
-STLB page state to predict LLC block liveness, and increasing either capacity does
-not change that.  Increasing the STLB size modestly reduces the uncovered fraction
-but does not raise the resident-DoA rate meaningfully.
+The DoA--STLB correlation is stable across capacity points.  For SPEC, the
+resident-DoA fraction is reasonably stable across LLC sizes, while the evicted-DoA
+and uncovered fractions shift as the STLB becomes more or less pressured.  For
+Google and Qualcomm the overall correlation remains low regardless of component size,
+consistent with the near-zero LLC--STLB DoA correlation already noted in
+Figure~\ref{fig:liveness_corr} --- the two levels do not share enough of the same
+working-set structure for the STLB page state to predict LLC block liveness, and
+increasing either capacity does not change that.  Increasing the STLB size modestly
+reduces the uncovered fraction but does not raise the resident-DoA rate meaningfully.
 
 % ─────────────────────────────────────────────────────────────────────────────
 \section{Bypass Predictor Study}
@@ -1166,6 +1114,160 @@ other words, almost all of the DoA--STLB correlation measured for Google and
 Qualcomm relies on a software log that a real hardware predictor cannot have.
 Even for SPEC, roughly a quarter of the measured correlation comes from the
 log rather than the live STLB.
+
+% ─────────────────────────────────────────────────────────────────────────────
+\subsection{Applying \texttt{srrip\_live} to the STLB}
+\label{sec:stlb_srrip_live}
+% ─────────────────────────────────────────────────────────────────────────────
+
+The liveness-guided mid-insertion idea transfers directly to the STLB by
+treating STLB entries identically to LLC cache lines: an entry whose eviction
+history shows at least $\text{mid\_thd}$ consecutive DoA events is inserted at
+$\text{RRPV}=\text{maxRRPV}$ rather than at the default SRRIP recency.  For
+comparison, plain SRRIP applied to the STLB (\texttt{stlb\_srrip}) and the
+mid-insertion policy on top of LRU (\texttt{stlb\_lru\_mid}) are also
+evaluated.  All runs normalise against a plain-LRU STLB baseline.
+
+\subsubsection{Policy Comparison at $\text{mid\_thd}=8$}
+\label{sec:stlb_pol}
+
+\begin{figure}[htbp]
+  \centering
+  \includegraphics[width=\linewidth]{../../plots/stlb_policy/suite_stlb_policy.png}
+  \caption{Benchmark-weighted geomean IPC speedup over plain-LRU STLB for
+           three STLB replacement policies at $\text{mid\_thd}=8$, per suite.
+           History is keyed by address for SPEC (DPC3) and by PC for Google
+           and Qualcomm, matching the LLC study.}
+  \label{fig:stlb_pol_geomean}
+\end{figure}
+
+Figure~\ref{fig:stlb_pol_geomean} compares the three STLB policies at
+$\text{mid\_thd}=8$.  The results are asymmetric across suites.  For SPEC and
+Google the gains are modest and all three policies perform similarly
+($\leq\!0.17\%$): the STLB working set is relatively small on these suites and
+plain SRRIP already captures most of the benefit.
+
+Qualcomm is the outlier: \texttt{stlb\_srrip\_live} at $\text{mid\_thd}=8$
+reaches $+4.44\%$ geomean IPC, well above \texttt{stlb\_srrip} ($+1.00\%$)
+and \texttt{stlb\_lru\_mid} ($+0.64\%$).  The large gap indicates that the
+STLB liveness signal is strongly predictive for Qualcomm's server workloads:
+predicting which STLB entries will never be reused and deprioritising them
+immediately provides substantial miss-rate reduction.
+
+\begin{figure}[p]
+  \centering
+  \includegraphics[width=\linewidth,height=0.90\textheight,keepaspectratio]{../../plots/stlb_policy/stlb_policy_per_benchmark.png}
+  \caption{Per-benchmark IPC speedup over LRU-STLB for the three STLB replacement
+           policies, for all three suites (15 most diverse workloads of 20/43/45;
+           geomean over all).  Layout matches Figure~\ref{fig:srrip_live_optimal_per_bm}.}
+  \label{fig:stlb_pol_per_bm}
+\end{figure}
+
+Figure~\ref{fig:stlb_pol_per_bm} breaks the results down per workload.
+For SPEC and Google the three policies are nearly indistinguishable at the
+per-workload level, which is consistent with the near-zero aggregate differences.
+For Qualcomm, \texttt{stlb\_srrip\_live} uniformly outperforms \texttt{stlb\_srrip}
+on the vast majority of workloads, with the server-style workloads contributing
+the largest absolute gains.
+
+\subsubsection{Threshold Sensitivity}
+\label{sec:stlb_thd}
+
+\begin{figure}[htbp]
+  \centering
+  \includegraphics[width=\linewidth]{../../plots/stlb_policy/stlb_thd.png}
+  \caption{Benchmark-weighted geomean IPC speedup over LRU-STLB for
+           \texttt{stlb\_srrip\_live} at $\text{mid\_thd} \in \{1,2,4,8,16\}$,
+           alongside \texttt{stlb\_srrip} and \texttt{stlb\_lru\_mid} reference
+           bars.  Bars are shaded light to dark for increasing threshold.}
+  \label{fig:stlb_thd}
+\end{figure}
+
+Figure~\ref{fig:stlb_thd} sweeps $\text{mid\_thd}$ from~1 to~16.  The pattern
+is notably different from the LLC equivalent (Figure~\ref{fig:srrip_live_thd}).
+
+For Qualcomm the trend is \emph{reversed}: performance peaks at
+$\text{mid\_thd}=1$ ($+5.52\%$) and degrades monotonically to $+3.31\%$ at
+$\text{mid\_thd}=16$.  Every threshold beats plain \texttt{stlb\_srrip}
+($+1.00\%$), but a single observed DoA eviction is sufficient evidence to
+justify mid-insertion for Qualcomm's STLB entries.  In the LLC, requiring
+more evidence before overriding SRRIP was essential because SRRIP's
+recency prediction already incorporated some of the liveness signal.  In
+the STLB, where plain LRU is the baseline and the per-entry access counts
+are much lower, the first DoA observation is already highly informative.
+
+For SPEC the direction is the same as in the LLC: $\text{mid\_thd}=1$ is
+negative ($-0.14\%$) and the gain builds slowly to $+0.12\%$ at thd$=16$.
+Higher evidence requirements reduce harmful interventions, exactly as in the
+LLC case.
+
+For Google the behaviour again mirrors the LLC: very negative at low thresholds
+($-1.13\%$ at thd$=1$) and recovering to a narrow positive range ($+0.07\%$--
+$+0.17\%$) at thd$\ge8$.  The STLB working set for Google appears to be
+similarly heterogeneous to the LLC, requiring substantial history before
+mid-insertion is reliable.
+
+The contrast between Qualcomm (benefit saturates at thd$=1$) and SPEC/Google
+(require high thresholds) likely reflects the per-entry access frequency: in
+Qualcomm's server workloads, each STLB entry sees more accesses on average, so
+a single DoA observation is a stable signal.  In SPEC's memory-bound benchmarks
+and Google's varied workloads, a single observation is too noisy to act on.
+
+\subsubsection{LLC vs.\ STLB vs.\ Combined}
+\label{sec:llc_stlb_combined}
+
+To isolate how much of the liveness-guided gain comes from each cache level, we
+compare \texttt{srrip\_live} applied only to the LLC (LRU in the STLB), only to
+the STLB (LRU in the LLC), and to both simultaneously.  \texttt{ipv\_live} is
+included as a second LLC policy.  The STLB-only variant uses
+$\text{mid\_thd}=8$ throughout (from Section~\ref{sec:stlb_pol}); the LLC and
+combined variants use per-suite optimal thresholds from the respective threshold
+sweeps (SPEC: thd$=16$, Google: thd$=8$, Qualcomm: thd$=4$).
+
+\begin{figure}[p]
+  \centering
+  \includegraphics[width=\linewidth]{../../plots/stlb_llc_comparison/dpc3_stlb_llc_comparison_ipc.png}
+  \caption{Per-benchmark IPC speedup vs.\ LRU baseline for SPEC (DPC3).
+           Liveness policies (\texttt{srrip\_live}, \texttt{ipv\_live},
+           \texttt{srrip\_live\_both}) use their per-suite optimal
+           \texttt{mid\_thd}.}
+  \label{fig:llc_stlb_dpc3}
+\end{figure}
+
+\begin{figure}[p]
+  \centering
+  \includegraphics[width=\linewidth]{../../plots/stlb_llc_comparison/google_stlb_llc_comparison_ipc.png}
+  \caption{Same as Figure~\ref{fig:llc_stlb_dpc3} for Google.}
+  \label{fig:llc_stlb_google}
+\end{figure}
+
+\begin{figure}[p]
+  \centering
+  \includegraphics[width=\linewidth]{../../plots/stlb_llc_comparison/qmm_stlb_llc_comparison_ipc.png}
+  \caption{Same as Figure~\ref{fig:llc_stlb_dpc3} for Qualcomm (QMM).}
+  \label{fig:llc_stlb_qmm}
+\end{figure}
+
+Figures~\ref{fig:llc_stlb_dpc3}--\ref{fig:llc_stlb_qmm} present the results.
+For SPEC and Google the LLC component alone accounts for nearly all the gain:
+\texttt{srrip\_live} (LLC only) reaches $+2.54\%$ and $+4.17\%$ respectively,
+while the STLB-only variant contributes at most $+0.10\%$ and $+0.07\%$.
+Combining both gives $+2.63\%$ on SPEC and $+4.09\%$ on Google, i.e., no
+meaningful improvement over LLC-only.  The STLB liveness signal carries no
+independent information beyond what the LLC already acts on for these suites.
+
+Qualcomm is the exception.  LLC-only contributes $+3.83\%$ and STLB-only
+$+4.44\%$ in isolation; together they reach $+8.11\%$, which is close to the
+sum of the two.  The gains are nearly additive, which means the two levels are
+largely predicting different sets of DoA lines and pages --- the STLB's
+page-level liveness signal adds information that the block-level LLC history
+cannot infer.
+
+\texttt{ipv\_live} matches \texttt{srrip\_live} (LLC only) closely on SPEC
+($+2.54\%$ each) and Google ($+4.02\%$ vs.\ $+4.17\%$), and slightly exceeds
+it on Qualcomm ($+4.23\%$ vs.\ $+3.83\%$), making it a competitive alternative
+LLC replacement policy with no meaningful downside relative to
+\texttt{srrip\_live}.
 
 % ─────────────────────────────────────────────────────────────────────────────
 \clearpage
