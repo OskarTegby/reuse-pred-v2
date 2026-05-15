@@ -1236,24 +1236,28 @@ sweeps (SPEC: thd$=16$, Google: thd$=8$, Qualcomm: thd$=4$).
 \begin{figure}[p]
   \centering
   \includegraphics[width=\linewidth]{../../plots/stlb_llc_comparison/dpc3_stlb_llc_comparison_ipc.png}
-  \caption{Per-benchmark IPC speedup vs.\ LRU baseline for SPEC (DPC3).
-           Liveness policies (\texttt{srrip\_live}, \texttt{ipv\_live},
-           \texttt{srrip\_live\_both}) use their per-suite optimal
-           \texttt{mid\_thd}.}
+  \caption{Per-benchmark IPC speedup vs.\ LRU baseline for SPEC (DPC3)
+           (15 most diverse benchmarks of 20; geomean over all).
+           \texttt{ipv\_live} and \texttt{srrip\_live\_*} apply liveness in
+           the LLC only unless noted; \texttt{srrip\_live\_both} applies it
+           to both LLC and STLB.  Each liveness policy uses its per-suite
+           optimal \texttt{mid\_thd}.}
   \label{fig:llc_stlb_dpc3}
 \end{figure}
 
 \begin{figure}[p]
   \centering
   \includegraphics[width=\linewidth]{../../plots/stlb_llc_comparison/google_stlb_llc_comparison_ipc.png}
-  \caption{Same as Figure~\ref{fig:llc_stlb_dpc3} for Google.}
+  \caption{Same as Figure~\ref{fig:llc_stlb_dpc3} for Google
+           (15 most diverse benchmarks of 43; geomean over all).}
   \label{fig:llc_stlb_google}
 \end{figure}
 
 \begin{figure}[p]
   \centering
   \includegraphics[width=\linewidth]{../../plots/stlb_llc_comparison/qmm_stlb_llc_comparison_ipc.png}
-  \caption{Same as Figure~\ref{fig:llc_stlb_dpc3} for Qualcomm (QMM).}
+  \caption{Same as Figure~\ref{fig:llc_stlb_dpc3} for Qualcomm (QMM)
+           (15 most diverse benchmarks of 45; geomean over all).}
   \label{fig:llc_stlb_qmm}
 \end{figure}
 
