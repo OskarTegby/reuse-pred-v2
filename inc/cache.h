@@ -148,6 +148,8 @@ class CACHE : public champsim::operable, public MemoryRequestConsumer, public Me
     bool accessed = false; // set on hit; read and cleared on eviction
     bool dp = false;       // dead-page bit: set on LLC fill when the block's PFN is in the PFQ;
                            // gates accessed tracking and bHIST updates (cbPred only)
+    uint8_t insert_liveness_class = 2; // liveness_class at insertion time (2 = mostly_alive default);
+                                       // used by cbpred_weighted to scale bhist evidence
 
     uint64_t address = 0;
     uint64_t v_address = 0;
@@ -209,6 +211,10 @@ class CACHE : public champsim::operable, public MemoryRequestConsumer, public Me
   // Per-instance state
   bool dppred = false;
   bool cbpred = false;
+  bool     cbpred_weighted     = false; // weight bhist updates by insertion quality (CBPRED_WEIGHTED=1)
+  uint64_t cbpred_w_normal     = 2;     // bhist.doa increment for DoA eviction after normal insertion
+  uint64_t cbpred_w_low        = 1;     // bhist.doa increment for DoA eviction after pessimistic insertion
+  uint64_t cbpred_w_mispredict = 2;     // bhist.doa decrement per detected bypass misprediction
   uint64_t pconf_thd = 6; // phist confidence threshold
   uint64_t bconf_thd = 6; // bhist confidence threshold
   uint64_t mid_thd        = 1;     // min DoA-or-mostly-dead evictions before mid-insertion triggers

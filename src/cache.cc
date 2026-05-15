@@ -344,11 +344,33 @@ void CACHE::update_eviction_counters(const BLOCK& victim, liveness_class lv)
     }
   };
 
-  // Predictor tables: keep existing gated update rules unchanged.
+  // Predictor tables: phist unchanged; bhist uses weighted updates when cbpred_weighted.
   if (dppred && NAME == "cpu0_STLB") {
     update(get_phist_entry(victim.ip, victim.address >> OFFSET_BITS));
   } else if (cbpred && NAME == "LLC" && victim.dp) {
-    update(get_bhist_entry(victim.address >> OFFSET_BITS));
+    if (cbpred_weighted) {
+      // Normal-insert DoA is strong evidence; pessimistic-insert DoA is weak.
+      // Smooth de-escalation: partial decrement instead of hard reset.
+      const bool conservative = victim.insert_liveness_class
+                                != static_cast<uint8_t>(liveness_class::mostly_alive);
+      auto& e = get_bhist_entry(victim.address >> OFFSET_BITS);
+      const uint64_t doa_cap = 2 * bconf_thd + cbpred_w_normal;
+      switch (lv) {
+        case liveness_class::doa:
+          e.doa = std::min(e.doa + (conservative ? cbpred_w_low : cbpred_w_normal), doa_cap);
+          break;
+        case liveness_class::mostly_dead:
+          e.mostly_dead++;
+          if (e.doa > 0) --e.doa;
+          break;
+        case liveness_class::mostly_alive:
+          if (e.mostly_dead > 0) --e.mostly_dead;
+          e.doa = (e.doa >= cbpred_w_normal) ? e.doa - cbpred_w_normal : 0;
+          break;
+      }
+    } else {
+      update(get_bhist_entry(victim.address >> OFFSET_BITS));
+    }
   }
 
   // Insertion-policy tables: always updated for LLC and STLB, no hashing.
@@ -406,6 +428,10 @@ CACHE::liveness_class CACHE::predict_liveness(uint64_t full_addr, uint64_t ip) c
 // Variables (all optional; defaults match the header initializers):
 //   DPPRED=1           enable dead-page predictor on the STLB
 //   CBPRED=1           enable dead-block predictor on the LLC
+//   CBPRED_WEIGHTED=1  weight bhist updates by insertion quality (cbpred_weighted)
+//   CBPRED_W_NORMAL=<n>     DoA-eviction bhist increment after normal insertion (default 2)
+//   CBPRED_W_LOW=<n>        DoA-eviction bhist increment after pessimistic insertion (default 1)
+//   CBPRED_W_MISPREDICT=<n> bhist.doa decrement per detected bypass misprediction (default 2)
 //   PCONF_THD=<n>      dpPred confidence threshold (default 6)
 //   BCONF_THD=<n>      cbPred confidence threshold (default 6)
 //   MID_THD=<n>        min DoA-or-mostly-dead evictions before mid-insertion triggers (default 1)
@@ -430,6 +456,10 @@ void CACHE::load_predictor_settings()
     dppred = true;
   if (const char* v = std::getenv("CBPRED"); v && std::stoull(v))
     cbpred = true;
+  cbpred_weighted     = (getenv_uint64("CBPRED_WEIGHTED",    0) != 0);
+  cbpred_w_normal     = getenv_uint64("CBPRED_W_NORMAL",     cbpred_w_normal);
+  cbpred_w_low        = getenv_uint64("CBPRED_W_LOW",        cbpred_w_low);
+  cbpred_w_mispredict = getenv_uint64("CBPRED_W_MISPREDICT", cbpred_w_mispredict);
 
   pconf_thd = getenv_uint64("PCONF_THD", pconf_thd);
   bconf_thd = getenv_uint64("BCONF_THD", bconf_thd);
@@ -566,6 +596,9 @@ bool CACHE::handle_fill(const PACKET& fill_mshr)
       way->dirty = (fill_mshr.type == WRITE);
       way->accessed = false;
       way->dp = cbpred && NAME == "LLC" && std::find(pfq.begin(), pfq.end(), fill_mshr.address >> LOG2_PAGE_SIZE) != pfq.end();
+      way->insert_liveness_class = (cbpred_weighted && NAME == "LLC")
+          ? static_cast<uint8_t>(predict_liveness(fill_mshr.address, fill_mshr.ip))
+          : static_cast<uint8_t>(liveness_class::mostly_alive);
       way->insert_cycle   = current_cycle;
       way->last_hit_cycle = current_cycle;
       way->hit_count      = 0;
@@ -703,6 +736,11 @@ bool CACHE::handle_miss(const PACKET& handle_pkt)
     if (match != q.end()) {
       sim_stats.back().bypass_incorrect++;
       q.erase(match);
+      // Smooth de-escalation: each misprediction reduces confidence without a hard reset.
+      if (cbpred_weighted && cbpred && NAME == "LLC") {
+        auto& e = get_bhist_entry(handle_pkt.address >> OFFSET_BITS);
+        e.doa = (e.doa >= cbpred_w_mispredict) ? e.doa - cbpred_w_mispredict : 0;
+      }
     }
   }
 
