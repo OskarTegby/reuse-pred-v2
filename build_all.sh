@@ -27,8 +27,12 @@
 #     champsim_stlb_lru_mid   — mid-insertion LRU for STLB, LRU for LLC
 #     champsim_stlb_srrip     — SRRIP for STLB, LRU for LLC
 #     champsim_stlb_srrip_live — srrip_live for STLB, LRU for LLC
-#   LLC+STLB (built with --nopref lru_mid_both):
-#     champsim_lru_mid_both  — mid-insertion LRU for both STLB and LLC
+#   LLC+STLB (built with --nopref lru_mid_both / srrip_live_both / ipv_live_both):
+#     champsim_lru_mid_both     — mid-insertion LRU for both STLB and LLC
+#     champsim_srrip_live_both  — srrip_live for both STLB and LLC
+#     champsim_ipv_live_both    — ipv_live for both STLB and LLC
+#   STLB-only ipv_live (built with --nopref stlb_ipv_live):
+#     champsim_stlb_ipv_live    — ipv_live for STLB, LRU for LLC
 #   With-prefetch (L1I=next_line_instr, L1D=ip_stride, L2C=spp_dev):
 #     champsim_lru_pref      — LRU (STLB+LLC) + next_line_instr/ip_stride/spp_dev
 #     champsim_lru_mid_pref  — LRU STLB, lru_mid LLC + next_line_instr/ip_stride/spp_dev
@@ -47,7 +51,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR"
 
-ALL_POLICIES=(lru lru_mid srrip srrip_live drrip ipv ipv_live pacipv)
+ALL_POLICIES=(lru lru_mid srrip srrip_live drrip ipv ipv_live pacipv srrip_live_both stlb_ipv_live ipv_live_both)
 
 BUILD_NOPREF=1
 BUILD_PREF=1
