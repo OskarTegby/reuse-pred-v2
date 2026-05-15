@@ -23,8 +23,10 @@
 #include <cstring>
 #include <cstdlib>
 #include <iomanip>
+#include <iostream>
 #include <iterator>
 #include <numeric>
+#include <string_view>
 
 #include "champsim.h"
 #include "champsim_constants.h"
@@ -181,6 +183,10 @@ bool CACHE::cbpred_bypass(const PACKET& fill_mshr)
   if (!in_pfq || get_bhist_entry(block_addr).doa <= bconf_thd)
     return false;
 
+  if (cbpred_trace) {
+    const uint64_t d = get_bhist_entry(block_addr).doa;
+    trace_cbpred_event("bypass", block_addr, d, d);
+  }
   sim_stats.back().llc_bypasses++;
   return true;
 }
@@ -354,20 +360,27 @@ void CACHE::update_eviction_counters(const BLOCK& victim, liveness_class lv)
       const bool conservative = victim.insert_liveness_class
                                 != static_cast<uint8_t>(liveness_class::mostly_alive);
       auto& e = get_bhist_entry(victim.address >> OFFSET_BITS);
-      const uint64_t doa_cap = 2 * bconf_thd + cbpred_w_normal;
+      const uint64_t doa_cap    = 2 * bconf_thd + cbpred_w_normal;
+      const uint64_t doa_before = e.doa;
       switch (lv) {
         case liveness_class::doa:
           e.doa = std::min(e.doa + (conservative ? cbpred_w_low : cbpred_w_normal), doa_cap);
+          assert(e.doa >= doa_before); // DoA must not decrease confidence
           break;
         case liveness_class::mostly_dead:
           e.mostly_dead++;
           if (e.doa > 0) --e.doa;
+          assert(e.doa <= doa_before); // partial de-escalation must not increase counter
           break;
         case liveness_class::mostly_alive:
           if (e.mostly_dead > 0) --e.mostly_dead;
           e.doa = (e.doa >= cbpred_w_normal) ? e.doa - cbpred_w_normal : 0;
+          assert(e.doa <= doa_before); // de-escalation must not increase counter
           break;
       }
+      if (cbpred_trace)
+        trace_cbpred_event("evict", victim.address >> OFFSET_BITS,
+                           doa_before, e.doa, victim.insert_liveness_class);
     } else {
       update(get_bhist_entry(victim.address >> OFFSET_BITS));
     }
@@ -381,6 +394,20 @@ void CACHE::update_eviction_counters(const BLOCK& victim, liveness_class lv)
     update(stlb_mid_hist_addr[victim.address >> OFFSET_BITS]);
     update(stlb_mid_hist_pc[victim.ip]);
   }
+}
+
+void CACHE::trace_cbpred_event(std::string_view tag, uint64_t block_addr,
+                               uint64_t doa_before, uint64_t doa_after,
+                               uint8_t insert_class) const
+{
+  static constexpr const char* names[] = {"doa", "mostly_dead", "mostly_alive"};
+  std::clog << "[LLC cbpred] " << tag
+            << " 0x" << std::hex << block_addr << std::dec
+            << " class=" << (insert_class < 3 ? names[insert_class] : "?")
+            << " doa=" << doa_before;
+  if (doa_after != doa_before)
+    std::clog << "->" << doa_after;
+  std::clog << " (thd=" << bconf_thd << ")\n";
 }
 
 // Returns true when the entry's history shows its last eviction was DoA or
@@ -429,6 +456,7 @@ CACHE::liveness_class CACHE::predict_liveness(uint64_t full_addr, uint64_t ip) c
 //   DPPRED=1           enable dead-page predictor on the STLB
 //   CBPRED=1           enable dead-block predictor on the LLC
 //   CBPRED_WEIGHTED=1  weight bhist updates by insertion quality (cbpred_weighted)
+//   CBPRED_TRACE=1     log per-block bypass transitions to stderr; activates assertions
 //   CBPRED_W_NORMAL=<n>     DoA-eviction bhist increment after normal insertion (default 2)
 //   CBPRED_W_LOW=<n>        DoA-eviction bhist increment after pessimistic insertion (default 1)
 //   CBPRED_W_MISPREDICT=<n> bhist.doa decrement per detected bypass misprediction (default 2)
@@ -457,6 +485,7 @@ void CACHE::load_predictor_settings()
   if (const char* v = std::getenv("CBPRED"); v && std::stoull(v))
     cbpred = true;
   cbpred_weighted     = (getenv_uint64("CBPRED_WEIGHTED",    0) != 0);
+  cbpred_trace        = (getenv_uint64("CBPRED_TRACE",       0) != 0);
   cbpred_w_normal     = getenv_uint64("CBPRED_W_NORMAL",     cbpred_w_normal);
   cbpred_w_low        = getenv_uint64("CBPRED_W_LOW",        cbpred_w_low);
   cbpred_w_mispredict = getenv_uint64("CBPRED_W_MISPREDICT", cbpred_w_mispredict);
@@ -599,6 +628,10 @@ bool CACHE::handle_fill(const PACKET& fill_mshr)
       way->insert_liveness_class = (cbpred_weighted && NAME == "LLC")
           ? static_cast<uint8_t>(predict_liveness(fill_mshr.address, fill_mshr.ip))
           : static_cast<uint8_t>(liveness_class::mostly_alive);
+      if (cbpred_trace && way->dp) {
+        const uint64_t d = get_bhist_entry(fill_mshr.address >> OFFSET_BITS).doa;
+        trace_cbpred_event("fill", fill_mshr.address >> OFFSET_BITS, d, d, way->insert_liveness_class);
+      }
       way->insert_cycle   = current_cycle;
       way->last_hit_cycle = current_cycle;
       way->hit_count      = 0;
@@ -739,7 +772,11 @@ bool CACHE::handle_miss(const PACKET& handle_pkt)
       // Smooth de-escalation: each misprediction reduces confidence without a hard reset.
       if (cbpred_weighted && cbpred && NAME == "LLC") {
         auto& e = get_bhist_entry(handle_pkt.address >> OFFSET_BITS);
+        const uint64_t doa_before = e.doa;
         e.doa = (e.doa >= cbpred_w_mispredict) ? e.doa - cbpred_w_mispredict : 0;
+        assert(e.doa <= doa_before);
+        if (cbpred_trace)
+          trace_cbpred_event("mispredict", handle_pkt.address >> OFFSET_BITS, doa_before, e.doa);
       }
     }
   }

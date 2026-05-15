@@ -25,6 +25,7 @@
 #include <list>
 #include <map>
 #include <string>
+#include <string_view>
 #include <vector>
 
 #include "champsim.h"
@@ -212,6 +213,7 @@ class CACHE : public champsim::operable, public MemoryRequestConsumer, public Me
   bool dppred = false;
   bool cbpred = false;
   bool     cbpred_weighted     = false; // weight bhist updates by insertion quality (CBPRED_WEIGHTED=1)
+  bool     cbpred_trace        = false; // log per-block bypass state transitions to stderr (CBPRED_TRACE=1)
   uint64_t cbpred_w_normal     = 2;     // bhist.doa increment for DoA eviction after normal insertion
   uint64_t cbpred_w_low        = 1;     // bhist.doa increment for DoA eviction after pessimistic insertion
   uint64_t cbpred_w_mispredict = 2;     // bhist.doa decrement per detected bypass misprediction
@@ -288,6 +290,9 @@ class CACHE : public champsim::operable, public MemoryRequestConsumer, public Me
   void record_pc_liveness(const BLOCK& victim, liveness_class lv);       // accumulate per-PC liveness event counts
   bool needs_mid_insertion(uint64_t full_addr, uint64_t ip) const;        // true → insert/refresh at set midpoint
   liveness_class predict_liveness(uint64_t full_addr, uint64_t ip) const; // 3-way insertion prediction for ipv_live
+  void trace_cbpred_event(std::string_view tag, uint64_t block_addr,
+                          uint64_t doa_before, uint64_t doa_after,
+                          uint8_t insert_class = 2) const;               // stderr trace (CBPRED_TRACE=1 only)
 
 public:
   struct NonTranslatingQueues : public champsim::operable {
