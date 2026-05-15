@@ -183,7 +183,8 @@ bool CACHE::cbpred_bypass(const PACKET& fill_mshr)
   if (!in_pfq || get_bhist_entry(block_addr).doa <= bconf_thd)
     return false;
 
-  if (cbpred_trace) {
+  assert(get_bhist_entry(block_addr).doa > bconf_thd); // bypass must fire above threshold
+  if (tracing_cbpred()) {
     const uint64_t d = get_bhist_entry(block_addr).doa;
     trace_cbpred_event("bypass", block_addr, d, d);
   }
@@ -378,7 +379,7 @@ void CACHE::update_eviction_counters(const BLOCK& victim, liveness_class lv)
           assert(e.doa <= doa_before); // de-escalation must not increase counter
           break;
       }
-      if (cbpred_trace)
+      if (tracing_cbpred())
         trace_cbpred_event("evict", victim.address >> OFFSET_BITS,
                            doa_before, e.doa, victim.insert_liveness_class);
     } else {
@@ -396,10 +397,21 @@ void CACHE::update_eviction_counters(const BLOCK& victim, liveness_class lv)
   }
 }
 
+// Emit a trace line when:
+//   (a) the block matches cbpred_trace_addr (full per-block history), or
+//   (b) CBPRED_TRACE=1 and doa crossed the bypass threshold (category transition).
+// bypass/mispredict events are always logged when tracing is on, because they
+// are category-changing by definition.
 void CACHE::trace_cbpred_event(std::string_view tag, uint64_t block_addr,
                                uint64_t doa_before, uint64_t doa_after,
                                uint8_t insert_class) const
 {
+  const bool addr_match   = (block_addr == cbpred_trace_addr);
+  const bool crossed_thd  = (doa_before <= bconf_thd) != (doa_after <= bconf_thd);
+  const bool always_log   = (tag == "bypass" || tag == "mispredict");
+  if (!addr_match && !crossed_thd && !always_log)
+    return;
+
   static constexpr const char* names[] = {"doa", "mostly_dead", "mostly_alive"};
   std::clog << "[LLC cbpred] " << tag
             << " 0x" << std::hex << block_addr << std::dec
@@ -456,7 +468,8 @@ CACHE::liveness_class CACHE::predict_liveness(uint64_t full_addr, uint64_t ip) c
 //   DPPRED=1           enable dead-page predictor on the STLB
 //   CBPRED=1           enable dead-block predictor on the LLC
 //   CBPRED_WEIGHTED=1  weight bhist updates by insertion quality (cbpred_weighted)
-//   CBPRED_TRACE=1     log per-block bypass transitions to stderr; activates assertions
+//   CBPRED_TRACE=1          log bypass threshold crossings to stderr for all blocks
+//   CBPRED_TRACE_ADDR=<hex> log all events for one specific block address (hex, no 0x prefix)
 //   CBPRED_W_NORMAL=<n>     DoA-eviction bhist increment after normal insertion (default 2)
 //   CBPRED_W_LOW=<n>        DoA-eviction bhist increment after pessimistic insertion (default 1)
 //   CBPRED_W_MISPREDICT=<n> bhist.doa decrement per detected bypass misprediction (default 2)
@@ -486,6 +499,8 @@ void CACHE::load_predictor_settings()
     cbpred = true;
   cbpred_weighted     = (getenv_uint64("CBPRED_WEIGHTED",    0) != 0);
   cbpred_trace        = (getenv_uint64("CBPRED_TRACE",       0) != 0);
+  if (const char* v = std::getenv("CBPRED_TRACE_ADDR"))
+    cbpred_trace_addr = std::stoull(v, nullptr, 16);
   cbpred_w_normal     = getenv_uint64("CBPRED_W_NORMAL",     cbpred_w_normal);
   cbpred_w_low        = getenv_uint64("CBPRED_W_LOW",        cbpred_w_low);
   cbpred_w_mispredict = getenv_uint64("CBPRED_W_MISPREDICT", cbpred_w_mispredict);
@@ -628,9 +643,13 @@ bool CACHE::handle_fill(const PACKET& fill_mshr)
       way->insert_liveness_class = (cbpred_weighted && NAME == "LLC")
           ? static_cast<uint8_t>(predict_liveness(fill_mshr.address, fill_mshr.ip))
           : static_cast<uint8_t>(liveness_class::mostly_alive);
-      if (cbpred_trace && way->dp) {
-        const uint64_t d = get_bhist_entry(fill_mshr.address >> OFFSET_BITS).doa;
-        trace_cbpred_event("fill", fill_mshr.address >> OFFSET_BITS, d, d, way->insert_liveness_class);
+      if (way->dp) {
+        // A dp block that reached fill was not bypassed: its doa must be <= bconf_thd.
+        assert(!cbpred_weighted || get_bhist_entry(fill_mshr.address >> OFFSET_BITS).doa <= bconf_thd);
+        if (tracing_cbpred()) {
+          const uint64_t d = get_bhist_entry(fill_mshr.address >> OFFSET_BITS).doa;
+          trace_cbpred_event("fill", fill_mshr.address >> OFFSET_BITS, d, d, way->insert_liveness_class);
+        }
       }
       way->insert_cycle   = current_cycle;
       way->last_hit_cycle = current_cycle;
@@ -775,7 +794,7 @@ bool CACHE::handle_miss(const PACKET& handle_pkt)
         const uint64_t doa_before = e.doa;
         e.doa = (e.doa >= cbpred_w_mispredict) ? e.doa - cbpred_w_mispredict : 0;
         assert(e.doa <= doa_before);
-        if (cbpred_trace)
+        if (tracing_cbpred())
           trace_cbpred_event("mispredict", handle_pkt.address >> OFFSET_BITS, doa_before, e.doa);
       }
     }

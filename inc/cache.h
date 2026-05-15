@@ -20,6 +20,7 @@
 #include <array>
 #include <bitset>
 #include <cassert>
+#include <climits>
 #include <deque>
 #include <functional>
 #include <list>
@@ -213,7 +214,9 @@ class CACHE : public champsim::operable, public MemoryRequestConsumer, public Me
   bool dppred = false;
   bool cbpred = false;
   bool     cbpred_weighted     = false; // weight bhist updates by insertion quality (CBPRED_WEIGHTED=1)
-  bool     cbpred_trace        = false; // log per-block bypass state transitions to stderr (CBPRED_TRACE=1)
+  bool     cbpred_trace        = false;        // log bypass threshold crossings to stderr (CBPRED_TRACE=1)
+  uint64_t cbpred_trace_addr   = UINT64_MAX;   // full per-block trace for one address (CBPRED_TRACE_ADDR=<hex>)
+  bool     tracing_cbpred()    const { return cbpred_trace || cbpred_trace_addr != UINT64_MAX; }
   uint64_t cbpred_w_normal     = 2;     // bhist.doa increment for DoA eviction after normal insertion
   uint64_t cbpred_w_low        = 1;     // bhist.doa increment for DoA eviction after pessimistic insertion
   uint64_t cbpred_w_mispredict = 2;     // bhist.doa decrement per detected bypass misprediction
