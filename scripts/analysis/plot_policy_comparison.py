@@ -277,84 +277,6 @@ def _line_group(ax, workloads, policy_names, matrix, ylabel, title,
     ax.grid(axis="x", alpha=0.15, linewidth=0.5)
 
 
-def _bar_group(ax, workloads, policy_names, matrix, ylabel, title,
-               baseline_val=1.0, ref_line=True, weights=None,
-               policy_keys=None, agg_fn=None):
-    """Grouped bar chart: one x-position per workload, one bar per policy.
-
-    IPC matrices contain ratios (baseline_val=1.0); subtract baseline and
-    multiply by 100 to get speedup %.  MPKI matrices contain percentages
-    (baseline_val=0.0); used as-is.
-    """
-    if policy_keys is None:
-        policy_keys = policy_names
-    n_policies = len(policy_names)
-    n_wl = len(workloads)
-
-    _agg = agg_fn or benchmark_geomean
-    gm = [_agg({workloads[w]: matrix[p][w] for w in range(n_wl)}, weights)
-          for p in range(n_policies)]
-
-    scale = 100.0 if abs(baseline_val - 1.0) < 1e-6 else 1.0
-
-    bar_w = max(0.08, min(0.20, 0.82 / n_policies))
-    step  = bar_w + 0.02
-    offsets = [(j - (n_policies - 1) / 2) * step for j in range(n_policies)]
-
-    gap  = 1.5
-    x_wl = np.arange(n_wl)
-    x_gm = float(n_wl) + gap
-
-    _fallback = ["#888888", "#AAAAAA", "#CCCCCC", "#444444", "#666666"]
-    for pi, (pname, pkey) in enumerate(zip(policy_names, policy_keys)):
-        color = POLICY_COLORS.get(pkey, _fallback[pi % len(_fallback)])
-        hatch = POLICY_HATCHES.get(pkey, "")
-        ys = [((matrix[pi][w] or baseline_val) - baseline_val) * scale
-              if matrix[pi][w] is not None else 0.0
-              for w in range(n_wl)]
-        ax.bar(x_wl + offsets[pi], ys, bar_w,
-               color=color, hatch=hatch, edgecolor="black", linewidth=0.3,
-               label=pname, zorder=3)
-        if gm[pi] is not None:
-            gm_pct = (gm[pi] - baseline_val) * scale
-            ax.bar(x_gm + offsets[pi], gm_pct, bar_w,
-                   color=color, hatch=hatch, edgecolor="black", linewidth=0.8,
-                   zorder=3)
-            yoff = 0.3 if gm_pct >= 0 else -0.3
-            ax.text(x_gm + offsets[pi], gm_pct + yoff,
-                    f"{gm_pct:+.1f}%", ha="center",
-                    va="bottom" if gm_pct >= 0 else "top",
-                    fontsize=6.5, rotation=90)
-
-    if ref_line:
-        ax.axhline(0.0, color="black", linewidth=0.8, linestyle="--", zorder=0)
-    ax.axvline(n_wl + gap / 2, color="gray", linewidth=0.8, linestyle=":", zorder=0)
-
-    all_x = list(x_wl) + [x_gm]
-    all_l = list(workloads) + ["Geomean"]
-    ax.set_xticks(all_x)
-    ax.set_xticklabels(all_l, rotation=35, ha="right", fontsize=8)
-    for tick, lbl in zip(ax.get_xticklabels(), all_l):
-        if lbl == "Geomean":
-            tick.set_fontweight("bold")
-
-    all_pcts = [((matrix[p][w] or baseline_val) - baseline_val) * scale
-                for p in range(n_policies) for w in range(n_wl)
-                if matrix[p][w] is not None]
-    all_pcts += [(g - baseline_val) * scale for g in gm if g is not None]
-    all_pcts.append(0.0)
-    if all_pcts:
-        lo, hi = min(all_pcts), max(all_pcts)
-        span = max(hi - lo, 1e-6)
-        ax.set_ylim(lo - 0.12 * span, hi + 0.35 * span)
-
-    ax.set_ylabel(ylabel, fontsize=10)
-    ax.set_title(title, fontsize=13)
-    ax.set_xlim(-0.7, x_gm + 0.7)
-    ax.legend(loc="upper right", fontsize=8, framealpha=0.85, ncol=2)
-    ax.grid(axis="y", alpha=0.3, linewidth=0.5)
-
-
 def _iqr_ylim(vals, ref=None, pad=0.08):
     """Tight y-limits via IQR outlier clipping.  ref value is always included."""
     clean = sorted(v for v in vals if v is not None and np.isfinite(v))
@@ -490,8 +412,6 @@ def main():
                     help="Suffix appended to every policy dir name (e.g. '_paper_pref')")
     ap.add_argument("--exclude", nargs="*", default=[],
                     help="Exclude policies whose name contains any of these substrings (e.g. --exclude drrip)")
-    ap.add_argument("--include", nargs="*", default=None,
-                    help="If given, only show these exact policy names (takes priority over --exclude)")
     ap.add_argument("--max-workloads", type=int, default=None,
                     help="Maximum number of per-workload groups to show (default: show all).")
     ap.add_argument("--weights-dir", default=None,
@@ -535,14 +455,9 @@ def main():
         "stlb_lru_mid":    "STLB-lru_mid",
     }
 
-    if args.include is not None:
-        present = [p for p in ordered
-                   if (results_dir / (p + sfx)).is_dir()
-                   and p in args.include]
-    else:
-        present = [p for p in ordered
-                   if (results_dir / (p + sfx)).is_dir()
-                   and not any(s in p for s in args.exclude)]
+    present = [p for p in ordered
+               if (results_dir / (p + sfx)).is_dir()
+               and not any(s in p for s in args.exclude)]
     if not present:
         sys.exit(f"ERROR: no recognised policy subdirs found in {results_dir}")
     baseline_dir = results_dir / (args.baseline + sfx)
@@ -627,16 +542,16 @@ def main():
     n_shown = len(workloads_sorted)
     title_suffix = (f"({n_shown} most diverse of {n_total}; geomean over all)"
                     if n_shown < n_total else f"({n_total} benchmarks/workloads)")
-    n_pol = len(present)
-    fig_w = max(10, n_shown * max(0.75, 0.12 * n_pol) + 3)
+    fig_w = max(10, n_shown * 0.75 + 3)
     fig, ax = plt.subplots(figsize=(fig_w, 5))
-    _bar_group(ax, workloads_sorted, policy_labels, ipc_matrix_sorted,
-               ylabel=f"IPC speedup vs {args.baseline} (%)",
-               title=(f"IPC speedup vs {args.baseline} — {suite_label}\n"
-                      f"{title_suffix}"),
-               baseline_val=1.0, ref_line=True, weights=weights,
-               policy_keys=present)
-    ax.yaxis.set_major_formatter(mticker.FormatStrFormatter("%+.1f%%"))
+    _line_group(ax, workloads_sorted, policy_labels, ipc_matrix_sorted,
+                ylabel=f"IPC speedup vs {args.baseline} (%)",
+                title=(f"IPC speedup vs {args.baseline} — {suite_label}\n"
+                       f"{title_suffix}"),
+                baseline_val=1.0, ref_line=True, weights=weights,
+                policy_keys=present)
+    ax.yaxis.set_major_formatter(mticker.FuncFormatter(
+        lambda x, _: f"{(x - 1) * 100:+.1f}%"))
     fig.tight_layout()
     ipc_out = str(out_dir / f"{out_stem}_ipc.png")
     fig.savefig(ipc_out, dpi=200, bbox_inches="tight")
@@ -679,21 +594,21 @@ def main():
     llc_matrix  = [[row[i] for i in order] for row in llc_matrix_agg]
 
     fig, axes = plt.subplots(2, 1, figsize=(fig_w, 9))
-    _bar_group(axes[0], workloads_sorted, policy_labels, stlb_matrix,
-               ylabel="STLB MPKI reduction vs LRU (%)",
-               title=(f"STLB MPKI reduction vs LRU — {suite_label}\n"
-                      f"({n_shown} most diverse of {n_total})"),
-               baseline_val=0.0, ref_line=True, weights=weights,
-               policy_keys=present, agg_fn=_arith_mean)
-    axes[0].yaxis.set_major_formatter(mticker.FormatStrFormatter("%+.1f%%"))
+    _line_group(axes[0], workloads_sorted, policy_labels, stlb_matrix,
+                ylabel="STLB MPKI reduction vs LRU (%)",
+                title=(f"STLB MPKI reduction vs LRU — {suite_label}\n"
+                       f"({n_shown} most diverse of {n_total})"),
+                baseline_val=0.0, ref_line=True, weights=weights,
+                policy_keys=present, agg_fn=_arith_mean)
+    axes[0].yaxis.set_major_formatter(mticker.FormatStrFormatter("%.1f%%"))
 
-    _bar_group(axes[1], workloads_sorted, policy_labels, llc_matrix,
-               ylabel="LLC MPKI reduction vs LRU (%)",
-               title=(f"LLC MPKI reduction vs LRU — {suite_label}\n"
-                      f"({n_shown} most diverse of {n_total})"),
-               baseline_val=0.0, ref_line=True, weights=weights,
-               policy_keys=present, agg_fn=_arith_mean)
-    axes[1].yaxis.set_major_formatter(mticker.FormatStrFormatter("%+.1f%%"))
+    _line_group(axes[1], workloads_sorted, policy_labels, llc_matrix,
+                ylabel="LLC MPKI reduction vs LRU (%)",
+                title=(f"LLC MPKI reduction vs LRU — {suite_label}\n"
+                       f"({n_shown} most diverse of {n_total})"),
+                baseline_val=0.0, ref_line=True, weights=weights,
+                policy_keys=present, agg_fn=_arith_mean)
+    axes[1].yaxis.set_major_formatter(mticker.FormatStrFormatter("%.1f%%"))
 
     fig.tight_layout()
     mpki_out = str(out_dir / f"{out_stem}_mpki.png")
