@@ -91,14 +91,20 @@ for comp in "${SELECTED[@]}"; do
 
     # Override only the swept component; force LRU everywhere (base config
     # uses lru_mid for LLC and STLB, which would confound liveness stats).
+    # Note: build the LLC dict in one shot to avoid duplicate-key overwrite
+    # (Python silently discards all but the last value for duplicate keys).
     python3 - <<PYEOF > "$cfg_file"
 import json
+comp_key = "${COMP_KEY[$comp]}"
+sets     = ${sets}
+bin_name = "${bin_name}"
 cfg = {
-  "executable_name": "${bin_name}",
-  "${COMP_KEY[$comp]}": {"sets": ${sets}},
+  "executable_name": bin_name,
   "LLC":  {"replacement": "lru"},
   "STLB": {"replacement": "lru"},
 }
+# Merge the swept sets into the correct cache's dict (avoids duplicate-key bug).
+cfg[comp_key]["sets"] = sets
 print(json.dumps(cfg, indent=2))
 PYEOF
 

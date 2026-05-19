@@ -21,8 +21,8 @@ DEBUG=0
 TEST=0
 WARMUP_OVERRIDE=""
 SIM_OVERRIDE=""
-MID_KEY_STR="addr"
-MID_KEY_VAL=0
+MID_KEY_STR=""   # set per-token below; overridable with --mid-key
+MID_KEY_VAL=""
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -54,29 +54,21 @@ SHARED_TRACES=/home/users/shared/traces
 # ── Trace-set settings ────────────────────────────────────────────────────────
 case "$token" in
   dpc3)
-    WARMUP=50000000
-    SIM=100000000
-    TRACE_DIR="${SHARED_TRACES}/dpc3_traces"
-    TRACE_EXT="champsimtrace.xz"
-    ;;
+    WARMUP=50000000; SIM=100000000
+    TRACE_DIR="${SHARED_TRACES}/dpc3_traces"; TRACE_EXT="champsimtrace.xz"
+    [ -z "$MID_KEY_STR" ] && { MID_KEY_STR="addr"; MID_KEY_VAL=0; } ;;
   google)
-    WARMUP=50000000
-    SIM=100000000
-    TRACE_DIR="${SHARED_TRACES}/Google_Traces_v2"
-    TRACE_EXT="champsim.gz"
-    ;;
+    WARMUP=50000000; SIM=100000000
+    TRACE_DIR="${SHARED_TRACES}/Google_Traces_v2"; TRACE_EXT="champsim.gz"
+    [ -z "$MID_KEY_STR" ] && { MID_KEY_STR="pc"; MID_KEY_VAL=1; } ;;
   qmm)
-    WARMUP=50000000
-    SIM=100000000
-    TRACE_DIR="${PROJECT_ROOT}/trace-files/QMM"
-    TRACE_EXT="champsimtrace.xz"
-    ;;
+    WARMUP=50000000; SIM=100000000
+    TRACE_DIR="${PROJECT_ROOT}/trace-files/QMM"; TRACE_EXT="champsimtrace.xz"
+    [ -z "$MID_KEY_STR" ] && { MID_KEY_STR="pc"; MID_KEY_VAL=1; } ;;
   test)
-    WARMUP=25000000
-    SIM=50000000
-    TRACE_DIR="${PROJECT_ROOT}/trace-files/TEST"
-    TRACE_EXT="champsimtrace.xz"
-    ;;
+    WARMUP=25000000; SIM=50000000
+    TRACE_DIR="${PROJECT_ROOT}/trace-files/TEST"; TRACE_EXT="champsimtrace.xz"
+    [ -z "$MID_KEY_STR" ] && { MID_KEY_STR="addr"; MID_KEY_VAL=0; } ;;
 esac
 
 [ -n "$WARMUP_OVERRIDE" ] && WARMUP="$WARMUP_OVERRIDE"
@@ -116,13 +108,7 @@ mkdir -p "$LOG_DIR"
 source "${SCRIPT_DIR}/_manifest.sh"
 write_manifest
 
-# mid_thd=1 already exists from sweep_policy.sh (addr-keyed); include it
-# when using a non-default key so we have a complete per-PC dataset.
-if [ "$MID_KEY_VAL" -eq 0 ]; then
-  THD_VALUES=(2 4 8 16)
-else
-  THD_VALUES=(1 2 4 8 16)
-fi
+THD_VALUES=(1 2 4 8 16)
 
 echo "Submitting ${#THD_VALUES[@]} mid_thd values × ${N} traces (tasks ${TASK_RANGE})"
 echo "Binary        : ${BINARY}"

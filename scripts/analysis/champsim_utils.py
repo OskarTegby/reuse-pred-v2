@@ -76,6 +76,101 @@ def parse_stats(path) -> "tuple[float | None, float | None, float | None]":
     return ipc, stlb_mpki, llc_mpki
 
 
+def parse_bypass_stats(path) -> dict:
+    """Parse bypass and queue stats from a champsim.out file.
+
+    Returns a dict with keys:
+      stlb_bypasses, llc_bypasses,
+      st_lookups, st_hits,
+      pfq_probes, pfq_hits,
+      stlb_miss, llc_miss, instrs
+    Missing values are None.
+    """
+    result = {k: None for k in (
+        "stlb_bypasses", "llc_bypasses",
+        "st_lookups", "st_hits",
+        "pfq_probes", "pfq_hits",
+        "stlb_miss", "llc_miss", "instrs",
+    )}
+    try:
+        in_roi = False
+        for line in Path(path).read_text(errors="replace").splitlines():
+            if "Region of Interest Statistics" in line:
+                in_roi = True
+            if not in_roi:
+                continue
+            if result["instrs"] is None and "cumulative IPC:" in line:
+                m = re.search(r"instructions:\s+(\d+)", line)
+                if m:
+                    result["instrs"] = int(m.group(1))
+            m = re.fullmatch(r"cpu0_STLB BYPASSES:\s+(\d+)", line.strip())
+            if m:
+                result["stlb_bypasses"] = int(m.group(1))
+            m = re.fullmatch(r"LLC BYPASSES:\s+(\d+)", line.strip())
+            if m:
+                result["llc_bypasses"] = int(m.group(1))
+            m = re.search(r"SHADOW TABLE LOOKUPS:\s+(\d+)\s+HITS:\s+(\d+)", line)
+            if m:
+                result["st_lookups"] = int(m.group(1))
+                result["st_hits"]    = int(m.group(2))
+            m = re.search(r"PFQ PROBES:\s+(\d+)\s+HITS:\s+(\d+)", line)
+            if m:
+                result["pfq_probes"] = int(m.group(1))
+                result["pfq_hits"]   = int(m.group(2))
+            if result["stlb_miss"] is None and re.match(r"cpu0_STLB TOTAL\s+ACCESS:", line):
+                m = re.search(r"MISS:\s+(\d+)", line)
+                if m:
+                    result["stlb_miss"] = int(m.group(1))
+            if result["llc_miss"] is None and re.match(r"LLC TOTAL\s+ACCESS:", line):
+                m = re.search(r"MISS:\s+(\d+)", line)
+                if m:
+                    result["llc_miss"] = int(m.group(1))
+    except OSError:
+        pass
+    return result
+
+
+def collect_bypass_stats(exp_dir) -> dict:
+    """Aggregate bypass stats across all traces in exp_dir.
+
+    Returns a dict with summed counts and derived rates:
+      stlb_bypass_pkis  — STLB bypasses per kilo-instruction
+      llc_bypass_pkis   — LLC bypasses per kilo-instruction
+      st_hit_rate       — st_hits / st_lookups (or nan)
+      pfq_hit_rate      — pfq_hits / pfq_probes (or nan)
+      stlb_mpki         — aggregate STLB MPKI
+      llc_mpki          — aggregate LLC MPKI
+    """
+    totals = {k: 0 for k in (
+        "stlb_bypasses", "llc_bypasses",
+        "st_lookups", "st_hits",
+        "pfq_probes", "pfq_hits",
+        "stlb_miss", "llc_miss", "instrs",
+    )}
+    for trace in os.listdir(exp_dir):
+        out = os.path.join(exp_dir, trace, "champsim.out")
+        s = parse_bypass_stats(out)
+        for k in totals:
+            if s[k] is not None:
+                totals[k] += s[k]
+
+    kilo = totals["instrs"] / 1000 if totals["instrs"] else float("nan")
+    return {
+        "stlb_bypass_pkis":  totals["stlb_bypasses"] / kilo if kilo else float("nan"),
+        "llc_bypass_pkis":   totals["llc_bypasses"]  / kilo if kilo else float("nan"),
+        "stlb_bypass_pct": (totals["stlb_bypasses"] / totals["stlb_miss"] * 100
+                            if totals["stlb_miss"] else float("nan")),
+        "llc_bypass_pct":  (totals["llc_bypasses"]  / totals["llc_miss"]  * 100
+                            if totals["llc_miss"]  else float("nan")),
+        "st_hit_rate":  (totals["st_hits"]  / totals["st_lookups"]
+                         if totals["st_lookups"] else float("nan")),
+        "pfq_hit_rate": (totals["pfq_hits"] / totals["pfq_probes"]
+                         if totals["pfq_probes"] else float("nan")),
+        "stlb_mpki": totals["stlb_miss"] / kilo if kilo else float("nan"),
+        "llc_mpki":  totals["llc_miss"]  / kilo if kilo else float("nan"),
+    }
+
+
 def geomean_speedup(exp_dir, baseline_dir) -> float:
     """Simpoint-weighted geomean IPC speedup (%) vs a baseline directory."""
     ratios: dict = {}

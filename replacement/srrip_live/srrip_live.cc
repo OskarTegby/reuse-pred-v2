@@ -19,9 +19,8 @@
 //                   or RRPV = 0           (full promotion,    MID_PROMOTE=1)
 //
 //   Mostly-dead fill:  RRPV = maxRRPV     (same skeptical insertion as DoA)
-//   Mostly-dead hit:   RRPV = 0           (full promotion — a hit after a
-//                                          mostly-dead prediction is strong
-//                                          evidence the block is alive)
+//   Mostly-dead hit:   RRPV = 1           (moderate promotion — distinguishable
+//                                          from mostly-alive which goes to 0)
 //
 //   Mostly-alive fill: RRPV = maxRRPV-1   (standard SRRIP)
 //   Mostly-alive hit:  RRPV = 0           (standard SRRIP)
@@ -78,7 +77,7 @@ void CACHE::update_replacement_state(uint32_t triggering_cpu, uint32_t set, uint
         rrpv = hit ? (mid_promote_on_hit ? 0 : ::maxRRPV - 1) : ::maxRRPV;
         break;
       case liveness_class::mostly_dead:
-        rrpv = hit ? 0 : ::maxRRPV;
+        rrpv = hit ? 1 : ::maxRRPV;
         break;
       default: // mostly_alive
         rrpv = hit ? 0 : ::maxRRPV - 1;

@@ -23,8 +23,10 @@
 #include <cstring>
 #include <cstdlib>
 #include <iomanip>
+#include <iostream>
 #include <iterator>
 #include <numeric>
+#include <string_view>
 
 #include "champsim.h"
 #include "champsim_constants.h"
@@ -174,13 +176,23 @@ bool CACHE::cbpred_bypass(const PACKET& fill_mshr)
   if (in_pfq)
     sim_stats.back().pfq_hits++;
 
-  if (in_pfq) {
+  // Count bhist lookups only when the PFQ gate would normally be active.
+  if (in_pfq || cbpred_no_pfq) {
     sim_stats.back().bhist_lookups++;
     if (bhist_entry_exists(block_addr)) sim_stats.back().bhist_hits++;
   }
-  if (!in_pfq || get_bhist_entry(block_addr).doa <= bconf_thd)
+  // Adaptive threshold: raise bconf proportionally to accumulated mispredict debt.
+  const uint64_t effective_bconf = bconf_thd
+      + (bypass_debt_scale > 0 ? bypass_debt / bypass_debt_scale : 0);
+  // cbpred_no_pfq: bypass on bhist confidence alone, no PFQ membership required.
+  if ((!in_pfq && !cbpred_no_pfq) || get_bhist_entry(block_addr).doa <= effective_bconf)
     return false;
 
+  assert(get_bhist_entry(block_addr).doa > effective_bconf); // bypass must fire above threshold
+  if (tracing_cbpred()) {
+    const uint64_t d = get_bhist_entry(block_addr).doa;
+    trace_cbpred_event("bypass", block_addr, d, d);
+  }
   sim_stats.back().llc_bypasses++;
   return true;
 }
@@ -344,11 +356,46 @@ void CACHE::update_eviction_counters(const BLOCK& victim, liveness_class lv)
     }
   };
 
-  // Predictor tables: keep existing gated update rules unchanged.
+  // Predictor tables: phist unchanged; bhist uses weighted updates when cbpred_weighted.
   if (dppred && NAME == "cpu0_STLB") {
     update(get_phist_entry(victim.ip, victim.address >> OFFSET_BITS));
   } else if (cbpred && NAME == "LLC" && victim.dp) {
-    update(get_bhist_entry(victim.address >> OFFSET_BITS));
+    if (cbpred_weighted) {
+      // Normal-insert DoA is strong evidence; pessimistic-insert DoA is weak.
+      // Smooth de-escalation: partial decrement instead of hard reset.
+      assert(victim.insert_liveness_class <= 2); // must be a valid liveness_class value
+      const bool conservative = victim.insert_liveness_class
+                                != static_cast<uint8_t>(liveness_class::mostly_alive);
+      auto& e = get_bhist_entry(victim.address >> OFFSET_BITS);
+      const uint64_t doa_cap    = 2 * bconf_thd + cbpred_w_normal;
+      const uint64_t doa_before = e.doa;
+      switch (lv) {
+        case liveness_class::doa: {
+          const uint64_t delta = conservative ? cbpred_w_low : cbpred_w_normal;
+          e.doa = std::min(e.doa + delta, doa_cap);
+          assert(e.doa >= doa_before);  // DoA must not decrease confidence
+          assert(e.doa <= doa_cap);     // must respect the saturation cap
+          if (conservative) sim_stats.back().cbpred_doa_pessimistic_inserts++;
+          else              sim_stats.back().cbpred_doa_normal_inserts++;
+          break;
+        }
+        case liveness_class::mostly_dead:
+          e.mostly_dead++;
+          if (e.doa > 0) --e.doa;
+          assert(e.doa <= doa_before); // partial de-escalation must not increase counter
+          break;
+        case liveness_class::mostly_alive:
+          if (e.mostly_dead > 0) --e.mostly_dead;
+          e.doa = (e.doa >= cbpred_w_normal) ? e.doa - cbpred_w_normal : 0;
+          assert(e.doa <= doa_before); // de-escalation must not increase counter
+          break;
+      }
+      if (tracing_cbpred())
+        trace_cbpred_event("evict", victim.address >> OFFSET_BITS,
+                           doa_before, e.doa, victim.insert_liveness_class);
+    } else {
+      update(get_bhist_entry(victim.address >> OFFSET_BITS));
+    }
   }
 
   // Insertion-policy tables: always updated for LLC and STLB, no hashing.
@@ -359,6 +406,31 @@ void CACHE::update_eviction_counters(const BLOCK& victim, liveness_class lv)
     update(stlb_mid_hist_addr[victim.address >> OFFSET_BITS]);
     update(stlb_mid_hist_pc[victim.ip]);
   }
+}
+
+// Emit a trace line when:
+//   (a) the block matches cbpred_trace_addr (full per-block history), or
+//   (b) CBPRED_TRACE=1 and doa crossed the bypass threshold (category transition).
+// bypass/mispredict events are always logged when tracing is on, because they
+// are category-changing by definition.
+void CACHE::trace_cbpred_event(std::string_view tag, uint64_t block_addr,
+                               uint64_t doa_before, uint64_t doa_after,
+                               uint8_t insert_class) const
+{
+  const bool addr_match   = (block_addr == cbpred_trace_addr);
+  const bool crossed_thd  = (doa_before <= bconf_thd) != (doa_after <= bconf_thd);
+  const bool always_log   = (tag == "bypass" || tag == "mispredict");
+  if (!addr_match && !crossed_thd && !always_log)
+    return;
+
+  static constexpr const char* names[] = {"doa", "mostly_dead", "mostly_alive"};
+  std::clog << "[LLC cbpred] " << tag
+            << " 0x" << std::hex << block_addr << std::dec
+            << " class=" << (insert_class < 3 ? names[insert_class] : "?")
+            << " doa=" << doa_before;
+  if (doa_after != doa_before)
+    std::clog << "->" << doa_after;
+  std::clog << " (thd=" << bconf_thd << ")\n";
 }
 
 // Returns true when the entry's history shows its last eviction was DoA or
@@ -406,6 +478,13 @@ CACHE::liveness_class CACHE::predict_liveness(uint64_t full_addr, uint64_t ip) c
 // Variables (all optional; defaults match the header initializers):
 //   DPPRED=1           enable dead-page predictor on the STLB
 //   CBPRED=1           enable dead-block predictor on the LLC
+//   CBPRED_WEIGHTED=1  weight bhist updates by insertion quality (cbpred_weighted)
+//   CBPRED_NO_PFQ=1    bypass on bhist confidence alone; skip PFQ membership check (cbpred_no_pfq)
+//   CBPRED_TRACE=1          log bypass threshold crossings to stderr for all blocks
+//   CBPRED_TRACE_ADDR=<hex> log all events for one specific block address (hex, no 0x prefix)
+//   CBPRED_W_NORMAL=<n>     DoA-eviction bhist increment after normal insertion (default 2)
+//   CBPRED_W_LOW=<n>        DoA-eviction bhist increment after pessimistic insertion (default 1)
+//   CBPRED_W_MISPREDICT=<n> bhist.doa decrement per detected bypass misprediction (default 2)
 //   PCONF_THD=<n>      dpPred confidence threshold (default 6)
 //   BCONF_THD=<n>      cbPred confidence threshold (default 6)
 //   MID_THD=<n>        min DoA-or-mostly-dead evictions before mid-insertion triggers (default 1)
@@ -430,12 +509,24 @@ void CACHE::load_predictor_settings()
     dppred = true;
   if (const char* v = std::getenv("CBPRED"); v && std::stoull(v))
     cbpred = true;
+  cbpred_weighted     = (getenv_uint64("CBPRED_WEIGHTED",    0) != 0);
+  cbpred_no_pfq       = (getenv_uint64("CBPRED_NO_PFQ",      0) != 0);
+  cbpred_trace        = (getenv_uint64("CBPRED_TRACE",       0) != 0);
+  if (const char* v = std::getenv("CBPRED_TRACE_ADDR"))
+    cbpred_trace_addr = std::stoull(v, nullptr, 16);
+  cbpred_w_normal     = getenv_uint64("CBPRED_W_NORMAL",     cbpred_w_normal);
+  cbpred_w_low        = getenv_uint64("CBPRED_W_LOW",        cbpred_w_low);
+  cbpred_w_mispredict = getenv_uint64("CBPRED_W_MISPREDICT", cbpred_w_mispredict);
 
   pconf_thd = getenv_uint64("PCONF_THD", pconf_thd);
   bconf_thd = getenv_uint64("BCONF_THD", bconf_thd);
   mid_thd   = getenv_uint64("MID_THD",   mid_thd);
   st_size   = getenv_uint64("ST_SIZE",   st_size);
   pfq_cap   = getenv_uint64("PFQ_CAP",   pfq_cap);
+  bypass_debt_scale = getenv_uint64("BYPASS_DEBT_SCALE", 0);
+  bypass_debt_cap   = getenv_uint64("BYPASS_DEBT_CAP",
+                                    bypass_debt_scale > 0 ? bconf_thd : 0);
+  bypass_debt       = 0;
   mid_key          = (getenv_uint64("MID_KEY",     0) == 1) ? mid_key_t::pc : mid_key_t::addr;
   mid_promote_on_hit = (getenv_uint64("MID_PROMOTE", 0) == 1);
 
@@ -484,6 +575,10 @@ bool CACHE::handle_fill(const PACKET& fill_mshr)
         // Expire stale entries from the front (oldest inserted = earliest to expire).
         while (!q.empty() && bypass_per_set_fills[set_idx] - q.front().fills_at_bypass > NUM_WAY) {
           sim_stats.back().bypass_correct++;
+          if (bypass_debt_scale > 0 && NAME == "LLC" && bypass_debt > 0) bypass_debt--;
+          if (cbpred_trace_addr != UINT64_MAX && q.front().addr_tag == cbpred_trace_addr)
+            std::clog << "[LLC cbpred] bypass_correct 0x" << std::hex << q.front().addr_tag << std::dec
+                      << " (thd=" << bconf_thd << ")\n";
           q.pop_front();
         }
         // Cap at 2×NUM_WAY entries; drop oldest if full.
@@ -549,6 +644,10 @@ bool CACHE::handle_fill(const PACKET& fill_mshr)
         auto& fq = bypass_shadow[fill_set_idx];
         while (!fq.empty() && bypass_per_set_fills[fill_set_idx] - fq.front().fills_at_bypass > NUM_WAY) {
           sim_stats.back().bypass_correct++;
+          if (bypass_debt_scale > 0 && NAME == "LLC" && bypass_debt > 0) bypass_debt--;
+          if (cbpred_trace_addr != UINT64_MAX && fq.front().addr_tag == cbpred_trace_addr)
+            std::clog << "[LLC cbpred] bypass_correct 0x" << std::hex << fq.front().addr_tag << std::dec
+                      << " (thd=" << bconf_thd << ")\n";
           fq.pop_front();
         }
       }
@@ -566,6 +665,21 @@ bool CACHE::handle_fill(const PACKET& fill_mshr)
       way->dirty = (fill_mshr.type == WRITE);
       way->accessed = false;
       way->dp = cbpred && NAME == "LLC" && std::find(pfq.begin(), pfq.end(), fill_mshr.address >> LOG2_PAGE_SIZE) != pfq.end();
+      way->insert_liveness_class = (cbpred_weighted && NAME == "LLC")
+          ? static_cast<uint8_t>(predict_liveness(fill_mshr.address, fill_mshr.ip))
+          : static_cast<uint8_t>(liveness_class::mostly_alive);
+      if (way->dp) {
+        // Note: we do NOT assert doa <= bconf_thd here.  update_eviction_counters()
+        // for the victim runs just before this fill, and with BHIST_HASH=1 the victim
+        // and the filling block can alias to the same bhist bucket.  That aliased
+        // increment can push doa above bconf_thd after the bypass decision was already
+        // made correctly at check time.  The invariant is enforced at bypass-check time
+        // (inside cbpred_bypass()), not here.
+        if (tracing_cbpred()) {
+          const uint64_t d = get_bhist_entry(fill_mshr.address >> OFFSET_BITS).doa;
+          trace_cbpred_event("fill", fill_mshr.address >> OFFSET_BITS, d, d, way->insert_liveness_class);
+        }
+      }
       way->insert_cycle   = current_cycle;
       way->last_hit_cycle = current_cycle;
       way->hit_count      = 0;
@@ -695,6 +809,10 @@ bool CACHE::handle_miss(const PACKET& handle_pkt)
     // Expire stale front entries.
     while (!q.empty() && bypass_per_set_fills[set_idx] - q.front().fills_at_bypass > NUM_WAY) {
       sim_stats.back().bypass_correct++;
+      if (bypass_debt_scale > 0 && NAME == "LLC" && bypass_debt > 0) bypass_debt--;
+      if (cbpred_trace_addr != UINT64_MAX && q.front().addr_tag == cbpred_trace_addr)
+        std::clog << "[LLC cbpred] bypass_correct 0x" << std::hex << q.front().addr_tag << std::dec
+                  << " (thd=" << bconf_thd << ")\n";
       q.pop_front();
     }
     // Check for a matching bypassed address anywhere in the (fresh) queue.
@@ -703,6 +821,18 @@ bool CACHE::handle_miss(const PACKET& handle_pkt)
     if (match != q.end()) {
       sim_stats.back().bypass_incorrect++;
       q.erase(match);
+      // Smooth de-escalation: each misprediction reduces confidence without a hard reset.
+      if (cbpred_weighted && cbpred && NAME == "LLC") {
+        auto& e = get_bhist_entry(handle_pkt.address >> OFFSET_BITS);
+        const uint64_t doa_before = e.doa;
+        e.doa = (e.doa >= cbpred_w_mispredict) ? e.doa - cbpred_w_mispredict : 0;
+        assert(e.doa <= doa_before);
+        if (tracing_cbpred())
+          trace_cbpred_event("mispredict", handle_pkt.address >> OFFSET_BITS, doa_before, e.doa);
+        // Global adaptive gate: accumulate mispredict debt to raise the effective bconf threshold.
+        if (bypass_debt_scale > 0)
+          bypass_debt = std::min(bypass_debt + cbpred_w_mispredict, bypass_debt_cap);
+      }
     }
   }
 
@@ -1050,8 +1180,10 @@ void CACHE::end_phase(unsigned finished_cpu)
   roi_stats.back().llc_bypasses = sim_stats.back().llc_bypasses;
 
   roi_stats.back().bypass_incorrect          = sim_stats.back().bypass_incorrect;
-  roi_stats.back().bypass_correct         = sim_stats.back().bypass_correct;
-  roi_stats.back().bypass_shadow_overflow = sim_stats.back().bypass_shadow_overflow;
+  roi_stats.back().bypass_correct            = sim_stats.back().bypass_correct;
+  roi_stats.back().bypass_shadow_overflow    = sim_stats.back().bypass_shadow_overflow;
+  roi_stats.back().cbpred_doa_normal_inserts      = sim_stats.back().cbpred_doa_normal_inserts;
+  roi_stats.back().cbpred_doa_pessimistic_inserts = sim_stats.back().cbpred_doa_pessimistic_inserts;
   roi_stats.back().pfq_probes   = sim_stats.back().pfq_probes;
   roi_stats.back().pfq_hits     = sim_stats.back().pfq_hits;
 

@@ -81,7 +81,7 @@ def _geomean(values: dict, baselines: dict) -> "float | None":
     return None if math.isnan(result) else result
 
 
-def load_suite(thd_dir: Path, pol_dir: Path) -> dict:
+def load_suite(thd_dir: Path, pol_dir: Path, thd_prefix: str = "srrip_live") -> dict:
     lru_dir = pol_dir / "lru"
     if not lru_dir.is_dir():
         sys.exit(f"ERROR: no lru/ baseline in {pol_dir}")
@@ -96,15 +96,14 @@ def load_suite(thd_dir: Path, pol_dir: Path) -> dict:
     lru_mid_gm  = _geomean(_load_ipc(lru_mid_dir), baselines) if lru_mid_dir.is_dir() else None
 
     thd_gm = {}
-    # thd=1 lives in the policy sweep dir (addr-keyed) or in the thd dir (PC-keyed)
-    sl1_dir = pol_dir / "srrip_live"
+    # thd=1: try pol_dir/<thd_prefix> first, then thd_dir/<thd_prefix>_thd1
+    sl1_dir = pol_dir / thd_prefix
     if not sl1_dir.is_dir():
-        sl1_dir = thd_dir / "srrip_live_thd1"
+        sl1_dir = thd_dir / f"{thd_prefix}_thd1"
     if sl1_dir.is_dir():
         thd_gm[1] = _geomean(_load_ipc(sl1_dir), baselines)
-    # thd=2..16 live in the dedicated threshold sweep dir
     for thd in THD_VALUES[1:]:
-        subdir = thd_dir / f"srrip_live_thd{thd}"
+        subdir = thd_dir / f"{thd_prefix}_thd{thd}"
         thd_gm[thd] = _geomean(_load_ipc(subdir), baselines) if subdir.is_dir() else None
 
     return {"srrip_gm": srrip_gm, "lru_mid_gm": lru_mid_gm, "thd_gm": thd_gm}
@@ -162,6 +161,8 @@ def main():
                     help="STLB policy dirs providing lru+stlb_srrip+stlb_lru_mid, one per suite")
     ap.add_argument("--stlb-dirs", nargs="+", default=None,
                     help="STLB policy sweep result dirs, one per suite (single-threshold mode)")
+    ap.add_argument("--thd-prefix", default="srrip_live",
+                    help="Policy prefix for threshold sweep subdirs (default: srrip_live)")
     ap.add_argument("--labels", nargs="+", default=None,
                     help="Suite labels (default: inferred from dir names)")
     ap.add_argument("--out", default=None)
@@ -397,7 +398,7 @@ def main():
     suites = []
     for thd_d, pol_d, label in zip(args.thd_dirs, args.pol_dirs, labels):
         print(f"Loading '{label}' ...")
-        data = load_suite(Path(thd_d), Path(pol_d))
+        data = load_suite(Path(thd_d), Path(pol_d), thd_prefix=args.thd_prefix)
         srrip_gm = data["srrip_gm"]
         print(f"  SRRIP  : {srrip_gm:+.3f}%" if srrip_gm is not None else "  SRRIP: missing")
         for thd in THD_VALUES:
@@ -432,7 +433,7 @@ def main():
                 all_vals.append(gm)
 
         major_pos.append(g0 + (len(THD_VALUES) - 1) * bar_w / 2)
-        major_lbl.append("srrip_live")
+        major_lbl.append(args.thd_prefix)
 
         # ── Group 2: SRRIP reference ───────────────────────────────────────────
         g1 = len(THD_VALUES) * bar_w + group_gap
@@ -514,7 +515,8 @@ def main():
     # ── Legend ─────────────────────────────────────────────────────────────────
     thd_patches = [
         mpatches.Patch(facecolor=shade(SRRIP_LIVE_COLOR, i, len(THD_VALUES)),
-                       edgecolor="black", linewidth=0.4, label=f"thd={thd}")
+                       edgecolor="black", linewidth=0.4,
+                       label=f"{args.thd_prefix} thd={thd}")
         for i, thd in enumerate(THD_VALUES)
     ]
     srrip_patch   = mpatches.Patch(facecolor=SRRIP_COLOR,   edgecolor="black",
@@ -526,7 +528,7 @@ def main():
                framealpha=0.9, bbox_to_anchor=(0.5, 0.0))
 
     fig.suptitle(
-        "IPC speedup vs. LRU as a function of srrip_live threshold",
+        f"IPC speedup vs. LRU as a function of {args.thd_prefix} threshold",
         fontsize=11, fontweight="bold",
     )
     fig.tight_layout(rect=[0, 0.05, 1, 1])

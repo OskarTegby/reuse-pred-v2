@@ -66,7 +66,9 @@ if __name__ == '__main__':
 
     if not args.files:
         print("No configuration specified. Building default ChampSim with no prefetching.")
-    config_files = itertools.product(*(config.util.wrap_list(parse_file(f)) for f in reversed(args.files)), ({},))
+    _cfg_args = list(config.util.wrap_list(parse_file(f)) for f in reversed(args.files))
+    _cfg_args.append(({},))
+    config_files = itertools.product(*_cfg_args)
 
     parsed_test = config.parse.parse_config({'executable_name': '000-test-main'}, module_dir=[os.path.join(test_root, 'cpp', 'modules')], compile_all_modules=True)
 

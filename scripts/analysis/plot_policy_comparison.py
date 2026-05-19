@@ -197,6 +197,86 @@ def _arith_mean(values_by_wl: dict, weights=None) -> "float | None":
 
 # ── Plot helpers ──────────────────────────────────────────────────────────────
 
+# Linestyle mapped from hatch so LLC-only vs LLC+STLB variants remain distinct.
+_HATCH_LS = {
+    "":   "-",
+    "//": "--",
+    "xx": "-.",
+    "..": ":",
+    "oo": (0, (3, 1, 1, 1, 1, 1)),  # dash-dot-dot
+}
+_MARKERS = ["o", "s", "^", "D", "v", "p", "<", ">", "h", "P", "X", "H", "d", "+", "x"]
+
+
+def _line_group(ax, workloads, policy_names, matrix, ylabel, title,
+                baseline_val=1.0, ref_line=True, weights=None,
+                policy_keys=None, agg_fn=None):
+    """Line+marker chart — one line per policy, one x-position per workload.
+
+    Replaces _bar_group for per-workload views where many policies would produce
+    unreadably thin bars.  Geomean is drawn as a larger standalone marker after
+    a visual gap.
+    """
+    if policy_keys is None:
+        policy_keys = policy_names
+    n_policies = len(policy_names)
+    n_wl = len(workloads)
+
+    _agg = agg_fn or benchmark_geomean
+    gm = [_agg({workloads[w]: matrix[p][w] for w in range(n_wl)}, weights)
+          for p in range(n_policies)]
+
+    gap = 1.5
+    x_wl = np.arange(n_wl)
+    x_gm = n_wl + gap
+
+    _fallback = ["#888888", "#AAAAAA", "#CCCCCC", "#444444", "#666666"]
+    for pi, (pname, pkey) in enumerate(zip(policy_names, policy_keys)):
+        color = POLICY_COLORS.get(pkey, _fallback[pi % len(_fallback)])
+        hatch = POLICY_HATCHES.get(pkey, "")
+        ls    = _HATCH_LS.get(hatch, "-")
+        mk    = _MARKERS[pi % len(_MARKERS)]
+        ys    = [matrix[pi][w] if matrix[pi][w] is not None else np.nan
+                 for w in range(n_wl)]
+        ax.plot(x_wl, ys, color=color, linestyle=ls, marker=mk,
+                markersize=5, linewidth=1.2, label=pname, alpha=0.9,
+                markeredgecolor="white", markeredgewidth=0.4)
+        if gm[pi] is not None:
+            ax.plot(x_gm, gm[pi], color=color, linestyle="none",
+                    marker=mk, markersize=9,
+                    markeredgecolor="black", markeredgewidth=0.8)
+
+    if ref_line:
+        ax.axhline(baseline_val, color="black", linewidth=0.8,
+                   linestyle="--", zorder=0)
+    ax.axvline(n_wl + gap / 2, color="gray", linewidth=0.8,
+               linestyle=":", zorder=0)
+
+    all_x = list(x_wl) + [x_gm]
+    all_l = list(workloads) + ["Geomean"]
+    ax.set_xticks(all_x)
+    ax.set_xticklabels(all_l, rotation=35, ha="right", fontsize=8)
+    for tick, lbl in zip(ax.get_xticklabels(), all_l):
+        if lbl == "Geomean":
+            tick.set_fontweight("bold")
+
+    all_vals = [v for row in matrix for v in row if v is not None]
+    all_vals += [g for g in gm if g is not None]
+    if ref_line:
+        all_vals.append(baseline_val)
+    if all_vals:
+        lo, hi = min(all_vals), max(all_vals)
+        span = max(hi - lo, 1e-6)
+        ax.set_ylim(lo - 0.15 * span, hi + 0.15 * span)
+
+    ax.set_ylabel(ylabel, fontsize=10)
+    ax.set_title(title, fontsize=13)
+    ax.set_xlim(-0.7, x_gm + 0.7)
+    ax.legend(loc="upper right", fontsize=8, framealpha=0.85, ncol=2)
+    ax.grid(axis="y", alpha=0.3, linewidth=0.5)
+    ax.grid(axis="x", alpha=0.15, linewidth=0.5)
+
+
 def _iqr_ylim(vals, ref=None, pad=0.08):
     """Tight y-limits via IQR outlier clipping.  ref value is always included."""
     clean = sorted(v for v in vals if v is not None and np.isfinite(v))
@@ -332,6 +412,8 @@ def main():
                     help="Suffix appended to every policy dir name (e.g. '_paper_pref')")
     ap.add_argument("--exclude", nargs="*", default=[],
                     help="Exclude policies whose name contains any of these substrings (e.g. --exclude drrip)")
+    ap.add_argument("--max-workloads", type=int, default=None,
+                    help="Maximum number of per-workload groups to show (default: show all).")
     ap.add_argument("--weights-dir", default=None,
                     help="Directory with per-benchmark simpoint weight files. "
                          "Default: auto-detected from known location.")
@@ -345,16 +427,32 @@ def main():
     # Discover policies in a fixed display order
     # lru is the baseline — shown as a reference line, not as a redundant bar
     sfx = args.suffix  # e.g. "" or "_paper_pref"
-    ordered = ["srrip", "srrip_live", "lru_mid", "lru_dp_only",
-               "lru_pred", "srrip_pred", "lru_mid_pred"]
+    ordered = ["srrip", "srrip_both", "lru_mid", "lru_mid_both", "ipv", "ipv_both",
+               "srrip_live", "stlb_srrip_live", "srrip_live_both",
+               "ipv_live", "ipv_live_both",
+               "stlb_ipv", "stlb_ipv_live",
+               "lru_dp_only", "lru_pred", "srrip_pred", "lru_mid_pred",
+               "stlb_srrip", "stlb_lru_mid"]
     display_labels = {
-        "srrip":        "srrip",
-        "srrip_live":   "srrip_live",
-        "lru_mid":      "lru_mid",
-        "lru_dp_only":  "lru+dp",
-        "lru_pred":     "lru+pred",
-        "srrip_pred":   "srrip+pred",
-        "lru_mid_pred": "lru_mid+pred",
+        "srrip":           "SRRIP",
+        "srrip_both":      "SRRIP (LLC+STLB)",
+        "srrip_live":      "srrip_live (LLC)",
+        "lru_mid":         "lru_mid",
+        "lru_mid_both":    "lru_mid (LLC+STLB)",
+        "ipv":             "IPV (LLC)",
+        "ipv_both":        "IPV (LLC+STLB)",
+        "ipv_live":        "ipv_live (LLC)",
+        "ipv_live_both":   "ipv_live (LLC+STLB)",
+        "stlb_ipv":        "IPV (STLB)",
+        "stlb_ipv_live":   "ipv_live (STLB)",
+        "srrip_live_both": "srrip_live (LLC+STLB)",
+        "lru_dp_only":     "lru+dp",
+        "lru_pred":        "lru+pred",
+        "srrip_pred":      "srrip+pred",
+        "lru_mid_pred":    "lru_mid+pred",
+        "stlb_srrip":      "STLB-SRRIP",
+        "stlb_srrip_live": "srrip_live (STLB)",
+        "stlb_lru_mid":    "STLB-lru_mid",
     }
 
     present = [p for p in ordered
@@ -417,13 +515,14 @@ def main():
     print(f"  {len(workloads_agg)} benchmarks/workloads after simpoint aggregation")
 
     n_total = len(workloads_agg)
+    max_wl  = args.max_workloads if args.max_workloads is not None else n_total
 
-    # Select diverse subset: feature = IPC speedup vector across all policies
-    if n_total > MAX_WORKLOADS:
+    # Optionally select a diverse subset
+    if n_total > max_wl:
         items_agg = list(range(n_total))
         def _fvec(wi):
             return [ipc_matrix_agg[pi][wi] or 1.0 for pi in range(len(present))]
-        sel = _diverse_select(items_agg, _fvec, MAX_WORKLOADS)
+        sel = _diverse_select(items_agg, _fvec, max_wl)
     else:
         sel = list(range(n_total))
 
@@ -441,15 +540,18 @@ def main():
     out_stem = out_obj.stem
 
     n_shown = len(workloads_sorted)
+    title_suffix = (f"({n_shown} most diverse of {n_total}; geomean over all)"
+                    if n_shown < n_total else f"({n_total} benchmarks/workloads)")
     fig_w = max(10, n_shown * 0.75 + 3)
     fig, ax = plt.subplots(figsize=(fig_w, 5))
-    _bar_group(ax, workloads_sorted, policy_labels, ipc_matrix_sorted,
-               ylabel=f"IPC speedup vs {args.baseline}",
-               title=(f"IPC speedup vs {args.baseline} — {suite_label}\n"
-                      f"({n_shown} most diverse of {n_total}; geomean over all)"),
-               baseline_val=1.0, ref_line=True, weights=weights,
-               policy_keys=present)
-    ax.yaxis.set_major_formatter(mticker.FormatStrFormatter("%.2f"))
+    _line_group(ax, workloads_sorted, policy_labels, ipc_matrix_sorted,
+                ylabel=f"IPC speedup vs {args.baseline} (%)",
+                title=(f"IPC speedup vs {args.baseline} — {suite_label}\n"
+                       f"{title_suffix}"),
+                baseline_val=1.0, ref_line=True, weights=weights,
+                policy_keys=present)
+    ax.yaxis.set_major_formatter(mticker.FuncFormatter(
+        lambda x, _: f"{(x - 1) * 100:+.1f}%"))
     fig.tight_layout()
     ipc_out = str(out_dir / f"{out_stem}_ipc.png")
     fig.savefig(ipc_out, dpi=200, bbox_inches="tight")
@@ -492,20 +594,20 @@ def main():
     llc_matrix  = [[row[i] for i in order] for row in llc_matrix_agg]
 
     fig, axes = plt.subplots(2, 1, figsize=(fig_w, 9))
-    _bar_group(axes[0], workloads_sorted, policy_labels, stlb_matrix,
-               ylabel="STLB MPKI reduction vs LRU (%)",
-               title=(f"STLB MPKI reduction vs LRU — {suite_label}\n"
-                      f"({n_shown} most diverse of {n_total})"),
-               baseline_val=0.0, ref_line=True, weights=weights,
-               policy_keys=present, agg_fn=_arith_mean)
+    _line_group(axes[0], workloads_sorted, policy_labels, stlb_matrix,
+                ylabel="STLB MPKI reduction vs LRU (%)",
+                title=(f"STLB MPKI reduction vs LRU — {suite_label}\n"
+                       f"({n_shown} most diverse of {n_total})"),
+                baseline_val=0.0, ref_line=True, weights=weights,
+                policy_keys=present, agg_fn=_arith_mean)
     axes[0].yaxis.set_major_formatter(mticker.FormatStrFormatter("%.1f%%"))
 
-    _bar_group(axes[1], workloads_sorted, policy_labels, llc_matrix,
-               ylabel="LLC MPKI reduction vs LRU (%)",
-               title=(f"LLC MPKI reduction vs LRU — {suite_label}\n"
-                      f"({n_shown} most diverse of {n_total})"),
-               baseline_val=0.0, ref_line=True, weights=weights,
-               policy_keys=present, agg_fn=_arith_mean)
+    _line_group(axes[1], workloads_sorted, policy_labels, llc_matrix,
+                ylabel="LLC MPKI reduction vs LRU (%)",
+                title=(f"LLC MPKI reduction vs LRU — {suite_label}\n"
+                       f"({n_shown} most diverse of {n_total})"),
+                baseline_val=0.0, ref_line=True, weights=weights,
+                policy_keys=present, agg_fn=_arith_mean)
     axes[1].yaxis.set_major_formatter(mticker.FormatStrFormatter("%.1f%%"))
 
     fig.tight_layout()

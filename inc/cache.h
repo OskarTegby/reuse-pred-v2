@@ -20,11 +20,13 @@
 #include <array>
 #include <bitset>
 #include <cassert>
+#include <climits>
 #include <deque>
 #include <functional>
 #include <list>
 #include <map>
 #include <string>
+#include <string_view>
 #include <vector>
 
 #include "champsim.h"
@@ -67,6 +69,12 @@ struct cache_stats {
   uint64_t bypass_incorrect          = 0;
   uint64_t bypass_correct         = 0;
   uint64_t bypass_shadow_overflow = 0;
+
+  // Weighted-bhist DoA eviction breakdown (CBPRED_WEIGHTED=1 only).
+  // normal_inserts:      class=mostly_alive at insert → bhist.doa += W_NORMAL
+  // pessimistic_inserts: class=doa/mostly_dead at insert → bhist.doa += W_LOW
+  uint64_t cbpred_doa_normal_inserts      = 0;
+  uint64_t cbpred_doa_pessimistic_inserts = 0;
 
   uint64_t phist_lookups = 0, phist_hits = 0;  // dpPred prediction queries (DPPRED=1 only)
   uint64_t bhist_lookups = 0, bhist_hits = 0;  // cbPred prediction queries (CBPRED=1 only)
@@ -148,6 +156,8 @@ class CACHE : public champsim::operable, public MemoryRequestConsumer, public Me
     bool accessed = false; // set on hit; read and cleared on eviction
     bool dp = false;       // dead-page bit: set on LLC fill when the block's PFN is in the PFQ;
                            // gates accessed tracking and bHIST updates (cbPred only)
+    uint8_t insert_liveness_class = 2; // liveness_class at insertion time (2 = mostly_alive default);
+                                       // used by cbpred_weighted to scale bhist evidence
 
     uint64_t address = 0;
     uint64_t v_address = 0;
@@ -209,8 +219,23 @@ class CACHE : public champsim::operable, public MemoryRequestConsumer, public Me
   // Per-instance state
   bool dppred = false;
   bool cbpred = false;
+  bool     cbpred_weighted     = false; // weight bhist updates by insertion quality (CBPRED_WEIGHTED=1)
+  bool     cbpred_no_pfq       = false; // bypass on bhist confidence alone; skip PFQ membership check (CBPRED_NO_PFQ=1)
+  bool     cbpred_trace        = false;        // log bypass threshold crossings to stderr (CBPRED_TRACE=1)
+  uint64_t cbpred_trace_addr   = UINT64_MAX;   // full per-block trace for one address (CBPRED_TRACE_ADDR=<hex>)
+  bool     tracing_cbpred()    const { return cbpred_trace || cbpred_trace_addr != UINT64_MAX; }
+  uint64_t cbpred_w_normal     = 2;     // bhist.doa increment for DoA eviction after normal insertion
+  uint64_t cbpred_w_low        = 1;     // bhist.doa increment for DoA eviction after pessimistic insertion
+  uint64_t cbpred_w_mispredict = 2;     // bhist.doa decrement per detected bypass misprediction
   uint64_t pconf_thd = 6; // phist confidence threshold
   uint64_t bconf_thd = 6; // bhist confidence threshold
+  // Bypass-debt adaptive gate: accumulated mispredict penalty raises the effective bypass threshold.
+  // Correct bypasses drain the debt; mispredictions grow it.  When BYPASS_DEBT_SCALE > 0:
+  //   effective_bconf = bconf_thd + bypass_debt / bypass_debt_scale
+  // This makes the predictor self-suppressing when its recent accuracy is poor.
+  uint64_t bypass_debt       = 0;  // running mispredict penalty (resets on warmup end)
+  uint64_t bypass_debt_cap   = 0;  // max debt = max threshold increase (0 = disabled)
+  uint64_t bypass_debt_scale = 0;  // 0 = feature disabled; 1+ = divisor for debt → threshold
   uint64_t mid_thd        = 1;     // min DoA-or-mostly-dead evictions before mid-insertion triggers
   bool     mid_promote_on_hit = false; // promote mid-inserted blocks to MRU on hit (MID_PROMOTE=1)
   uint64_t st_size    = 2;    // shadow table capacity
@@ -282,6 +307,9 @@ class CACHE : public champsim::operable, public MemoryRequestConsumer, public Me
   void record_pc_liveness(const BLOCK& victim, liveness_class lv);       // accumulate per-PC liveness event counts
   bool needs_mid_insertion(uint64_t full_addr, uint64_t ip) const;        // true → insert/refresh at set midpoint
   liveness_class predict_liveness(uint64_t full_addr, uint64_t ip) const; // 3-way insertion prediction for ipv_live
+  void trace_cbpred_event(std::string_view tag, uint64_t block_addr,
+                          uint64_t doa_before, uint64_t doa_after,
+                          uint8_t insert_class = 2) const;               // stderr trace (CBPRED_TRACE=1 only)
 
 public:
   struct NonTranslatingQueues : public champsim::operable {
