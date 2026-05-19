@@ -45,12 +45,18 @@ from spec_weights import benchmark_name, load_spec_weights
 
 _ALL_POLICIES = [
     ("srrip",            "SRRIP"),
+    ("srrip_both",       "SRRIP (LLC+STLB)"),
     ("lru_mid",          "lru_mid"),
-    ("ipv",              "IPV"),
+    ("lru_mid_both",     "lru_mid (LLC+STLB)"),
+    ("ipv",              "IPV (LLC)"),
+    ("ipv_both",         "IPV (LLC+STLB)"),
     ("srrip_live",       "srrip_live (LLC)"),
     ("stlb_srrip_live",  "srrip_live (STLB)"),
     ("srrip_live_both",  "srrip_live (LLC+STLB)"),
-    ("ipv_live",         "ipv_live"),
+    ("ipv_live",         "ipv_live (LLC)"),
+    ("ipv_live_both",    "ipv_live (LLC+STLB)"),
+    ("stlb_ipv",         "IPV (STLB)"),
+    ("stlb_ipv_live",    "ipv_live (STLB)"),
     ("lru_dp_only",      "lru+dp"),
     ("lru_pred",         "lru+pred"),
     ("srrip_pred",       "SRRIP+pred"),
@@ -218,69 +224,72 @@ def suite_mpki_reductions(suite_dir: Path, policies: list[str],
 # ── Plot ──────────────────────────────────────────────────────────────────────
 
 def plot(suite_labels, suite_speedup_rows, out_path: Path):
+    """Grouped bar chart: one group per policy, one bar per suite.
+
+    Policies sorted descending by their mean speedup across suites.
+    Each bar shows the per-suite benchmark-weighted geomean IPC speedup vs LRU.
     """
-    suite_speedup_rows : list of { policy: speedup_or_None }, one per suite.
-    An extra "Overall" group is appended using geomean across all suites.
-    """
-    all_labels = suite_labels + ["Overall"]
+    n_suites = len(suite_labels)
 
-    # Overall geomean across suites for each policy
-    overall = {}
-    for pol in POLICIES:
-        vals = [row.get(pol) for row in suite_speedup_rows if row.get(pol) is not None]
-        overall[pol] = geomean(vals)
-    all_rows = suite_speedup_rows + [overall]
+    # Find policies with data in at least one suite
+    has_data = [i for i in range(len(POLICIES))
+                if any(row.get(POLICIES[i]) is not None for row in suite_speedup_rows)]
 
-    n_groups  = len(all_labels)
-    n_pol     = len(POLICIES)
-    group_w   = 0.8
-    bar_w     = group_w / n_pol
-    x_groups  = np.arange(n_groups)
+    # Sort by mean speedup across suites (descending)
+    def _mean_speedup(pol_idx):
+        vals = [suite_speedup_rows[si].get(POLICIES[pol_idx])
+                for si in range(n_suites)
+                if suite_speedup_rows[si].get(POLICIES[pol_idx]) is not None]
+        return np.mean(vals) if vals else 1.0
 
-    fig, ax = plt.subplots(figsize=(max(8, n_groups * 2.5 + 2), 5))
+    order = sorted(has_data, key=_mean_speedup, reverse=True)
+    pol_s    = [POLICIES[i]       for i in order]
+    labels_s = [POLICY_LABELS[i]  for i in order]
+    colors_s = [POLICY_COLORS[i]  for i in order]
+    hatches_s= [POLICY_HATCHES[i] for i in order]
 
-    for pi, (pol, label, color, hatch) in enumerate(
-            zip(POLICIES, POLICY_LABELS, POLICY_COLORS, POLICY_HATCHES)):
-        offsets = (np.arange(n_pol) - (n_pol - 1) / 2) * bar_w
-        x_pos   = x_groups + offsets[pi]
-        heights = [((row.get(pol) or 1.0) - 1.0) * 100 for row in all_rows]
-        bars = ax.bar(x_pos, heights, bar_w * 0.92,
-                      color=color, edgecolor="black", linewidth=0.5,
-                      hatch=hatch, label=label, zorder=3)
+    n_pol = len(pol_s)
+    # Within each policy group, one bar per suite (hatched to distinguish)
+    suite_hatches = ["", "//", ".."]
+    bar_w = max(0.10, min(0.25, 0.75 / n_suites))
+    step  = bar_w + 0.02
+    offsets = [(j - (n_suites - 1) / 2) * step for j in range(n_suites)]
+    x = np.arange(n_pol)
 
-        # Value label above each bar
-        for bar, h, row in zip(bars, heights, all_rows):
-            if row.get(pol) is not None:
-                ax.text(bar.get_x() + bar.get_width() / 2,
-                        bar.get_height() + 0.05,
-                        f"{h:+.1f}%",
-                        ha="center", va="bottom", fontsize=7, rotation=90)
+    fig, ax = plt.subplots(figsize=(max(8, n_pol * (n_suites * 0.35 + 0.3) + 2), 5))
 
-    # Reference line at 0% (= LRU baseline)
+    for si, (slabel, row, shatch) in enumerate(zip(suite_labels, suite_speedup_rows,
+                                                    suite_hatches)):
+        for pi, (pol, color, phatch) in enumerate(zip(pol_s, colors_s, hatches_s)):
+            h = (row.get(pol) - 1.0) * 100 if row.get(pol) is not None else None
+            if h is None:
+                continue
+            label = slabel if pi == 0 else None
+            ax.bar(x[pi] + offsets[si], h, bar_w,
+                   color=color, hatch=phatch + shatch,
+                   edgecolor="black", linewidth=0.5,
+                   label=label, zorder=3)
+            yoff = 0.03 if h >= 0 else -0.03
+            ax.text(x[pi] + offsets[si], h + yoff,
+                    f"{h:+.1f}%", ha="center",
+                    va="bottom" if h >= 0 else "top",
+                    fontsize=6, rotation=90)
+
     ax.axhline(0.0, color="black", linewidth=0.8, linestyle="--", zorder=2)
 
-    # Separator before Overall group
-    ax.axvline(n_groups - 1 - 0.5, color="gray", linewidth=0.8, linestyle=":", zorder=1)
-
-    # y-axis zoom
-    all_vals = [((row.get(pol) or 1.0) - 1.0) * 100
-                for row in all_rows for pol in POLICIES if row.get(pol) is not None]
-    all_vals.append(0.0)
+    all_vals = [(row.get(p) - 1.0) * 100 for row in suite_speedup_rows
+                for p in pol_s if row.get(p) is not None] + [0.0]
     lo, hi = min(all_vals), max(all_vals)
     span = max(hi - lo, 1e-4)
-    ax.set_ylim(lo - 0.35 * span, hi + 0.45 * span)  # extra headroom for labels
+    ax.set_ylim(lo - 0.12 * span, hi + 0.55 * span)
 
-    ax.set_xticks(x_groups)
-    ax.set_xticklabels(all_labels, fontsize=10)
-    for tick, lbl in zip(ax.get_xticklabels(), all_labels):
-        if lbl == "Overall":
-            tick.set_fontweight("bold")
-
+    ax.set_xticks(x)
+    ax.set_xticklabels(labels_s, rotation=40, ha="right", fontsize=9)
     ax.set_ylabel("IPC speedup vs LRU (%)", fontsize=11)
-    ax.set_title("IPC speedup vs LRU — per benchmark suite", fontsize=11)
-    ax.legend(fontsize=9, loc="upper right", framealpha=0.85, ncol=2)
-    ax.yaxis.set_major_formatter(mticker.FormatStrFormatter("%+.1f%%"))
+    ax.set_title("IPC speedup vs LRU — geomean per suite and policy", fontsize=10)
+    ax.yaxis.set_major_formatter(mticker.FormatStrFormatter("%+.2f%%"))
     ax.grid(axis="y", alpha=0.25, linewidth=0.5)
+    ax.legend(title="Suite", fontsize=8, title_fontsize=8, loc="upper right")
 
     fig.tight_layout()
     out_path.parent.mkdir(exist_ok=True)
@@ -290,9 +299,10 @@ def plot(suite_labels, suite_speedup_rows, out_path: Path):
 
 
 def plot_mpki(suite_labels, stlb_rows, llc_rows, out_path: Path):
-    """Two-panel figure: STLB (left) and LLC (right) mean MPKI reduction % vs LRU."""
-    all_labels = suite_labels + ["Overall"]
+    """Two-panel figure: STLB (left) and LLC (right) mean MPKI reduction % vs LRU.
 
+    Shows overall mean across suites only, sorted descending by STLB reduction.
+    """
     overall_stlb, overall_llc = {}, {}
     for pol in POLICIES:
         s_vals = [r.get(pol) for r in stlb_rows if r.get(pol) is not None]
@@ -300,44 +310,45 @@ def plot_mpki(suite_labels, stlb_rows, llc_rows, out_path: Path):
         overall_stlb[pol] = float(np.mean(s_vals)) if s_vals else None
         overall_llc[pol]  = float(np.mean(l_vals)) if l_vals else None
 
-    all_stlb = stlb_rows + [overall_stlb]
-    all_llc  = llc_rows  + [overall_llc]
+    # Drop policies with no data in either cache metric
+    has_data = [i for i in range(len(POLICIES))
+                if overall_stlb.get(POLICIES[i]) is not None
+                or overall_llc.get(POLICIES[i]) is not None]
 
-    n_groups = len(all_labels)
-    n_pol    = len(POLICIES)
-    bar_w    = 0.8 / n_pol
-    x_groups = np.arange(n_groups)
+    # Sort descending by STLB reduction (primary); LLC reduction as tiebreak
+    order = sorted(has_data,
+                   key=lambda i: (overall_stlb.get(POLICIES[i]) or 0.0,
+                                  overall_llc.get(POLICIES[i])  or 0.0),
+                   reverse=True)
+    pol_s    = [POLICIES[i]       for i in order]
+    labels_s = [POLICY_LABELS[i]  for i in order]
+    colors_s = [POLICY_COLORS[i]  for i in order]
+    hatches_s= [POLICY_HATCHES[i] for i in order]
 
-    fig, axes = plt.subplots(1, 2, figsize=(max(8, n_groups * 2.5 + 2) * 1.6, 5),
+    x = np.arange(len(pol_s))
+    fig, axes = plt.subplots(1, 2, figsize=(max(8, len(pol_s) * 0.85 + 2) * 1.6, 5),
                              sharey=False)
 
-    for ax, rows, cache in zip(axes, [all_stlb, all_llc], ["STLB", "LLC"]):
-        for pi, (pol, label, color, hatch) in enumerate(
-                zip(POLICIES, POLICY_LABELS, POLICY_COLORS, POLICY_HATCHES)):
-            offsets = (np.arange(n_pol) - (n_pol - 1) / 2) * bar_w
-            x_pos   = x_groups + offsets[pi]
-            heights = [r.get(pol) or 0 for r in rows]
-            bars = ax.bar(x_pos, heights, bar_w * 0.92,
-                          color=color, edgecolor="black", linewidth=0.5,
-                          hatch=hatch, label=label, zorder=3)
-            for bar, h, row in zip(bars, heights, rows):
-                if row.get(pol) is not None:
-                    va   = "bottom" if h >= 0 else "top"
-                    yoff = 0.15 if h >= 0 else -0.15
-                    ax.text(bar.get_x() + bar.get_width() / 2,
-                            bar.get_height() + yoff,
-                            f"{h:+.1f}%", ha="center", va=va,
-                            fontsize=7, rotation=90)
+    for ax, overall, cache in zip(axes, [overall_stlb, overall_llc], ["STLB", "LLC"]):
+        heights = [overall.get(p) or 0.0 for p in pol_s]
+        bars = ax.bar(x, heights, 0.72, edgecolor="black", linewidth=0.5, zorder=3)
+        for bar, color, hatch in zip(bars, colors_s, hatches_s):
+            bar.set_facecolor(color)
+            bar.set_hatch(hatch)
+
+        for bar, h in zip(bars, heights):
+            va   = "bottom" if h >= 0 else "top"
+            yoff = 0.05 if h >= 0 else -0.05
+            ax.text(bar.get_x() + bar.get_width() / 2,
+                    bar.get_height() + yoff,
+                    f"{h:+.1f}%", ha="center", va=va,
+                    fontsize=8, rotation=90)
 
         ax.axhline(0, color="black", linewidth=0.8, linestyle="--", zorder=2)
-        ax.axvline(n_groups - 1 - 0.5, color="gray", linewidth=0.8,
-                   linestyle=":", zorder=1)
-        all_vals = [r.get(pol) for r in rows for pol in POLICIES
-                    if r.get(pol) is not None] + [0]
-        lo, hi = min(all_vals), max(all_vals)
+        valid = heights + [0]
+        lo, hi = min(valid), max(valid)
         span = max(hi - lo, 1e-4)
 
-        # Use symlog when the range spans more than one order of magnitude
         if hi - lo > 200:
             ax.set_yscale("symlog", linthresh=10)
             ax.yaxis.set_major_formatter(mticker.FuncFormatter(
@@ -346,14 +357,11 @@ def plot_mpki(suite_labels, stlb_rows, llc_rows, out_path: Path):
             ax.set_ylim(lo - 0.15 * span, hi + 0.55 * span)
             ax.yaxis.set_major_formatter(mticker.FormatStrFormatter("%.1f%%"))
 
-        ax.set_xticks(x_groups)
-        ax.set_xticklabels(all_labels, fontsize=10)
-        for tick, lbl in zip(ax.get_xticklabels(), all_labels):
-            if lbl == "Overall":
-                tick.set_fontweight("bold")
+        ax.set_xticks(x)
+        ax.set_xticklabels(labels_s, rotation=40, ha="right", fontsize=9)
         ax.set_ylabel("MPKI reduction vs LRU (%)", fontsize=11)
-        ax.set_title(f"{cache} MPKI reduction vs LRU — per suite", fontsize=11)
-        ax.legend(fontsize=9, loc="upper right", framealpha=0.85, ncol=2)
+        suite_str = " + ".join(suite_labels)
+        ax.set_title(f"{cache} MPKI reduction vs LRU — mean across {suite_str}", fontsize=10)
         ax.grid(axis="y", alpha=0.25, linewidth=0.5)
 
     fig.tight_layout()

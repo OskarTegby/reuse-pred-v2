@@ -242,28 +242,6 @@ def _draw_panel(ax, panel_metric, driver_comps, flat_comps,
                 ax.plot(x, 0.0, "o", color=col, ms=7, zorder=5,
                         markeredgecolor="white", markeredgewidth=0.6)
 
-                # Pre-compute deltas so we can anchor the label outside any
-                # nearby marker rather than just offsetting from y=0.
-                dh_pre = (half_val - base_val) if half_val is not None else 0.0
-                dd_pre = (dbl_val  - base_val) if dbl_val  is not None else 0.0
-
-                # Middle suite (si==1) goes below; outer two go above.
-                # Anchor at the outer edge of whichever marker is closest to
-                # the label so the annotation never overlaps a symbol.
-                below = (si == 1)
-                if below:
-                    anchor_y = min(0.0, dh_pre, dd_pre)
-                    y_off, va = -14, "top"
-                else:
-                    anchor_y = max(0.0, dh_pre, dd_pre)
-                    y_off, va = 14, "bottom"
-                ax.annotate(f"{base_val:.1f}%", xy=(x, anchor_y),
-                            xytext=(0, y_off), textcoords="offset points",
-                            ha="center", va=va,
-                            fontsize=8.5, color=col, fontweight="bold",
-                            bbox=dict(boxstyle="round,pad=0.18", fc="white",
-                                      ec=col, linewidth=0.6, alpha=0.9))
-
                 if half_val is not None:
                     dh = half_val - base_val
                     all_delta_vals.append(dh)
@@ -277,6 +255,18 @@ def _draw_panel(ax, panel_metric, driver_comps, flat_comps,
                             linestyle="--")
                     ax.plot(x, dd, "^", color=col, ms=8, zorder=5,
                             markeredgecolor="black", markeredgewidth=0.4)
+
+                # Label staggered above the baseline dot, anchored by a dashed line
+                y_off = 16 + si * 14   # 16 / 30 / 44 pts for suites 0 / 1 / 2
+                ax.annotate(f"{base_val:.1f}%", xy=(x, 0.0),
+                            xytext=(0, y_off), textcoords="offset points",
+                            ha="center", va="bottom",
+                            fontsize=7.5, color=col, fontweight="bold",
+                            bbox=dict(boxstyle="round,pad=0.15", fc="white",
+                                      ec=col, linewidth=0.5, alpha=0.9),
+                            arrowprops=dict(arrowstyle="-", color=col,
+                                            lw=0.8, linestyle="dashed",
+                                            shrinkA=3, shrinkB=4))
             else:
                 # Hollow marker only — visually confirms no effect
                 ax.plot(x, 0.0, "o", color="none", ms=7, zorder=5,
@@ -325,7 +315,7 @@ def _draw_panel(ax, panel_metric, driver_comps, flat_comps,
     else:
         lo, hi = -0.5, 0.5
     span = max(hi - lo, 0.5)
-    ax.set_ylim(lo - 0.20 * span, hi + 0.40 * span)
+    ax.set_ylim(lo - 0.20 * span, hi + 0.45 * span)
 
 
 def plot_delta(data, suite_labels, out_dir: Path):

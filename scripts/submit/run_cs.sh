@@ -21,6 +21,13 @@ export BCONF_THD=${BCONF_THD:-0}
 export MID_THD=${MID_THD:-1}
 export MID_KEY=${MID_KEY:-0}
 export MID_PROMOTE=${MID_PROMOTE:-0}
+export CBPRED_WEIGHTED=${CBPRED_WEIGHTED:-0}
+export CBPRED_NO_PFQ=${CBPRED_NO_PFQ:-0}
+export CBPRED_W_NORMAL=${CBPRED_W_NORMAL:-2}
+export CBPRED_W_LOW=${CBPRED_W_LOW:-1}
+export CBPRED_W_MISPREDICT=${CBPRED_W_MISPREDICT:-2}
+export BYPASS_DEBT_SCALE=${BYPASS_DEBT_SCALE:-0}
+export BYPASS_DEBT_CAP=${BYPASS_DEBT_CAP:-0}
 
 # History-table and queue parameters (read from env by ChampSim)
 export PHIST_HASH=${PHIST_HASH:-1}
@@ -91,6 +98,13 @@ bhist_ways=${BHIST_WAYS}
 repl_pol=${REPL_POL}
 pfq_cap=${PFQ_CAP}
 st_size=${ST_SIZE}
+cbpred_no_pfq=${CBPRED_NO_PFQ}
+cbpred_weighted=${CBPRED_WEIGHTED}
+cbpred_w_normal=${CBPRED_W_NORMAL}
+cbpred_w_low=${CBPRED_W_LOW}
+cbpred_w_mispredict=${CBPRED_W_MISPREDICT}
+bypass_debt_scale=${BYPASS_DEBT_SCALE}
+bypass_debt_cap=${BYPASS_DEBT_CAP}
 warmup=${WARMUP}
 sim=${SIM}
 INFO

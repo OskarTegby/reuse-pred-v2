@@ -5,7 +5,7 @@
 # and predictor-augmented variants, at fixed default thresholds (pconf=6, bconf=6).
 # For a threshold sweep, use sweep_cs.sh instead.
 #
-# Usage: ./sweep_policy.sh {maz|qmm|dpc3|google|test} [--debug] [--warmup N] [--sim N] [--pref] [--paper-pref] [--mid-thd N] [--mid-key addr|pc]
+# Usage: ./sweep_policy.sh {maz|qmm|dpc3|google|gap|ligra|gms|ml|test} [--debug] [--warmup N] [--sim N] [--pref] [--paper-pref] [--mid-thd N] [--mid-key addr|pc]
 #
 # --pref        Also submit the 8 prefetch variants (L1I=next_line_instr, L1D=ip_stride, L2C=spp_dev).
 #               Requires champsim_{policy}_pref binaries built with ./build_all.sh --pref.
@@ -59,7 +59,7 @@ MID_PROMOTE_VAL=0
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    maz|mazumdar|qmm|dpc3|google|test) token="${1,,}"; shift ;;
+    maz|mazumdar|qmm|dpc3|google|gap|ligra|gms|ml|test) token="${1,,}"; shift ;;
     --test)         TEST=1; shift ;;
     --debug)        DEBUG=1; shift ;;
     --no-base)      WITH_BASE=0; shift ;;
@@ -77,13 +77,13 @@ while [[ $# -gt 0 ]]; do
       esac
       shift 2 ;;
     *) echo "Unknown argument: $1" >&2
-       echo "Usage: $0 {maz|qmm|dpc3|google|test} [--test] [--debug] [--no-base] [--pref] [--paper-pref] [--warmup N] [--sim N] [--mid-thd N] [--mid-key addr|pc] [--mid-promote]" >&2
+       echo "Usage: $0 {maz|qmm|dpc3|google|gap|ligra|gms|ml|test} [--test] [--debug] [--no-base] [--pref] [--paper-pref] [--warmup N] [--sim N] [--mid-thd N] [--mid-key addr|pc] [--mid-promote]" >&2
        exit 2 ;;
   esac
 done
 
 if [ -z "$token" ]; then
-  echo "Usage: $0 {maz|qmm|dpc3|google|test} [--test] [--debug] [--no-base] [--pref] [--paper-pref] [--warmup N] [--sim N] [--mid-thd N] [--mid-key addr|pc] [--mid-promote]" >&2
+  echo "Usage: $0 {maz|qmm|dpc3|google|gap|ligra|gms|ml|test} [--test] [--debug] [--no-base] [--pref] [--paper-pref] [--warmup N] [--sim N] [--mid-thd N] [--mid-key addr|pc] [--mid-promote]" >&2
   exit 2
 fi
 
@@ -106,6 +106,22 @@ case "$token" in
   google)
     WARMUP=50000000; SIM=100000000
     TRACE_DIR="${SHARED_TRACES}/Google_Traces_v2";   TRACE_EXT="champsim.gz"
+    [ -z "$MID_KEY_STR" ] && { MID_KEY_STR="pc";   MID_KEY_VAL=1; } ;;
+  gap)
+    WARMUP=50000000; SIM=100000000
+    TRACE_DIR="${PROJECT_ROOT}/trace-files/gap";     TRACE_EXT="trace.gz"
+    [ -z "$MID_KEY_STR" ] && { MID_KEY_STR="pc";   MID_KEY_VAL=1; } ;;
+  ligra)
+    WARMUP=50000000; SIM=100000000
+    TRACE_DIR="${PROJECT_ROOT}/trace-files/ligra";   TRACE_EXT="champsimtrace.xz"
+    [ -z "$MID_KEY_STR" ] && { MID_KEY_STR="pc";   MID_KEY_VAL=1; } ;;
+  gms)
+    WARMUP=50000000; SIM=100000000
+    TRACE_DIR="${PROJECT_ROOT}/trace-files/gms";     TRACE_EXT="gz"
+    [ -z "$MID_KEY_STR" ] && { MID_KEY_STR="pc";   MID_KEY_VAL=1; } ;;
+  ml)
+    WARMUP=50000000; SIM=100000000
+    TRACE_DIR="${PROJECT_ROOT}/trace-files/ml";      TRACE_EXT="champsimtrace.gz"
     [ -z "$MID_KEY_STR" ] && { MID_KEY_STR="pc";   MID_KEY_VAL=1; } ;;
   test)
     WARMUP=25000000; SIM=50000000

@@ -132,6 +132,7 @@ int main(int argc, char** argv)
   std::cout << "Predictor settings:" << std::endl;
   std::cout << "  DPPRED    = " << getenv_str("DPPRED",    "0") << std::endl;
   std::cout << "  CBPRED    = " << getenv_str("CBPRED",    "0") << std::endl;
+  std::cout << "  CBPRED_NO_PFQ = " << getenv_str("CBPRED_NO_PFQ", "0") << std::endl;
   std::cout << "  PCONF_THD = " << getenv_str("PCONF_THD", "6 (default)") << std::endl;
   std::cout << "  BCONF_THD = " << getenv_str("BCONF_THD", "6 (default)") << std::endl;
   std::cout << "  ST_SIZE   = " << getenv_str("ST_SIZE",   "2 (default)") << std::endl;

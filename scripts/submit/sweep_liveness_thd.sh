@@ -27,7 +27,7 @@ THD_OVERRIDE=""
 while [[ $# -gt 0 ]]; do
   case "$1" in
     dpc3|google|qmm|test)        token="${1,,}"; shift ;;
-    srrip_live|ipv_live|pacipv|srrip_live_both)  policy="$1";   shift ;;
+    srrip_live|ipv_live|stlb_ipv_live|ipv_live_both|pacipv|srrip_live_both)  policy="$1";   shift ;;
     --test)    TEST=1; shift ;;
     --debug)   DEBUG=1; shift ;;
     --warmup)  WARMUP_OVERRIDE="$2"; shift 2 ;;
@@ -41,13 +41,13 @@ while [[ $# -gt 0 ]]; do
       shift 2 ;;
     --thd)   THD_OVERRIDE="$2"; shift 2 ;;
     *) echo "Unknown argument: $1" >&2
-       echo "Usage: $0 {dpc3|google|qmm|test} {srrip_live|ipv_live|pacipv|srrip_live_both} [--mid-key addr|pc] [--thd N] [--test] [--debug] [--warmup N] [--sim N]" >&2
+       echo "Usage: $0 {dpc3|google|qmm|test} {srrip_live|ipv_live|stlb_ipv_live|ipv_live_both|pacipv|srrip_live_both} [--mid-key addr|pc] [--thd N] [--test] [--debug] [--warmup N] [--sim N]" >&2
        exit 2 ;;
   esac
 done
 
 if [ -z "$token" ] || [ -z "$policy" ]; then
-  echo "Usage: $0 {dpc3|google|qmm|test} {srrip_live|ipv_live|pacipv|srrip_live_both} [--mid-key addr|pc] [--test] [--debug] [--warmup N] [--sim N]" >&2
+  echo "Usage: $0 {dpc3|google|qmm|test} {srrip_live|ipv_live|stlb_ipv_live|ipv_live_both|pacipv|srrip_live_both} [--mid-key addr|pc] [--test] [--debug] [--warmup N] [--sim N]" >&2
   exit 2
 fi
 

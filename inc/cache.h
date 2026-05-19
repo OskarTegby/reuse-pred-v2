@@ -70,6 +70,12 @@ struct cache_stats {
   uint64_t bypass_correct         = 0;
   uint64_t bypass_shadow_overflow = 0;
 
+  // Weighted-bhist DoA eviction breakdown (CBPRED_WEIGHTED=1 only).
+  // normal_inserts:      class=mostly_alive at insert → bhist.doa += W_NORMAL
+  // pessimistic_inserts: class=doa/mostly_dead at insert → bhist.doa += W_LOW
+  uint64_t cbpred_doa_normal_inserts      = 0;
+  uint64_t cbpred_doa_pessimistic_inserts = 0;
+
   uint64_t phist_lookups = 0, phist_hits = 0;  // dpPred prediction queries (DPPRED=1 only)
   uint64_t bhist_lookups = 0, bhist_hits = 0;  // cbPred prediction queries (CBPRED=1 only)
   uint64_t st_lookups    = 0, st_hits    = 0;  // shadow-table lookups (DPPRED=1 only)
@@ -214,6 +220,7 @@ class CACHE : public champsim::operable, public MemoryRequestConsumer, public Me
   bool dppred = false;
   bool cbpred = false;
   bool     cbpred_weighted     = false; // weight bhist updates by insertion quality (CBPRED_WEIGHTED=1)
+  bool     cbpred_no_pfq       = false; // bypass on bhist confidence alone; skip PFQ membership check (CBPRED_NO_PFQ=1)
   bool     cbpred_trace        = false;        // log bypass threshold crossings to stderr (CBPRED_TRACE=1)
   uint64_t cbpred_trace_addr   = UINT64_MAX;   // full per-block trace for one address (CBPRED_TRACE_ADDR=<hex>)
   bool     tracing_cbpred()    const { return cbpred_trace || cbpred_trace_addr != UINT64_MAX; }
@@ -222,6 +229,13 @@ class CACHE : public champsim::operable, public MemoryRequestConsumer, public Me
   uint64_t cbpred_w_mispredict = 2;     // bhist.doa decrement per detected bypass misprediction
   uint64_t pconf_thd = 6; // phist confidence threshold
   uint64_t bconf_thd = 6; // bhist confidence threshold
+  // Bypass-debt adaptive gate: accumulated mispredict penalty raises the effective bypass threshold.
+  // Correct bypasses drain the debt; mispredictions grow it.  When BYPASS_DEBT_SCALE > 0:
+  //   effective_bconf = bconf_thd + bypass_debt / bypass_debt_scale
+  // This makes the predictor self-suppressing when its recent accuracy is poor.
+  uint64_t bypass_debt       = 0;  // running mispredict penalty (resets on warmup end)
+  uint64_t bypass_debt_cap   = 0;  // max debt = max threshold increase (0 = disabled)
+  uint64_t bypass_debt_scale = 0;  // 0 = feature disabled; 1+ = divisor for debt → threshold
   uint64_t mid_thd        = 1;     // min DoA-or-mostly-dead evictions before mid-insertion triggers
   bool     mid_promote_on_hit = false; // promote mid-inserted blocks to MRU on hit (MID_PROMOTE=1)
   uint64_t st_size    = 2;    // shadow table capacity

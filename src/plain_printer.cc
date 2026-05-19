@@ -120,6 +120,13 @@ void champsim::plain_printer::print(CACHE::stats_type stats)
       stream << std::endl;
     }
 
+    if (stats.name == "LLC" &&
+        (stats.cbpred_doa_normal_inserts + stats.cbpred_doa_pessimistic_inserts > 0)) {
+      stream << stats.name << " CBPRED DOA INSERTS:"
+             << "  normal=" << stats.cbpred_doa_normal_inserts
+             << "  pessimistic=" << stats.cbpred_doa_pessimistic_inserts << std::endl;
+    }
+
     if (stats.name == "cpu0_STLB" || stats.name == "LLC") {
       const auto& s = stats;
       const double total = static_cast<double>(s.evict_total ? s.evict_total : 1);

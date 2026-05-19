@@ -2,16 +2,16 @@
 # sweep_queue_size.sh — PFQ and shadow-table size scaling study.
 #
 # Both structures are FIFO queues; this script scales each independently
-# from its original size upward through powers of 2, plus an effectively
-# infinite reference, keeping the other at its original size while sweeping.
+# from size 1 through 512 (powers of 2) plus an effectively infinite
+# reference, keeping the other at its default size while sweeping.
 #
-#   PFQ sweep  (ST_SIZE=2 fixed):   pfq_8 … pfq_512, pfq_inf   (8 is original)
-#   ST sweep   (PFQ_CAP=8 fixed):   st_2  … st_512,  st_inf    (2 is original)
+#   PFQ sweep  (ST_SIZE=2 fixed):   pfq_1 … pfq_512, pfq_inf   (8 is default)
+#   ST sweep   (PFQ_CAP=8 fixed):   st_1  … st_512,  st_inf    (2 is default)
 #
 # One additional baseline (no predictor) is included as an IPC floor.
 # All configs use hashed history tables (default) at default size (64 ways).
 #
-# Total configs: 1 baseline + 7 PFQ + 1 pfq_inf + 9 ST + 1 st_inf = 19
+# Total configs: 1 baseline + 10 PFQ + 1 pfq_inf + 10 ST + 1 st_inf = 23
 #
 # Usage: ./sweep_queue_size.sh {qmm|dpc3|google|test} [--debug] [--warmup N] [--sim N]
 
@@ -102,15 +102,15 @@ configs=()
 # Baseline: no predictor, default queue sizes
 configs+=("baseline champsim_lru 0 0 6 6 8 2")
 
-# PFQ sweep: scale PFQ from original size (8) upward, keep ST at original (2)
-for log_pfq in 3 4 5 6 7 8 9; do
+# PFQ sweep: scale PFQ from 1 through 512, keep ST at default (2)
+for log_pfq in 0 1 2 3 4 5 6 7 8 9; do
   pfq=$((1 << log_pfq))
   configs+=("pfq_${pfq} champsim_lru 1 1 6 6 ${pfq} 2")
 done
 configs+=("pfq_inf champsim_lru 1 1 6 6 1048576 2")
 
-# ST sweep: scale ST from original size (2) upward, keep PFQ at original (8)
-for log_st in 1 2 3 4 5 6 7 8 9; do
+# ST sweep: scale ST from 1 through 512, keep PFQ at default (8)
+for log_st in 0 1 2 3 4 5 6 7 8 9; do
   st=$((1 << log_st))
   configs+=("st_${st} champsim_lru 1 1 6 6 8 ${st}")
 done

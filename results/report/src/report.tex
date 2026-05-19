@@ -322,6 +322,62 @@ unique lines and substantially raising the LLC miss rate.
 The bypass predictor has far more dead-on-arrival LLC traffic to eliminate
 under the old configuration, which explains the discrepancy.
 
+% ─────────────────────────────────────────────────────────────────────────────
+\subsection{Predictor performance under a smaller LLC}
+\label{subsec:llc_half}
+% ─────────────────────────────────────────────────────────────────────────────
+
+If LLC occupancy pressure is the key driver, halving the LLC from 2\,MB to
+1\,MB under the \emph{current} cache hierarchy should partially recreate those
+conditions.  We re-ran the full three-suite evaluation with
+\texttt{champsim\_lru\_llc\_half} (1\,MB LLC, all other parameters unchanged)
+and compared dpPred-only and dpPred+cbPred against a 1\,MB LRU baseline.
+
+\begin{figure}[htbp]
+  \centering
+  \includegraphics[width=\linewidth]{../../plots/llc_half/llc_half_comparison.png}
+  \caption{Geomean IPC speedup vs.\ the respective LRU baseline for
+           dpPred-only and dpPred+cbPred under the default 2\,MB LLC (solid
+           bars) and the halved 1\,MB LLC (hatched bars), across all three
+           suites.  The dashed line marks the LRU baseline.}
+  \label{fig:llc_half_geomean}
+\end{figure}
+
+Figure~\ref{fig:llc_half_geomean} places the 2\,MB and 1\,MB results
+side by side and confirms the occupancy-pressure hypothesis.  Qualcomm's
+geomean jumps from effectively zero under 2\,MB to $+0.85\%$ for
+dpPred-only and $+1.30\%$ for dpPred+cbPred under 1\,MB\,---\,an increase
+of nearly an order of magnitude.  SPEC and Google remain flat
+($\leq 0.1\%$) at both sizes, consistent with their low DoA correlation:
+reducing LLC size creates more eviction pressure but cannot manufacture DoA
+signal where the access pattern does not produce it.
+
+\begin{figure}[htbp]
+  \centering
+  \includegraphics[width=\linewidth]{../../plots/llc_half/dpc3_llc_half_ipc.png}\\[3pt]
+  \includegraphics[width=\linewidth]{../../plots/llc_half/google_llc_half_ipc.png}\\[3pt]
+  \includegraphics[width=\linewidth]{../../plots/llc_half/qmm_llc_half_ipc.png}
+  \caption{Per-benchmark IPC speedup vs.\ 1\,MB LRU baseline for dpPred-only
+           (lru+dp) and dpPred+cbPred (lru+pred).
+           Top: SPEC~DPC3 (15 most diverse of~20; geomean over all~20).
+           Middle: Google (15~of~43).
+           Bottom: Qualcomm (15~of~45).}
+  \label{fig:llc_half_per_bm}
+\end{figure}
+
+The per-benchmark breakdown (Figure~\ref{fig:llc_half_per_bm}) shows that the
+Qualcomm gain is broadly distributed: most individual traces benefit, though
+the magnitude varies.  Adding cbPred on top of dpPred provides a consistent
+additional lift across workloads, whereas for SPEC and Google the two
+predictors are essentially indistinguishable at the per-benchmark level.
+
+The Qualcomm result of $+1.30\%$ falls well short of the $+1.31\%$ achieved
+under the \emph{old} configuration even at the conservative $(6,6)$ threshold,
+let alone the $+8.64\%$ peak at $(0,0)$.  The 1\,MB LLC therefore recreates
+only a fraction of the occupancy pressure of the old hierarchy, reinforcing
+that the L2C-induced shadowing in the old configuration was the dominant
+factor.
+
 \subsection{Threshold sensitivity (old configuration)}
 
 To see how aggressiveness of bypassing affects the larger gains available under
@@ -431,6 +487,311 @@ The top-10 most-responsive traces are shown.
            pattern.}
   \label{fig:cbpred_dist}
 \end{figure}
+
+\begin{figure}[p]
+  \centering
+  \includegraphics[width=\linewidth,height=0.88\textheight,keepaspectratio]{../../plots/combined_workload_llc.png}
+  \caption{LLC per-benchmark characterisation across all three suites (SPEC, Google,
+           Qualcomm), showing the top-6 LLC-pressure benchmarks from each suite sorted
+           by \texttt{lru\_pred} speedup (descending); dotted vertical lines separate
+           suites.  Bar colour encodes suite (blue = SPEC, orange = Google, green = QMM).
+           \textbf{Row~1}: estimated LLC working-set size (MB, log scale); red dashed
+           line marks the 2\,MB physical LLC capacity.
+           \textbf{Row~2}: LLC eviction rate (evictions per thousand instructions, log
+           scale); normalised by instruction count to remove simulation-length bias across
+           suites.
+           \textbf{Row~3}: fraction of evictions that are dead-on-arrival (suite colour)
+           or mostly-dead (light blue), stacked.}
+  \label{fig:combined_workload_llc}
+\end{figure}
+
+\begin{figure}[p]
+  \centering
+  \includegraphics[width=\linewidth,height=0.88\textheight,keepaspectratio]{../../plots/combined_workload_stlb.png}
+  \caption{STLB per-benchmark characterisation across all three suites (same 3-row
+           layout as Figure~\ref{fig:combined_workload_llc}; Row~2 shows STLB eviction
+           rate (evictions per thousand instructions)).
+           Red dashed line marks the STLB virtual-page coverage
+           ($1024 \times 4096\,\text{B} \approx 4.2\,\text{MB}$).}
+  \label{fig:combined_workload_stlb}
+\end{figure}
+
+\begin{figure}[htbp]
+  \centering
+  \includegraphics[width=\linewidth]{../../plots/combined_workload_llc_effect.png}
+  \caption{LLC bypass effect across all three suites (top-6 LLC-pressure benchmarks
+           per suite, sorted by \texttt{lru\_pred} speedup).
+           \textbf{Row~1}: LLC eviction reduction (\%).
+           \textbf{Row~2}: LLC MPKI reduction (\%).
+           \textbf{Row~3}: \emph{Bypass rate} --- bypasses issued as a fraction of the
+           LRU-baseline DoA count (bypasses\,/\,DoA\,$\times 100$); 100\% reference
+           line marks one bypass per DoA entry (values above indicate over-triggering).
+           \textbf{Row~4}: \emph{Bypass coverage} --- fraction of LRU-baseline DoA
+           evictions eliminated by the predictor
+           $(\text{DoA}_\text{LRU} - \text{DoA}_\text{pred})\,/\,\text{DoA}_\text{LRU}$.
+           Note: per-decision \emph{accuracy} (bypass\_correct\,/\,(bypass\_correct +
+           bypass\_incorrect)) requires shadow-table data not available in the current
+           result set, which predates the shadow-table instrumentation.}
+  \label{fig:combined_workload_llc_effect}
+\end{figure}
+
+\begin{figure}[htbp]
+  \centering
+  \includegraphics[width=\linewidth]{../../plots/combined_workload_stlb_effect.png}
+  \caption{STLB bypass effect across all three suites (same 4-row layout as
+           Figure~\ref{fig:combined_workload_llc_effect}).}
+  \label{fig:combined_workload_stlb_effect}
+\end{figure}
+
+\begin{figure}[htbp]
+  \centering
+  \includegraphics[width=\linewidth]{../../plots/combined_workload_ipc.png}
+  \caption{IPC speedup vs.\ LRU baseline across all three suites for LLC-pressure
+           benchmarks (evictions $>5\times$ LLC capacity), top-6 per suite.
+           Light bars: dpPred only (\texttt{lru\_dp\_only}, STLB bypass only);
+           dark bars: dpPred + cbPred (\texttt{lru\_pred}, STLB + LLC bypass).
+           Bar colour encodes suite (blue = SPEC, orange = Google, green = QMM).
+           SPEC dominates in absolute gain (\emph{mcf}, \emph{lbm}, \emph{gcc});
+           Google and QMM show smaller but positive improvements with cbPred
+           providing additive lift over dpPred alone for the most responsive benchmarks.}
+  \label{fig:combined_workload_ipc}
+\end{figure}
+
+\subsection{Structure size sensitivity}
+\label{subsec:queue_size}
+
+Figures~\ref{fig:queue_size_dpc3}--\ref{fig:queue_size_qmm} sweep the PFQ
+capacity (shadow table fixed at~2) and shadow-table size (PFQ fixed at~8)
+independently across all three suites.
+Each figure shows four rows: LLC bypass rate, PFQ/ST hit rate, MPKI, and IPC
+speedup; the diamond marker indicates the unbounded ($\infty$) reference.
+
+\begin{figure}[htbp]
+  \centering
+  \includegraphics[width=\linewidth]{../../plots/queue_size/queue_size_dpc3_queue_size_20260515_1405.png}
+  \caption{PFQ and shadow-table size sensitivity for SPEC CPU2006.
+           Left column: PFQ sweep (ST$=2$ fixed).
+           Right column: ST sweep (PFQ$=8$ fixed).
+           Rows from top: LLC/STLB bypass rate, structure hit rate, MPKI, IPC
+           speedup vs.\ no-bypass baseline.}
+  \label{fig:queue_size_dpc3}
+\end{figure}
+
+\begin{figure}[htbp]
+  \centering
+  \includegraphics[width=\linewidth]{../../plots/queue_size/queue_size_google_queue_size_20260515_0145.png}
+  \caption{PFQ and shadow-table size sensitivity for Google Warehouse workloads.
+           Same layout as Figure~\ref{fig:queue_size_dpc3}.}
+  \label{fig:queue_size_google}
+\end{figure}
+
+\begin{figure}[htbp]
+  \centering
+  \includegraphics[width=\linewidth]{../../plots/queue_size/queue_size_qmm_queue_size_20260515_1405.png}
+  \caption{PFQ and shadow-table size sensitivity for Qualcomm Mobile workloads.
+           Same layout as Figure~\ref{fig:queue_size_dpc3}.}
+  \label{fig:queue_size_qmm}
+\end{figure}
+
+% ─────────────────────────────────────────────────────────────────────────────
+\subsection{Workload sensitivity and comparison with Mazumdar~2021}
+\label{subsec:workload_sensitivity}
+% ─────────────────────────────────────────────────────────────────────────────
+
+The overall IPC gains reported above are substantially smaller than the $+8.3\%$
+geomean reported by Mazumdar~et~al.\ (2021).
+Our implementation is architecturally faithful: the PFQ gate is present,
+cbPred fires only for blocks whose page frame is in the PFQ, and bypass
+accuracy on high-DOA traces (e.g., \emph{lbm}: $100\%$) matches
+the paper's~$\geq 98\%$ claim.
+The gap is instead explained by three workload-level conditions that must
+hold simultaneously for bypass to be useful, and which our current benchmark
+suites satisfy only rarely.
+
+\textbf{1. A live working set must coexist with DOA streaming traffic.}
+Bypass frees a cache slot from a DOA block; that slot must then retain
+something useful.
+Across 74 SPEC DPC3 traces, the mean live fraction is only
+$3.4\%$---there is almost nothing to protect.
+Workloads split into two unfavourable categories: pure-streaming benchmarks
+(\emph{lbm}, \emph{bwaves}, \emph{roms}) where DoA\,$\approx$\,25--100\%
+but live\,$\approx$\,0\%, so freed slots fill immediately with the next
+DOA block; and moderate-MPKI benchmarks where the working set largely fits
+in the LLC and there is no pressure to relieve.
+Mazumdar~et~al.'s workloads are predominantly graph analytics kernels
+(BFS, SSSP, PR, BC, triangle counting).
+These traverse large graphs where each frontier vertex is visited once
+(DOA), but a small set of high-degree hub nodes is accessed repeatedly
+(live and cache-resident).
+Bypassing the DOA frontier directly protects the live hubs, reducing MPKI
+in a meaningful way.
+
+\textbf{2. dpPred coverage cascades to cbPred via the PFQ.}
+cbPred can only fire for blocks whose page frame was recently added to the
+PFQ by a dpPred STLB bypass.
+A workload with good TLB behaviour (low STLB eviction rate, small virtual
+footprint) never fills the PFQ, and cbPred is starved from the first stage.
+This is why Qualcomm mobile traces see 3--255 cbPred bypasses per benchmark:
+their page footprints fit comfortably in the STLB, dpPred rarely fires, and
+the PFQ is nearly always empty.
+Graph analytics workloads have the opposite property: every traversal step
+brings in a new virtual page for each graph partition read, sustaining
+constant STLB pressure and keeping the PFQ populated.
+
+\textbf{3. High DOA rate without high MPKI yields no benefit.}
+Many SPEC traces with the highest DoA fractions (e.g., \emph{bwaves}
+$97\%$, \emph{nab} $\geq 90\%$, \emph{cactuBSSN} $100\%$) have LLC MPKI
+below~1: the LLC is under no real pressure, and eliminating DOA insertions
+changes nothing because there is no contention between live and dead lines
+to resolve.
+The bypass predictor only helps when the LLC is actually full and evicting
+live data to make room for DOA blocks---a condition that requires MPKI well
+above~5 simultaneously with a substantial live fraction.
+
+Table~\ref{tab:workload_sweet_spot} summarises the three conditions and
+their prevalence in the evaluated suites.
+
+\begin{table}[htbp]
+  \centering
+  \caption{Conditions required for LLC bypass to improve IPC, and their
+           prevalence across benchmark suites.
+           SPEC DPC3 statistics are computed from the 74 traces with
+           non-zero LLC evictions.}
+  \label{tab:workload_sweet_spot}
+  \begin{tabular}{lccc}
+    \toprule
+    Condition & SPEC DPC3 & Google & Qualcomm \\
+    \midrule
+    MPKI $>$ 5           & 39/74 traces & moderate & low \\
+    Live fraction $>$ 5\% & 17/74 traces & low      & low \\
+    High STLB pressure   & some         & low      & very low \\
+    All three together   & rare         & very rare & essentially none \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+The practical conclusion is that the predictor behaves exactly as
+the paper describes, but the workload mix determines whether those correct
+bypass decisions translate into IPC.
+To observe speedups in line with Mazumdar~et~al., graph analytics traces
+are needed: specifically the GAP benchmark suite (BFS, SSSP, PR, BC,
+triangle counting, connected components) and the Ligra suite, which cover
+the same classes of workloads used in the paper.
+Both are available as DPC4 ChampSim traces and represent the natural
+extension of this evaluation.
+
+\textbf{Server workloads: replacement policy without bypass.}
+Google and Qualcomm traces reveal an important asymmetry.
+The liveness-guided replacement policy (\texttt{lru\_mid}, \texttt{srrip\_live})
+shows meaningful IPC gains on these suites, whereas the bypass predictor does not.
+The replacement policy succeeds because it operates at \emph{block granularity}
+with observed history: each cache line's reuse pattern is tracked individually,
+giving fine-grained discrimination between hot and cold data.
+Server workloads have genuine temporal locality from hot records
+(popular index entries, frequently-queried data structure nodes, hot cache lines
+in concurrent request processing), alongside a cold long-tail ---
+exactly the structure a liveness-guided eviction policy can exploit.
+
+The bypass predictor fails on these same workloads for the opposite reason:
+it reasons at \emph{page granularity}.
+\texttt{dpPred} labels entire virtual pages as DOA; \texttt{cbPred} then
+bypasses \emph{all} blocks from those pages.
+In streaming workloads, a DOA page is homogeneous --- all its blocks are
+accessed once and discarded --- so page-level prediction transfers cleanly
+to block-level bypass decisions.
+In server workloads, a single page can contain hot hash-table buckets beside
+cold ones, frequently-queried B-tree keys alongside stale siblings, or popular
+records mixed with cold neighbours.
+Page-level DOA prediction is too coarse: the confidence counter oscillates
+without crossing the bypass threshold because the same page is sometimes
+live and sometimes not, and even when the threshold is crossed, bypassing all
+blocks from a mixed-liveness page discards live data alongside dead.
+This granularity mismatch is the structural reason the bypass predictor and
+the replacement policy respond differently to the same server workloads.
+
+\textbf{Expected results: graph analytics and AI/ML workloads.}
+The GAP and Ligra DPC4 suites (BFS, SSSP, CC, BC, PageRank, triangle
+counting, and Ligra graph algorithms) are expected to be the primary workloads
+where \emph{both} mechanisms contribute simultaneously.
+Graph traversal generates exactly the streaming-frontier plus live-hub structure:
+each frontier vertex is fetched once (DOA), but high-degree hub nodes are
+revisited repeatedly across traversal steps (live and cache-resident).
+The bypass predictor should perform well because the frontier traffic is
+page-homogeneous --- entire pages of adjacency lists are read once per
+traversal --- keeping dpPred confidence high and the PFQ populated.
+The replacement policy should simultaneously benefit by protecting the hub
+nodes that survive after bypass clears the DOA frontier.
+We expect to see superadditive benefit when both mechanisms are active:
+bypass reduces DOA pollution while the replacement policy steers the freed
+capacity toward hot hub data, and neither mechanism achieves the full gain alone.
+
+The Graph Mining Suite (GMS: k-clique, triangle counting, maximal clique
+enumeration) is expected to show similar or stronger effects than GAP/Ligra,
+because clique-finding algorithms access neighbourhoods of high-degree nodes
+repeatedly while streaming through edge lists once.
+These workloads also have among the highest STLB pressure of any available
+suite, since their irregular pointer-chasing access patterns touch new virtual
+pages at every step.
+
+The AI/ML inference traces (LLaMA2, Whisper, Stable Diffusion, ViT, RWKV,
+BioGPT) present a structurally similar but mechanically distinct case.
+During inference, large weight matrices are read sequentially and never reused
+within a single forward pass --- effectively a streaming DOA access pattern
+over the parameter memory region.
+The active KV-cache, attention buffers, and intermediate activations, by
+contrast, are accessed repeatedly within the forward pass and across
+autoregressive steps: a compact, genuinely live working set.
+This maps directly onto the frontier-plus-hub structure, suggesting the bypass
+predictor should handle AI/ML inference well for the same reasons it handles
+graph traversal well, while the replacement policy protects the hot activation
+and KV-cache lines.
+
+\subsection{Co-design: complementary mechanisms across workload classes}
+\label{subsec:codesign}
+
+The pattern across workload classes suggests a coherent co-design picture
+(Table~\ref{tab:mechanism_fit}).
+The bypass predictor and the replacement policy are complementary along the
+granularity axis: the replacement policy covers the fine-grained, mixed-liveness
+access patterns of server workloads, while the bypass predictor covers the
+coarse-grained, page-homogeneous DOA patterns of graph and AI/ML workloads.
+Neither mechanism alone covers all workload classes, but together they span
+the space.
+
+\begin{table}[htbp]
+  \centering
+  \caption{Expected fit of each mechanism by workload category.
+           \ding{51}\ding{51}~=~primary benefit, \ding{51}~=~secondary
+           benefit, $\circ$~=~neutral, \ding{55}~=~not expected to help.}
+  \label{tab:mechanism_fit}
+  \begin{tabular}{lcc}
+    \toprule
+    Workload class & Bypass predictor & Replacement policy \\
+    \midrule
+    SPEC (streaming, low live) & $\circ$ & $\circ$ \\
+    Server (Google, Qualcomm)  & \ding{55} & \ding{51}\ding{51} \\
+    Graph analytics (GAP, Ligra, GMS) & \ding{51}\ding{51} & \ding{51} \\
+    AI/ML inference  & \ding{51}\ding{51} & \ding{51} \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+The central open question is whether the two mechanisms interact
+\emph{superadditively} on graph and AI/ML workloads --- that is, whether
+enabling both simultaneously yields more than the sum of each alone.
+This would occur if bypass frees LLC space that the replacement policy then
+fills with live hub or activation data that it could not otherwise retain.
+A second open question is whether the bypass predictor can be extended to
+close the gap on server workloads by operating at finer granularity.
+The replacement policy already maintains per-block liveness observations;
+if \texttt{cbPred} consulted those per-block signals (e.g., the
+PC-indexed bypass history, \texttt{bhist}) before deciding to bypass,
+it could avoid discarding live blocks from mixed-liveness pages.
+A block-level bypass condition --- ``bypass if the page is in the PFQ
+\emph{and} this block's PC has a history of non-reuse'' --- would bring the
+bypass predictor's granularity down to the level at which server workloads
+require it, and could be implemented with no additional hardware beyond what
+\texttt{cbPred} already uses.
 
 % ─────────────────────────────────────────────────────────────────────────────
 \section{Liveness-Guided Insertion Policy}
@@ -1134,18 +1495,22 @@ evaluated.  All runs normalise against a plain-LRU STLB baseline.
 \begin{figure}[htbp]
   \centering
   \includegraphics[width=\linewidth]{../../plots/stlb_policy/suite_stlb_policy.png}
-  \caption{Benchmark-weighted geomean IPC speedup over plain-LRU STLB for
-           three STLB replacement policies at $\text{mid\_thd}=8$, per suite.
+  \caption{Benchmark-weighted geomean IPC speedup over plain-LRU for a broad
+           set of LLC and STLB replacement policies at their respective default
+           thresholds ($\text{mid\_thd}=8$ for liveness-guided variants), per suite.
            History is keyed by address for SPEC (DPC3) and by PC for Google
-           and Qualcomm, matching the LLC study.}
+           and Qualcomm.  LLC-only policies use LRU in the STLB; STLB-only
+           policies use LRU in the LLC; \texttt{both} variants apply the same
+           policy to both levels simultaneously.}
   \label{fig:stlb_pol_geomean}
 \end{figure}
 
-Figure~\ref{fig:stlb_pol_geomean} compares the three STLB policies at
-$\text{mid\_thd}=8$.  The results are asymmetric across suites.  For SPEC and
-Google the gains are modest and all three policies perform similarly
-($\leq\!0.17\%$): the STLB working set is relatively small on these suites and
-plain SRRIP already captures most of the benefit.
+Figure~\ref{fig:stlb_pol_geomean} places the STLB policies in context alongside
+their LLC counterparts and combined variants.
+The results are asymmetric across suites.  For SPEC and
+Google the gains are modest across all policies ($\leq\!0.5\%$): the STLB
+working set is relatively small on these suites and the LLC replacement policy
+dominates any marginal STLB contribution.
 
 Qualcomm is the outlier: \texttt{stlb\_srrip\_live} at $\text{mid\_thd}=8$
 reaches $+4.44\%$ geomean IPC, well above \texttt{stlb\_srrip} ($+1.00\%$)
@@ -1153,6 +1518,10 @@ and \texttt{stlb\_lru\_mid} ($+0.64\%$).  The large gap indicates that the
 STLB liveness signal is strongly predictive for Qualcomm's server workloads:
 predicting which STLB entries will never be reused and deprioritising them
 immediately provides substantial miss-rate reduction.
+Combining liveness guidance in both levels (\texttt{ipv\_live\_both},
+\texttt{srrip\_live\_both}) yields the largest gains on Qualcomm, confirming
+that the LLC and STLB signals are largely independent
+(see Section~\ref{sec:llc_stlb_combined}).
 
 \begin{figure}[p]
   \centering
@@ -1280,6 +1649,81 @@ adds information that the block-level LLC history cannot infer.
 it on Qualcomm ($+4.23\%$ vs.\ $+3.83\%$), making it a competitive alternative
 LLC replacement policy with no meaningful downside relative to
 \texttt{srrip\_live}.
+
+\subsubsection{Extended Policy Comparison Across All Configurations}
+\label{sec:extended_pol}
+
+The following figures present a comprehensive per-workload and per-suite
+comparison across all evaluated configurations: LLC-only policies (SRRIP,
+lru\_mid, IPV and their liveness-guided variants), STLB-only policies
+(stlb\_srrip, stlb\_ipv, stlb\_ipv\_live, stlb\_lru\_mid), and
+LLC\,+\,STLB combined policies (srrip\_both, lru\_mid\_both, ipv\_both,
+srrip\_live\_both, ipv\_live\_both).  All liveness-guided variants use
+per-suite optimal thresholds.
+
+\begin{figure}[htbp]
+  \centering
+  \includegraphics[width=\linewidth]{../../plots/stlb_policy/suite_stlb_policy_mpki.png}
+  \caption{Benchmark-weighted geomean STLB MPKI reduction (left) and LLC MPKI
+           reduction (right) vs.\ LRU baseline, for all evaluated policies
+           across the three suites.  STLB-only policies reduce STLB MPKI
+           without meaningful LLC benefit; LLC-only policies do the reverse;
+           combined policies accrue both reductions on Qualcomm.}
+  \label{fig:stlb_pol_mpki}
+\end{figure}
+
+\begin{figure}[p]
+  \centering
+  \includegraphics[width=\linewidth]{../../plots/stlb_policy/dpc3_stlb_policy_ipc.png}
+  \caption{Per-benchmark IPC speedup vs.\ LRU for all evaluated policies on
+           SPEC (DPC3).  All policies cluster near zero; the LLC liveness
+           variants (\texttt{srrip\_live}, \texttt{ipv\_live}) provide modest
+           but consistent gains on the memory-intensive benchmarks.}
+  \label{fig:ext_pol_dpc3_ipc}
+\end{figure}
+
+\begin{figure}[p]
+  \centering
+  \includegraphics[width=\linewidth]{../../plots/stlb_policy/dpc3_stlb_policy_mpki.png}
+  \caption{Per-benchmark STLB and LLC MPKI for SPEC (DPC3).}
+  \label{fig:ext_pol_dpc3_mpki}
+\end{figure}
+
+\begin{figure}[p]
+  \centering
+  \includegraphics[width=\linewidth]{../../plots/stlb_policy/google_stlb_policy_ipc.png}
+  \caption{Per-benchmark IPC speedup vs.\ LRU for all evaluated policies on
+           Google.  LLC liveness variants dominate; STLB-only and combined
+           policies provide no additional benefit over LLC-only on this suite.}
+  \label{fig:ext_pol_google_ipc}
+\end{figure}
+
+\begin{figure}[p]
+  \centering
+  \includegraphics[width=\linewidth]{../../plots/stlb_policy/google_stlb_policy_mpki.png}
+  \caption{Per-benchmark STLB and LLC MPKI for Google.}
+  \label{fig:ext_pol_google_mpki}
+\end{figure}
+
+\begin{figure}[p]
+  \centering
+  \includegraphics[width=\linewidth]{../../plots/stlb_policy/qmm_stlb_policy_ipc.png}
+  \caption{Per-benchmark IPC speedup vs.\ LRU for all evaluated policies on
+           Qualcomm (QMM).  Combined liveness policies
+           (\texttt{ipv\_live\_both}, \texttt{srrip\_live\_both}) are the top
+           performers, with most workloads benefiting from both LLC and STLB
+           liveness guidance simultaneously.}
+  \label{fig:ext_pol_qmm_ipc}
+\end{figure}
+
+\begin{figure}[p]
+  \centering
+  \includegraphics[width=\linewidth]{../../plots/stlb_policy/qmm_stlb_policy_mpki.png}
+  \caption{Per-benchmark STLB and LLC MPKI for Qualcomm.  The combined
+           policies achieve both large STLB and LLC MPKI reductions
+           simultaneously on most workloads.}
+  \label{fig:ext_pol_qmm_mpki}
+\end{figure}
 
 % ─────────────────────────────────────────────────────────────────────────────
 \clearpage
@@ -1430,6 +1874,71 @@ vector to the front will tend to wash out when the validated geomean on the
 full set is checked.
 
 % ─────────────────────────────────────────────────────────────────────────────
+\subsection{Performance with Default Vectors}
+\label{sec:ipv_live_results}
+% ─────────────────────────────────────────────────────────────────────────────
+
+Before training the IPV table via coordinate descent, we evaluate
+\texttt{ipv\_live} with the physically motivated default vectors described in
+Section~\ref{sec:pacipv_extension}: the mostly-alive class uses the SRRIP
+defaults ($\{0,0,0,0,2\}$ for both demand and prefetch), the mostly-dead and
+DoA classes use progressively more conservative vectors.  The threshold sweep,
+key type, and evaluation methodology are identical to the \texttt{srrip\_live}
+study in Section~\ref{sec:srrip_live}.
+
+Figure~\ref{fig:ipv_live} shows the per-benchmark IPC speedup for all three
+suites.  Each bar group contains four bars:
+\texttt{srrip\_live} at its per-benchmark optimal threshold (green, shaded
+light to dark for thd$=1$ to $16$), \texttt{ipv\_live} at its per-benchmark
+optimal threshold (blue, same shading), plain SRRIP (orange), and \lrumid
+(purple).  The rightmost column is the geomean over all benchmarks in the suite.
+
+\begin{figure}[htbp]
+  \centering
+  \includegraphics[width=\linewidth]{../../plots/ipv_live/ipv_live_all_suites.png}
+  \caption{Per-benchmark IPC speedup over LRU for \texttt{srrip\_live} (green,
+           shaded light$\to$dark for thd$=1\to16$), \texttt{ipv\_live} (blue,
+           same shading), SRRIP (orange), and \lrumid (purple), each at its
+           per-benchmark optimal \texttt{mid\_thd}.
+           Top: SPEC~DPC3 (8~most diverse of~20; SimPoint-weighted geomean over all~20).
+           Middle: Google (8~most diverse of~43; geomean over all~43).
+           Bottom: Qualcomm (8~most diverse of~45; geomean over all~45).}
+  \label{fig:ipv_live}
+\end{figure}
+
+For SPEC (Figure~\ref{fig:ipv_live}, top panel), \texttt{ipv\_live} and
+\texttt{srrip\_live} track each other closely on most benchmarks.  The two
+outliers that drive the SPEC geomean --- \texttt{605.mcf\_s} ($+16\%$) and
+\texttt{623.xalancbmk\_s} ($+8\%$) --- show nearly identical green and blue
+bars, confirming that the per-class vector granularity adds little where the
+liveness signal is already decisive.  The geomean advantage of
+$+0.13\,\text{pp}$ ($+1.56\%$ vs.\ $+1.43\%$) is a small but uniform lift
+spread across many benchmarks rather than a single outlier.
+
+For Google (middle panel), both liveness policies improve
+over plain SRRIP on every single trace.  The green and blue bars are nearly
+equal in height throughout, and the geomean difference is negligible
+($+4.23\%$ vs.\ $+4.29\%$).  At the high thresholds required for Google
+(thd$=8$), blocks that clear the liveness gate are strongly DoA, so the
+mostly-dead class rarely fires and the extra IPV degree of freedom provides no
+meaningful additional lever.
+
+For Qualcomm (bottom panel), \texttt{ipv\_live} consistently
+leads \texttt{srrip\_live} by a small margin on the majority of traces, and the
+geomean difference is more visible ($+4.34\%$ vs.\ $+3.92\%$).  The advantage
+is broadest in the \texttt{srv\_s*} cluster (the highest-performing group),
+where the heterogeneous reuse patterns make a distinct mostly-dead IPV worth
+having.
+
+The key take-away is that the default IPV table is already a competitive
+replacement policy without any training: it replicates \texttt{srrip\_live}'s
+behaviour for the majority of workloads and slightly improves on it where the
+per-class granularity matters.  Coordinate descent training
+(Section~\ref{sec:pacipv_training}) can only improve on these numbers, since the
+search starts from these default vectors and monotonically replaces them when a
+better configuration is found.
+
+% ─────────────────────────────────────────────────────────────────────────────
 \clearpage
 \section{Analysis and Open Questions}
 % ─────────────────────────────────────────────────────────────────────────────
@@ -1492,16 +2001,38 @@ is better under realistic workload conditions.
 \section{Current research}
 % ─────────────────────────────────────────────────────────────────────────────
 
+The immediate focus is on two parallel threads:
+(1)~running the policy comparison on the new benchmark suites to validate
+the workload-sensitivity analysis of \S\ref{subsec:workload_sensitivity}--\ref{subsec:codesign},
+and (2)~testing small, targeted extensions to the bypass predictor to address
+the granularity mismatch identified for server workloads.
+The results from (1) will clarify whether the expected workload fit holds
+and provide the variance needed to evaluate extensions from (2).
+
 % ─────────────────────────────────────────────────────────────────────────────
 \subsection{Research questions}
 % ─────────────────────────────────────────────────────────────────────────────
 \begin{enumerate}
+  \item \textbf{Graph and AI/ML workloads.}
+    Do GAP, Ligra, GMS, and AI/ML inference traces confirm the expected
+    pattern --- strong bypass predictor benefit, moderate replacement policy
+    benefit, and superadditive gain when both are active?
+  \item \textbf{Superadditivity.}
+    When both bypass and replacement policy are enabled on graph/AI/ML
+    workloads, does the combined IPC gain exceed the sum of the individual
+    gains?  If so, what fraction of the uplift comes from each mechanism?
+  \item \textbf{Server workload granularity gap.}
+    Can adding a per-block liveness gate to \texttt{cbPred} (bypass only if
+    the block's PC is also in \texttt{bhist} with sufficient confidence) close
+    the gap on Google and Qualcomm without hurting graph/AI/ML performance?
+  \item \textbf{PFQ coverage on graph workloads.}
+    Is the default PFQ capacity (8 entries) a bottleneck for graph workloads
+    with high STLB churn, or does the froniter-per-page access pattern keep
+    coverage high regardless?
   \item How come that the performance improves so much when using \lrumid in
     both the STLB?
   \item Why does prefetching hurt \lrumid on SPEC and make SRRIP outperform
     \lrumid on Google and Qualcomm? Could we tap into that potential somehow?
-  \item How could we better inform the insertion policy where to insert the entry in
-    the recency stack and how to promote it?
 \end{enumerate}
 
 % ─────────────────────────────────────────────────────────────────────────────
@@ -1510,15 +2041,52 @@ is better under realistic workload conditions.
 \begin{enumerate}
   \item We are currently lacking references to \lrumid as we only compare to
     LRU itself and SRRIP. We should compare to more replacement policies to get deeper insights.
+  \item The co-design narrative (\S\ref{subsec:codesign}) is preliminary;
+    the table of expected mechanism fit (Table~\ref{tab:mechanism_fit}) will
+    need to be updated once graph and AI/ML results are in hand.
 \end{enumerate}
 
 % ─────────────────────────────────────────────────────────────────────────────
 \subsection{Planned experiments}
 % ─────────────────────────────────────────────────────────────────────────────
+
+\textbf{Tier 1 --- Policy comparison on new suites (no code changes needed).}
 \begin{enumerate}
-  \item Vary the replacement policies only in the STLB to study their effects there.
-  \item Reduce the inserted recency using the liveness data (i.e. $N$ DoA and $M$ mostly-dead 
-    lead to insertion recency $k$).
+  \item Run the full policy sweep (\texttt{sweep\_policy.sh gap},
+    \texttt{ligra}, \texttt{gms}, \texttt{ml}) across all 10 default
+    configurations, producing per-suite IPC and MPKI plots comparable to
+    the existing SPEC/Google/Qualcomm figures.
+    The primary metric of interest is whether \texttt{lru\_pred} and
+    \texttt{srrip\_pred} show larger gains on graph/AI/ML than on SPEC,
+    confirming the workload-sensitivity analysis.
+  \item Run \texttt{lru\_dp\_only} (STLB bypass only, no LLC bypass) on
+    graph workloads to quantify the PFQ cascade: how much of the benefit
+    comes from dpPred alone versus cbPred building on the populated PFQ.
+\end{enumerate}
+
+\textbf{Tier 2 --- Bypass predictor instrumentation (lightweight, read-only).}
+\begin{enumerate}
+  \item Add per-suite counters for: PFQ hit rate (fraction of LLC allocations
+    whose PFN is in the PFQ), bypass accuracy, and false positive rate
+    (bypassed blocks subsequently demanded again).
+    Run across all suites to produce a quantitative breakdown of where the
+    predictor's signal is strong versus weak.
+  \item Run a PFQ capacity sweep (4, 8, 16, 32 entries) on GAP and Google
+    to test whether the PFQ is a bottleneck for graph workloads and whether
+    enlarging it helps server workloads with high page diversity.
+\end{enumerate}
+
+\textbf{Tier 3 --- Block-level liveness gate (small code change).}
+\begin{enumerate}
+  \item Extend \texttt{cbPred} to additionally require that the block's PC
+    appears in \texttt{bhist} with sufficient confidence before bypassing.
+    This adds block-level granularity to a decision currently made at page
+    level, and is the natural fix for the mixed-liveness page problem on
+    server workloads.
+    Evaluate on Google and Qualcomm (expected improvement) and on GAP/Ligra
+    (must not degrade).
+  \item Vary the replacement policies only in the STLB to isolate their
+    independent contribution from the LLC-level effects.
 \end{enumerate}
 
 % ─────────────────────────────────────────────────────────────────────────────

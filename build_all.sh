@@ -51,7 +51,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR"
 
-ALL_POLICIES=(lru lru_mid srrip srrip_live drrip ipv ipv_live pacipv srrip_live_both stlb_ipv_live ipv_live_both srrip_both stlb_ipv ipv_both)
+ALL_POLICIES=(lru lru_mid srrip srrip_live drrip ipv ipv_live pacipv lru_mid_both srrip_live_both stlb_ipv_live ipv_live_both srrip_both stlb_ipv ipv_both)
 
 BUILD_NOPREF=1
 BUILD_PREF=1
