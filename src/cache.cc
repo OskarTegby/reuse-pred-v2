@@ -508,9 +508,9 @@ CACHE::liveness_class CACHE::predict_liveness(uint64_t full_addr, uint64_t ip) c
 //   PHIST_HASH=<0|1>   XOR-fold VPN+PC before phist lookup (default 1 = hash)
 //   BHIST_HASH=<0|1>   XOR-fold block address before bhist lookup (default 1 = hash)
 //   PHIST_SETS=<n>     number of sets in phist_full (default 1 = fully associative, full-key mode only)
-//   PHIST_WAYS=<n>     ways per set in phist_full; total = sets × ways (default 64, full-key mode only)
+//   PHIST_WAYS=<n>     ways per set in phist_full; total = sets × ways (default 1024, full-key mode only)
 //   BHIST_SETS=<n>     number of sets in bhist_full (default 1 = fully associative, full-key mode only)
-//   BHIST_WAYS=<n>     ways per set in bhist_full; total = sets × ways (default 64, full-key mode only)
+//   BHIST_WAYS=<n>     ways per set in bhist_full; total = sets × ways (default 4096, full-key mode only)
 //   REPL_POL=<pol>     replacement policy for full-key tables: "lru" (default) | "lfu"
 void CACHE::load_predictor_settings()
 {

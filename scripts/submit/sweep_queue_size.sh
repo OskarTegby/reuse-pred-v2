@@ -9,11 +9,11 @@
 #   ST sweep   (PFQ_CAP=8 fixed):   st_1  … st_512,  st_inf    (2 is default)
 #
 # One additional baseline (no predictor) is included as an IPC floor.
-# All configs use hashed history tables (default) at default size (64 ways).
+# All configs use hashed history tables (PHIST_HASH=1, BHIST_HASH=1) at default sizes (phist=1024 ways, bhist=4096 ways).
 #
 # Total configs: 1 baseline + 10 PFQ + 1 pfq_inf + 10 ST + 1 st_inf = 23
 #
-# Usage: ./sweep_queue_size.sh {qmm|dpc3|google|test} [--debug] [--warmup N] [--sim N]
+# Usage: ./sweep_queue_size.sh {maz|qmm|dpc3|google|gap|ligra|gms|ml|test} [--debug] [--warmup N] [--sim N]
 
 set -euo pipefail
 
@@ -28,25 +28,30 @@ SIM_OVERRIDE=""
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    qmm|dpc3|google|test) token="${1,,}"; shift ;;
+    maz|mazumdar|qmm|dpc3|google|gap|ligra|gms|ml|test) token="${1,,}"; shift ;;
     --test)    TEST=1; shift ;;
     --debug)   DEBUG=1; shift ;;
     --warmup)  WARMUP_OVERRIDE="$2"; shift 2 ;;
     --sim)     SIM_OVERRIDE="$2"; shift 2 ;;
     *) echo "Unknown argument: $1" >&2
-       echo "Usage: $0 {qmm|dpc3|google|test} [--test] [--debug] [--warmup N] [--sim N]" >&2
+       echo "Usage: $0 {maz|qmm|dpc3|google|gap|ligra|gms|ml|test} [--test] [--debug] [--warmup N] [--sim N]" >&2
        exit 2 ;;
   esac
 done
 
 if [ -z "$token" ]; then
-  echo "Usage: $0 {qmm|dpc3|google|test} [--test] [--debug] [--warmup N] [--sim N]" >&2
+  echo "Usage: $0 {maz|qmm|dpc3|google|gap|ligra|gms|ml|test} [--test] [--debug] [--warmup N] [--sim N]" >&2
   exit 2
 fi
 
 SHARED_TRACES=/home/users/shared/traces
 
 case "$token" in
+  maz|mazumdar)
+    WARMUP=100000000; SIM=100000000
+    TRACE_DIR="${PROJECT_ROOT}/trace-files/MAZUMDAR"
+    TRACE_EXT="champsimtrace.xz"
+    ;;
   qmm)
     WARMUP=50000000; SIM=100000000
     TRACE_DIR="${PROJECT_ROOT}/trace-files/QMM"
@@ -61,6 +66,26 @@ case "$token" in
     WARMUP=50000000; SIM=100000000
     TRACE_DIR="${SHARED_TRACES}/Google_Traces_v2"
     TRACE_EXT="champsim.gz"
+    ;;
+  gap)
+    WARMUP=50000000; SIM=100000000
+    TRACE_DIR="${PROJECT_ROOT}/trace-files/gap"
+    TRACE_EXT="trace.gz"
+    ;;
+  ligra)
+    WARMUP=50000000; SIM=100000000
+    TRACE_DIR="${PROJECT_ROOT}/trace-files/ligra"
+    TRACE_EXT="champsimtrace.xz"
+    ;;
+  gms)
+    WARMUP=50000000; SIM=100000000
+    TRACE_DIR="${PROJECT_ROOT}/trace-files/gms"
+    TRACE_EXT="gz"
+    ;;
+  ml)
+    WARMUP=50000000; SIM=100000000
+    TRACE_DIR="${PROJECT_ROOT}/trace-files/ml"
+    TRACE_EXT="champsimtrace.gz"
     ;;
   test)
     WARMUP=25000000; SIM=50000000
@@ -102,15 +127,15 @@ configs=()
 # Baseline: no predictor, default queue sizes
 configs+=("baseline champsim_lru 0 0 6 6 8 2")
 
-# PFQ sweep: scale PFQ from 1 through 512, keep ST at default (2)
-for log_pfq in 0 1 2 3 4 5 6 7 8 9; do
+# PFQ sweep: scale PFQ from 1 through 128, keep ST at default (2)
+for log_pfq in 0 1 2 3 4 5 6 7; do
   pfq=$((1 << log_pfq))
   configs+=("pfq_${pfq} champsim_lru 1 1 6 6 ${pfq} 2")
 done
 configs+=("pfq_inf champsim_lru 1 1 6 6 1048576 2")
 
-# ST sweep: scale ST from 1 through 512, keep PFQ at default (8)
-for log_st in 0 1 2 3 4 5 6 7 8 9; do
+# ST sweep: scale ST from 1 through 128, keep PFQ at default (8)
+for log_st in 0 1 2 3 4 5 6 7; do
   st=$((1 << log_st))
   configs+=("st_${st} champsim_lru 1 1 6 6 8 ${st}")
 done

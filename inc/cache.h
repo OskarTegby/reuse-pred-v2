@@ -245,10 +245,10 @@ class CACHE : public champsim::operable, public MemoryRequestConsumer, public Me
   uint64_t mid_thd        = 1;     // min DoA-or-mostly-dead evictions before mid-insertion triggers
   bool     mid_promote_on_hit = false; // promote mid-inserted blocks to MRU on hit (MID_PROMOTE=1)
   uint64_t st_size    = 2;    // shadow table capacity
-  uint64_t phist_sets = 1;    // number of sets in phist_full (1 = fully associative)
-  uint64_t phist_ways = 64;   // ways per set in phist_full; total capacity = sets × ways
-  uint64_t bhist_sets = 1;    // number of sets in bhist_full (1 = fully associative)
-  uint64_t bhist_ways = 64;   // ways per set in bhist_full; total capacity = sets × ways
+  uint64_t phist_sets = 1;     // number of sets in phist_full (1 = fully associative)
+  uint64_t phist_ways = 1024;  // ways per set in phist_full; total capacity = sets × ways
+  uint64_t bhist_sets = 1;     // number of sets in bhist_full (1 = fully associative)
+  uint64_t bhist_ways = 4096;  // ways per set in bhist_full; total capacity = sets × ways
   uint64_t lru_clock  = 0;    // monotonic counter for LRU timestamps
 
   // Replacement policy for the full-key history tables (no effect in hashed mode).
