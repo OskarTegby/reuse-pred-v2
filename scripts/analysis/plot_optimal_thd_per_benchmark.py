@@ -77,7 +77,8 @@ def _bench_speedup_pct(wl_list, policy_ipc, lru_ipc):
     if SPEC_WEIGHTS:
         pairs = [(policy_ipc[wl] / lru_ipc[wl], SPEC_WEIGHTS.get(wl))
                  for wl in wl_list
-                 if wl in policy_ipc and wl in lru_ipc and lru_ipc[wl] > 0]
+                 if wl in policy_ipc and policy_ipc[wl] is not None
+                 and wl in lru_ipc and lru_ipc[wl] > 0]
         weighted = [(r, w) for r, w in pairs if w is not None and r > 0]
         if weighted:
             tot = sum(w for _, w in weighted)
@@ -85,7 +86,8 @@ def _bench_speedup_pct(wl_list, policy_ipc, lru_ipc):
                 return (math.exp(sum(w / tot * math.log(r) for r, w in weighted)) - 1) * 100
     ratios = [policy_ipc[wl] / lru_ipc[wl]
               for wl in wl_list
-              if wl in policy_ipc and wl in lru_ipc and lru_ipc[wl] > 0]
+              if wl in policy_ipc and policy_ipc[wl] is not None
+              and wl in lru_ipc and lru_ipc[wl] > 0]
     if not ratios:
         return None
     return (math.exp(sum(math.log(r) for r in ratios) / len(ratios)) - 1) * 100
