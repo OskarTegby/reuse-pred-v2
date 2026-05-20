@@ -6,8 +6,16 @@ makes palette changes a single-point edit.
 """
 
 # ── Suite identity ────────────────────────────────────────────────────────────
-# Order matches the canonical suite order: SPEC CPU2006/2017, Google, Qualcomm.
-SUITE_COLORS = ["#2C7BB6", "#D7191C", "#1A9641"]
+# Extended palette — canonical order: SPEC, Google, Qualcomm, GAP, Ligra, GMS, ML.
+SUITE_COLORS = [
+    "#2C7BB6",  # blue        — SPEC
+    "#D7191C",  # red         — Google
+    "#1A9641",  # green       — Qualcomm
+    "#FF7F00",  # orange      — GAP
+    "#984EA3",  # purple      — Ligra
+    "#A65628",  # brown       — GMS
+    "#F781BF",  # pink        — ML
+]
 
 # ── Replacement policy ────────────────────────────────────────────────────────
 LRU_COLOR  = "#1a9850"

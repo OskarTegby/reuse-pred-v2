@@ -110,6 +110,9 @@ _CORR_V2 = re.compile(
     re.DOTALL,
 )
 
+# Old single-value format:  LLC LIVENESS DOA_ON_DOA_STLB_PAGE: N (X% of LLC DoA)
+_CORR_V1 = re.compile(r"LLC LIVENESS DOA_ON_DOA_STLB_PAGE:\s+(\d+)")
+
 
 def parse_correlation_full(path) -> "dict | None":
     """Parse the full 4-bucket DoA/STLB correlation from a champsim.out file.
@@ -130,7 +133,34 @@ def parse_correlation_full(path) -> "dict | None":
     sm = _CORR_STLB.search(text)
     lm = _CORR_LLC_TOT.search(text)
     cm = _CORR_V2.search(text)
-    if not (sm and lm and cm):
+
+    # Fall back to old single-value format if new format is absent
+    if not cm:
+        v1 = _CORR_V1.search(text)
+        if sm and lm and v1:
+            stlb_total = int(sm.group(1)); stlb_doa = int(sm.group(2))
+            llc_total  = int(lm.group(1)); llc_doa  = int(lm.group(2))
+            resident_doa = int(v1.group(1))
+            if llc_doa == 0:
+                return None
+            return {
+                "stlb_total":     stlb_total,
+                "stlb_doa":       stlb_doa,
+                "llc_total":      llc_total,
+                "llc_doa":        llc_doa,
+                "resident_doa":   resident_doa,
+                "resident_alive": 0,
+                "evicted_doa":    0,
+                "evicted_alive":  0,
+                "uncovered":      max(0, llc_doa - resident_doa),
+                "coverage_pct":   100.0 * resident_doa / llc_doa,
+                "precision_pct":  100.0,
+                "stlb_doa_pct":   100.0 * stlb_doa / stlb_total if stlb_total > 0 else 0.0,
+                "llc_doa_pct":    100.0 * llc_doa  / llc_total  if llc_total  > 0 else 0.0,
+            }
+        return None
+
+    if not (sm and lm):
         return None
 
     stlb_total = int(sm.group(1)); stlb_doa = int(sm.group(2))

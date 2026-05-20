@@ -36,8 +36,8 @@ from champsim_utils import parse_ipc
 
 # ── Suite colours — match liveness strip ─────────────────────────────────────
 # Order: SPEC → Google → Qualcomm  (matches liveness_corr_strip ordering)
-SUITE_ORDER  = ["dpc3",   "google",  "qmm"]
-SUITE_LABELS = ["SPEC (DPC3)", "Google", "Qualcomm"]
+SUITE_ORDER  = []   # populated at runtime from --dirs/--labels
+SUITE_LABELS = []
 
 # Config colours — fixed per config across all suites (Panel 1)
 COLOR_DP   = "#4393C3"   # blue  — dpPred only
@@ -65,15 +65,24 @@ def _parse_pfq_hit_rate(path: Path):
 
 
 def _parse_doa_on_page(path: Path):
-    """Return LLC DoA-on-DoA-STLB-page rate (%) from lru baseline output."""
+    """Return LLC DoA-on-DoA-STLB-page rate (%) from lru baseline output.
+
+    Handles both the old single-value format (DOA_ON_DOA_STLB_PAGE) and the
+    new 4-bucket format (DOA/STLB CORRELATION resident_doa=...).
+    """
     try:
-        for line in path.read_text(errors="replace").splitlines():
-            m = re.search(
-                r"LLC LIVENESS DOA_ON_DOA_STLB_PAGE:\s+\d+\s+\(\s*([0-9.]+)%",
-                line,
-            )
-            if m:
-                return float(m.group(1))
+        text = path.read_text(errors="replace")
+        # New format: use resident_doa / llc_doa
+        cm = re.search(r"LLC LIVENESS DOA/STLB CORRELATION[^:]*:.*?resident_doa=(\d+)",
+                       text, re.DOTALL)
+        lm = re.search(r"LLC LIVENESS EVICTIONS:\s+\d+\s+DOA:\s+(\d+)", text)
+        if cm and lm:
+            llc_doa = int(lm.group(1))
+            return 100.0 * int(cm.group(1)) / llc_doa if llc_doa > 0 else 0.0
+        # Old format: percentage is printed directly
+        om = re.search(r"LLC LIVENESS DOA_ON_DOA_STLB_PAGE:\s+\d+\s+\(\s*([0-9.]+)%", text)
+        if om:
+            return float(om.group(1))
     except OSError:
         pass
     return None
@@ -287,26 +296,27 @@ def _write_explanation(suite_stats: "list[dict]", out_path: Path):
 def main():
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--qmm",    required=True, metavar="DIR")
-    ap.add_argument("--dpc3",   required=True, metavar="DIR")
-    ap.add_argument("--google", required=True, metavar="DIR")
+    ap.add_argument("--dirs",   required=True, nargs="+", metavar="DIR",
+                    help="One policy-sweep results directory per suite")
+    ap.add_argument("--labels", nargs="+", default=None,
+                    help="Suite labels (default: directory names)")
     ap.add_argument("--out",    default="results/plots/dp_cbpred_study/",
                     metavar="DIR")
     args = ap.parse_args()
 
-    dirs = {
-        "dpc3":   Path(args.dpc3),
-        "google": Path(args.google),
-        "qmm":    Path(args.qmm),
-    }
+    dirs   = [Path(d) for d in args.dirs]
+    labels = args.labels or [d.name for d in dirs]
+    if len(labels) != len(dirs):
+        sys.exit("ERROR: --labels count must match --dirs count")
+
+    SUITE_LABELS[:] = labels
     out_dir = Path(args.out)
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    # Load data in SPEC → Google → Qualcomm order
     suite_data = []
-    for key in SUITE_ORDER:
-        print(f"Loading {key} …")
-        suite_data.append(_load_suite(dirs[key]))
+    for lbl, d in zip(labels, dirs):
+        print(f"Loading {lbl} …")
+        suite_data.append(_load_suite(d))
 
     rng = np.random.default_rng(0)
 
@@ -314,7 +324,9 @@ def main():
     # Top row:    DoA correlation (left) | PFQ hit rate (right)
     # Bottom row: IPC speedup (full width)
     import matplotlib.gridspec as gridspec
-    fig = plt.figure(figsize=(10, 9))
+    n_suites = len(SUITE_LABELS)
+    fig_w = max(10, 3.5 * n_suites)
+    fig = plt.figure(figsize=(fig_w, 9))
     gs = gridspec.GridSpec(2, 2, figure=fig, height_ratios=[1, 1.1],
                            hspace=0.42, wspace=0.35)
     ax0 = fig.add_subplot(gs[0, 0])   # DoA correlation

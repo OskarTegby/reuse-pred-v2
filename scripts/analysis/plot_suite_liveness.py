@@ -471,16 +471,17 @@ def main():
         description=__doc__,
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
-    ap.add_argument("--dpc3",   required=True, metavar="DIR")
-    ap.add_argument("--google", required=True, metavar="DIR")
-    ap.add_argument("--qmm",    required=True, metavar="DIR")
-    ap.add_argument("--labels", nargs=3, default=["SPEC", "Google", "Qualcomm"],
-                    metavar=("L1", "L2", "L3"))
+    ap.add_argument("--dirs",   required=True, nargs="+", metavar="DIR",
+                    help="One lru/ results directory per suite")
+    ap.add_argument("--labels", nargs="+", default=None,
+                    help="Suite labels (default: directory names)")
     ap.add_argument("--out", default="plots/suite_liveness")
     args = ap.parse_args()
 
-    dirs   = [Path(args.dpc3), Path(args.google), Path(args.qmm)]
-    labels = args.labels
+    dirs   = [Path(d) for d in args.dirs]
+    labels = args.labels or [d.parent.name for d in dirs]
+    if len(labels) != len(dirs):
+        sys.exit("ERROR: --labels count must match --dirs count")
 
     for d in dirs:
         if not d.is_dir():
