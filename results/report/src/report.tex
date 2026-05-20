@@ -337,37 +337,36 @@ Ligra, ML, and GMS cover both PC and address indexing.
 \subsection{Comparison with baselines}
 
 We present two complementary figures.
-Figure~\ref{fig:optimal_thd_dpc3} selects twelve SPEC workloads to match
-the Mazumdar~2021 workload set, enabling a direct comparison against their
-reported results on a different simulator.
-Figure~\ref{fig:optimal_thd_new_setting} covers the extended setting:
-server workloads (Google and Qualcomm) and the four new benchmark suites,
-with two representative traces per suite to keep the figure legible while
-spanning the behavioural range.
+Figure~\ref{fig:optimal_thd_mazumdar} selects four representative traces
+per suite from SPEC, Google, and Qualcomm --- the three suites shared with
+Mazumdar~2021 --- enabling a direct comparison against their reported
+results on a different simulator.
+Figure~\ref{fig:optimal_thd_new_suites} covers the four suites not
+evaluated by Mazumdar, with three representative traces per suite.
 
 \begin{figure}[htbp]
   \centering
-  \includegraphics[width=\linewidth]{../../plots/optimal_thd_dpc3.png}
-  \caption{SPEC comparison --- IPC speedup vs.\ LRU for \texttt{srrip\_live}
-           at its per-benchmark optimal threshold (PC-indexed), alongside
-           SRRIP and \texttt{ipv\_live}, for twelve representative SPEC
-           workloads chosen to match Mazumdar~2021.
+  \includegraphics[width=\linewidth]{../../plots/optimal_thd_mazumdar.png}
+  \caption{Mazumdar-comparable suites --- IPC speedup vs.\ LRU for
+           \texttt{srrip\_live} at its per-benchmark optimal threshold
+           (PC-indexed), alongside SRRIP and \texttt{ipv\_live}, for four
+           representative workloads per suite.
            Bar shading: light$\to$dark = low$\to$high optimal threshold.
-           Rightmost cluster: geomean over all SPEC workloads.}
-  \label{fig:optimal_thd_dpc3}
+           Rightmost cluster: geomean over all workloads in each suite.}
+  \label{fig:optimal_thd_mazumdar}
 \end{figure}
 
 \begin{figure}[htbp]
   \centering
-  \includegraphics[width=\linewidth]{../../plots/optimal_thd_new_setting.png}
-  \caption{Extended setting --- per-workload speedup for server suites
-           (Google, Qualcomm) and the four new suites (GAP, Ligra, GMS,
-           ML), two representative traces per suite.
-           Rightmost bar per group: geomean over the full suite.}
-  \label{fig:optimal_thd_new_setting}
+  \includegraphics[width=\linewidth]{../../plots/optimal_thd_new_suites.png}
+  \caption{New suites --- per-workload speedup for GAP, Ligra, GMS, and
+           ML (three representative traces per suite, PC-indexed history
+           at the per-benchmark optimal threshold).
+           Rightmost cluster: geomean over the full suite.}
+  \label{fig:optimal_thd_new_suites}
 \end{figure}
 
-\textit{SPEC (Figure~\ref{fig:optimal_thd_dpc3}).}
+\textit{SPEC, Google, and Qualcomm (Figure~\ref{fig:optimal_thd_mazumdar}).}
 Benchmarks with highly concentrated, predictable access streams benefit
 the most: \texttt{605.mcf\_s} (sparse graph traversal) gains
 $+16.6\%$, far above its SRRIP baseline of $+2.6\%$, because a small
@@ -387,11 +386,11 @@ where plain SRRIP outperforms \texttt{srrip\_live}: the mid-RRPV
 heuristic happens to match its access pattern without needing per-PC
 history.
 
-\textit{Server workloads (Figure~\ref{fig:optimal_thd_new_setting}).}
+\textit{Server workloads (Figure~\ref{fig:optimal_thd_mazumdar}).}
 A notable feature of both server suites is their low inter-trace variance:
 individual Google workloads span only $+0.3\%$ to $+8.5\%$ and Qualcomm
-workloads span $+2.8\%$ to $+5.2\%$, so two representative traces per
-suite capture the suite behaviour accurately.
+workloads span $+2.8\%$ to $+5.2\%$, so a small representative sample
+captures the suite behaviour accurately.
 This uniformity reflects the shared infrastructure and access patterns
 within each fleet.
 All server traces gain with \texttt{srrip\_live} despite the near-zero
@@ -401,7 +400,7 @@ SRRIP is consistently near zero or slightly negative for Google and
 Qualcomm: its uniform mid-RRPV assignment cannot exploit the per-PC
 liveness skew that \texttt{srrip\_live} captures.
 
-\textit{New suites (Figure~\ref{fig:optimal_thd_new_setting}).}
+\textit{New suites (Figure~\ref{fig:optimal_thd_new_suites}).}
 GAP graph-traversal workloads gain strongly (geomean $+7.9\%$) because
 frontier access PCs are persistently dead and the history table classifies
 them quickly.
