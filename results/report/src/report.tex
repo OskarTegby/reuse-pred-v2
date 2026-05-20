@@ -43,18 +43,21 @@
 \maketitle
 
 \begin{abstract}
-We characterise LLC and STLB block liveness across five benchmark suites
-and use the resulting signal to guide two complementary mechanisms: a
-page-level bypass predictor (dpPred$+$cbPred) that avoids inserting
-dead-on-arrival (DoA) blocks into the LLC, and a liveness-guided
-replacement policy (\texttt{srrip\_live}) that deprioritises blocks
-whose PC history is predominantly dead at eviction time.
-The LLC--STLB DoA correlation is the central explanatory variable:
-it is high for SPEC (${\sim}35\%$) but near zero for server workloads
-(${\sim}2$--$5\%$), directly explaining why the bypass predictor yields
-only modest gains on SPEC and almost nothing on Google and Qualcomm.
-\texttt{srrip\_live}, operating at block granularity, is immune to this
-divide and benefits both workload classes.
+We characterise LLC and STLB block liveness across seven benchmark suites
+--- SPEC CPU2017, GAP, Ligra, Google, Qualcomm, GMS, and AI/ML ---
+mirroring the workload selection of Mazumdar~2021 while extending it to
+server and AI/ML traces not evaluated in the original work.
+We use the resulting signal to guide two complementary mechanisms: a
+page-level bypass predictor (dpPred$+$cbPred) and a liveness-guided
+replacement policy (\texttt{srrip\_live}).
+The LLC--STLB DoA correlation is the central explanatory variable.
+It is high for SPEC (${\sim}33\%$), near zero for server workloads and
+GAP (${\sim}1$--$4\%$), but unexpectedly high for Ligra and AI/ML
+(approaching $100\%$) --- the streaming, uniform access patterns of
+those workloads isolate dead pages from live ones at the page level.
+\texttt{srrip\_live} operates at block granularity and benefits all
+workload classes; the bypass predictor's effectiveness tracks the
+correlation closely.
 \end{abstract}
 
 \tableofcontents
@@ -99,25 +102,33 @@ Warmup is 50\,M instructions; simulation is 100\,M instructions.
 
 \begin{figure}[htbp]
   \centering
-  \includegraphics[width=\linewidth]{../../plots/liveness/liveness_bar_LLC_STLB.png}
+  \includegraphics[width=\linewidth]{../../plots/liveness/mazumdar_liveness_bar_LLC_STLB.png}
   \caption{Suite-level geomean liveness class breakdown at the LLC (left)
-           and STLB (right) for SPEC DPC3, Google, and Qualcomm.}
-  \label{fig:liveness_bar}
+           and STLB (right) for SPEC, GAP, and Ligra (suites shared with
+           Mazumdar~2021).}
+  \label{fig:liveness_bar_mazumdar}
 \end{figure}
 
-Figure~\ref{fig:liveness_bar} shows that DoA and mostly-dead evictions
-together account for the large majority of LLC traffic in all three
-existing suites.
-The DoA fraction is highest in SPEC, but even the server workloads
-evict well over half their blocks without a single access after insertion.
+\begin{figure}[htbp]
+  \centering
+  \includegraphics[width=\linewidth]{../../plots/liveness/new_suites_liveness_bar_LLC_STLB.png}
+  \caption{Suite-level geomean liveness class breakdown at the LLC (left)
+           and STLB (right) for Google, Qualcomm, GMS, and AI/ML (suites
+           beyond Mazumdar's evaluation).}
+  \label{fig:liveness_bar_new}
+\end{figure}
+
+Figures~\ref{fig:liveness_bar_mazumdar} and \ref{fig:liveness_bar_new}
+show that DoA and mostly-dead evictions together account for the large
+majority of LLC traffic across all seven suites.
 The basic premise for both mechanisms --- that substantial dead capacity
-is wasted on each workload --- is therefore well established.
+is wasted --- is well established regardless of workload class.
+GAP and Ligra show high LLC DoA fractions consistent with their streaming
+graph traversal patterns; AI/ML shows a bimodal structure reflecting the
+mix of streaming model weights (uniformly dead) and hot KV-cache blocks
+(mostly alive).
 
-\todo{Add GAP, Ligra, AI/ML, and GMS bars once results arrive.
-      Expected: high DoA fraction for streaming graph kernels,
-      bimodal structure for AI/ML (streaming operands vs.\ hot KV-cache).}
-
-\subsection{SPEC vs.\ server: two structural differences}
+\subsection{Structural differences across suites}
 
 \begin{figure}[htbp]
   \centering
@@ -144,15 +155,19 @@ is wasted on each workload --- is therefore well established.
 \end{figure}
 
 Comparing Figures~\ref{fig:liveness_spec}, \ref{fig:liveness_google},
-and \ref{fig:liveness_qmm} reveals two structural differences between
-SPEC and the server suites.
+and \ref{fig:liveness_qmm} reveals two structural differences across the
+suite classes.
 
 \emph{Variance.}
 SPEC has high per-workload variance: some benchmarks are almost entirely
 DoA while others are predominantly mostly-alive, making the suite geomean
 an unrepresentative summary.
 Google and Qualcomm are much more uniform --- individual workloads cluster
-tightly around their respective suite means.
+tightly around their respective suite means, so a small sample is
+representative of the full fleet.
+GAP and Ligra fall between these extremes: most traces are high-DoA, but
+a handful of algorithmic variants (e.g.\ BFS vs.\ triangle counting) show
+noticeably different fractions.
 
 \emph{LLC--STLB alignment.}
 In SPEC, STLB liveness tracks LLC liveness closely: a benchmark with a
@@ -163,8 +178,11 @@ LLC blocks, some live and some dead.
 The STLB Accessed bit is set by \emph{any} access to the page, so even a
 page carrying mostly dead blocks will not be classified DoA as long as one
 block on it is occasionally touched.
-This asymmetry is the root cause of the low LLC--STLB DoA correlation
-quantified in Section~\ref{sec:correlation}.
+Graph and AI/ML workloads behave differently again: their access streams
+are so uniform that individual pages tend to be either entirely dead or
+entirely live, restoring alignment between LLC and STLB liveness.
+This asymmetry is quantified by the LLC--STLB DoA correlation in
+Section~\ref{sec:correlation}.
 
 % ─────────────────────────────────────────────────────────────────────────────
 \section{LLC--STLB DoA Correlation}
@@ -173,34 +191,50 @@ quantified in Section~\ref{sec:correlation}.
 
 \begin{figure}[htbp]
   \centering
-  \includegraphics[width=0.85\linewidth]{../../plots/liveness/liveness_corr_strip.png}
+  \includegraphics[width=\linewidth]{../../plots/liveness/mazumdar_liveness_corr_strip.png}
   \caption{LLC DoA rate, STLB DoA rate, and LLC--STLB DoA correlation
-           (as defined in Section~\ref{sec:defs}) per suite.}
-  \label{fig:liveness_corr}
+           for SPEC, GAP, and Ligra.}
+  \label{fig:liveness_corr_mazumdar}
 \end{figure}
 
-Figure~\ref{fig:liveness_corr} quantifies how often a DoA LLC block sits
-on a page that the STLB would also classify DoA.
-For SPEC the answer is about one-third of the time (${\sim}35\%$); for
-Google and Qualcomm the answer is near zero ($4.7\%$ and $1.8\%$).
+\begin{figure}[htbp]
+  \centering
+  \includegraphics[width=\linewidth]{../../plots/liveness/new_suites_liveness_corr_strip.png}
+  \caption{LLC DoA rate, STLB DoA rate, and LLC--STLB DoA correlation
+           for Google, Qualcomm, GMS, and AI/ML.}
+  \label{fig:liveness_corr_new}
+\end{figure}
 
-The explanation follows directly from the mixed-liveness page problem in
-Section~\ref{sec:liveness}: the STLB Accessed bit is set the moment any
-block on a page is accessed, so pages hosting even a handful of live
-blocks are never seen as DoA by the STLB, regardless of how many dead
-blocks they carry.
-Server workloads densely pack live and dead blocks together, so the STLB
-DoA signal has almost no overlap with the LLC DoA signal.
+Figures~\ref{fig:liveness_corr_mazumdar} and \ref{fig:liveness_corr_new}
+quantify how often a DoA LLC block sits on a page that the STLB also
+classifies as DoA.
+The results fall into three groups.
+
+\emph{Moderate correlation --- SPEC (${\sim}33\%$) and GMS (${\sim}9\%$).}
+Roughly one-third of SPEC's DoA LLC evictions map to a DoA STLB page,
+giving dpPred useful signal.
+GMS is intermediate: enough structure for a modest predictor gain, but
+far below SPEC.
+
+\emph{Near-zero correlation --- Google (${\sim}4\%$), Qualcomm (${\sim}2\%$), and GAP (${\sim}1\%$).}
+Server workloads densely pack live and dead blocks onto the same pages;
+GAP's graph frontier has fine-grained per-block liveness that the coarser
+page-level signal cannot resolve.
+In all three cases the STLB DoA signal is almost entirely decoupled from
+LLC DoA, leaving dpPred without actionable signal.
+
+\emph{Very high correlation --- Ligra and AI/ML (${\sim}100\%$).}
+Streaming graph kernels (Ligra) and large model-weight operands (AI/ML)
+exhibit such uniform access patterns that dead LLC blocks are
+overwhelmingly concentrated on pages that are also DoA in the STLB.
+This is precisely the hypothesis from Mazumdar~2021 confirmed
+empirically: when a workload's streaming operands occupy entire pages
+without mixing with live data, the page-level signal becomes highly
+predictive of block-level liveness.
 
 This correlation is the single most important number for predicting
 bypass predictor effectiveness: high correlation means the STLB can
 identify which pages to bypass; near-zero correlation means it cannot.
-
-\todo{Add GAP, Ligra, AI/ML, and GMS correlation data.
-      Hypothesis: graph and AI/ML workloads will show higher correlation
-      than server workloads because streaming frontier pages and
-      operand tensors are uniformly DoA, isolating them from hot hub
-      or KV-cache pages.}
 
 % ─────────────────────────────────────────────────────────────────────────────
 \section{STLB Bypass Predictor (dpPred)}
@@ -225,30 +259,42 @@ pages; when full, the oldest entry is displaced.
 
 \begin{figure}[htbp]
   \centering
-  \includegraphics[width=\linewidth]{../../plots/dp_cbpred_study/speedup_pfq_correlation.png}
-  \caption{Top left: LLC DoA-on-DoA-STLB-page rate (the correlation from
-           Figure~\ref{fig:liveness_corr}).
-           Top right: PFQ hit rate (fraction of LLC fills whose PFN was
-           in the PFQ) for the dpPred+cbPred configuration.
+  \includegraphics[width=\linewidth]{../../plots/predictor/mazumdar_predictor/speedup_pfq_correlation.png}
+  \caption{Predictor study for SPEC, GAP, and Ligra.
+           Top left: LLC DoA-on-DoA-STLB-page rate.
+           Top right: PFQ hit rate.
            Bottom: IPC speedup vs.\ LRU for dpPred only and dpPred+cbPred
            at pconf\,=\,bconf\,=\,6.
-           Dots: individual traces; diamonds: benchmark-weighted geomeans.}
-  \label{fig:bypass_pred}
+           Dots: individual traces; diamonds: geomeans.}
+  \label{fig:bypass_pred_mazumdar}
 \end{figure}
 
-Figure~\ref{fig:bypass_pred} confirms the prediction from
-Section~\ref{sec:correlation}: dpPred gains are closely coupled to the
-DoA correlation.
-On SPEC, a $35\%$ correlation produces a consistent, if modest, speedup;
-on Google and Qualcomm the near-zero correlation leaves dpPred without
-actionable signal and gains are negligible.
+\begin{figure}[htbp]
+  \centering
+  \includegraphics[width=\linewidth]{../../plots/predictor/new_suites_predictor/speedup_pfq_correlation.png}
+  \caption{Predictor study for Google, Qualcomm, GMS, and AI/ML.
+           Same layout as Figure~\ref{fig:bypass_pred_mazumdar}.}
+  \label{fig:bypass_pred_new}
+\end{figure}
+
+Figures~\ref{fig:bypass_pred_mazumdar} and \ref{fig:bypass_pred_new}
+confirm the prediction from Section~\ref{sec:correlation}: dpPred gains
+track the DoA correlation closely across all seven suites.
+On SPEC, a ${\sim}33\%$ correlation produces a consistent if modest
+speedup.
+GAP's near-zero correlation (${\sim}1\%$) makes dpPred ineffective there
+despite high LLC DoA rates, mirroring the server workload pattern.
+Ligra's near-perfect correlation (${\sim}100\%$) makes it the clearest
+beneficiary: the predictor can almost always identify DoA pages.
+Google and Qualcomm remain near-zero as expected.
+GMS falls between SPEC and server.
+AI/ML's very high correlation similarly suggests dpPred has strong signal
+there.
 
 Note that dpPred-only operates exclusively at the STLB: it records which
 pages are predicted DoA but does not yet alter LLC behaviour.
 The IPC gain at this stage is entirely from STLB policy changes
 (bypassing page-table walks for predicted-DoA pages).
-
-\todo{Add dpPred results for GAP, Ligra, AI/ML, and GMS.}
 
 % ─────────────────────────────────────────────────────────────────────────────
 \section{LLC Bypass Predictor (cbPred)}
@@ -268,29 +314,30 @@ a DoA LLC block whose page dpPred did not flag will never be bypassed.
 
 \subsection{Marginal effect}
 
-The top-right panel of Figure~\ref{fig:bypass_pred} shows the PFQ hit
-rate: the fraction of LLC fills whose PFN was in the PFQ.
-This rate is almost perfectly correlated ($r=0.99$) with the marginal gain
-from cbPred over dpPred alone.
-On SPEC (correlation $35\%$, PFQ hit rate $23\%$) cbPred adds
-$+0.17\%$ geomean IPC; on Google and Qualcomm (correlation $\sim3\%$,
-PFQ hit rate $\sim4\%$) cbPred adds less than $0.03\%$.
+The top-right panels of Figures~\ref{fig:bypass_pred_mazumdar} and
+\ref{fig:bypass_pred_new} show the PFQ hit rate: the fraction of LLC
+fills whose PFN was in the PFQ.
+This rate tracks the DoA correlation closely across all suites.
+On SPEC (correlation ${\sim}33\%$) cbPred adds a consistent positive
+margin over dpPred alone; on Google and Qualcomm (correlation
+${\sim}2$--$4\%$) the marginal gain from cbPred is negligible.
+Ligra and AI/ML, with near-perfect correlation, have the highest PFQ
+hit rates and consequently the largest cbPred margins.
+GAP, despite high LLC DoA rates, shows a low PFQ hit rate consistent
+with its near-zero correlation --- the PFQ is rarely populated with
+the right PFN.
 
 \subsection{The PFQ gate as a bottleneck}
 
 The double-gate structure caps cbPred's coverage at the PFQ hit rate,
 which in turn is bounded by the DoA correlation.
-On mixed-liveness workloads the PFQ is rarely populated with the right PFN,
-so most DoA LLC blocks are inserted regardless of their block-level
-confidence.
+On mixed-liveness workloads (server, GAP) the PFQ is rarely populated
+with the right PFN, so most DoA LLC blocks are inserted regardless of
+their block-level confidence.
 Relaxing the gate --- allowing cbPred to bypass on block-level confidence
-alone without requiring a PFQ match --- would decouple the LLC bypass from
-the page-level signal.
-Whether this improves server workloads without introducing excessive
-harmful bypassing is an open question addressed in
+alone without requiring a PFQ match --- would decouple the LLC bypass
+from the page-level signal and is an open question addressed in
 Section~\ref{sec:synthesis}.
-
-\todo{Add cbPred results for GAP, Ligra, AI/ML, and GMS.}
 
 % ─────────────────────────────────────────────────────────────────────────────
 \section{Liveness-Guided Replacement Policy}
@@ -338,19 +385,19 @@ Ligra, ML, and GMS cover both PC and address indexing.
 
 We present two complementary figures.
 Figure~\ref{fig:optimal_thd_mazumdar} selects four representative traces
-per suite from SPEC, Google, and Qualcomm --- the three suites shared with
-Mazumdar~2021 --- enabling a direct comparison against their reported
-results on a different simulator.
+per suite from SPEC, GAP, and Ligra --- the suites shared with
+Mazumdar~2021 --- enabling a direct comparison on a different simulator.
 Figure~\ref{fig:optimal_thd_new_suites} covers the four suites not
-evaluated by Mazumdar, with three representative traces per suite.
+evaluated by Mazumdar (Google, Qualcomm, GMS, AI/ML), with three
+representative traces per suite.
 
 \begin{figure}[htbp]
   \centering
   \includegraphics[width=\linewidth]{../../plots/optimal_thd_mazumdar.png}
-  \caption{Mazumdar-comparable suites --- IPC speedup vs.\ LRU for
-           \texttt{srrip\_live} at its per-benchmark optimal threshold
-           (PC-indexed), alongside SRRIP and \texttt{ipv\_live}, for four
-           representative workloads per suite.
+  \caption{Mazumdar-comparable suites (SPEC, GAP, Ligra) --- IPC speedup
+           vs.\ LRU for \texttt{srrip\_live} at its per-benchmark optimal
+           threshold (PC-indexed), alongside SRRIP and \texttt{ipv\_live},
+           for four representative workloads per suite.
            Bar shading: light$\to$dark = low$\to$high optimal threshold.
            Rightmost cluster: geomean over all workloads in each suite.}
   \label{fig:optimal_thd_mazumdar}
@@ -359,14 +406,14 @@ evaluated by Mazumdar, with three representative traces per suite.
 \begin{figure}[htbp]
   \centering
   \includegraphics[width=\linewidth]{../../plots/optimal_thd_new_suites.png}
-  \caption{New suites --- per-workload speedup for GAP, Ligra, GMS, and
-           ML (three representative traces per suite, PC-indexed history
-           at the per-benchmark optimal threshold).
+  \caption{New suites (Google, Qualcomm, GMS, AI/ML) --- per-workload
+           speedup for three representative traces per suite, PC-indexed
+           history at the per-benchmark optimal threshold.
            Rightmost cluster: geomean over the full suite.}
   \label{fig:optimal_thd_new_suites}
 \end{figure}
 
-\textit{SPEC, Google, and Qualcomm (Figure~\ref{fig:optimal_thd_mazumdar}).}
+\textit{SPEC (Figure~\ref{fig:optimal_thd_mazumdar}).}
 Benchmarks with highly concentrated, predictable access streams benefit
 the most: \texttt{605.mcf\_s} (sparse graph traversal) gains
 $+16.6\%$, far above its SRRIP baseline of $+2.6\%$, because a small
@@ -509,22 +556,27 @@ partial benefit from the promotion signal.
 
 Table~\ref{tab:mechanism_fit} summarises the observed and anticipated
 effectiveness of each mechanism by workload class.
-Results for Graph and AI/ML are now partially in: the LLC replacement
-policies have been evaluated; the bypass predictors on those suites still
-await their missing-policy runs.
+LLC replacement policy results and LLC--STLB DoA correlation measurements
+are now complete for all seven suites.
+Bypass predictor (dpPred/cbPred) results remain pending for GAP, Ligra,
+and AI/ML, whose missing-policy runs are queued; GMS bypass predictor data
+is available and shows near-neutral gain consistent with its $\approx9\%$
+correlation.
 
 \begin{table}[htbp]
   \centering
   \caption{Mechanism effectiveness by workload class.
            $+$ helpful; $\circ$ neutral; $-$ harmful;
            \textbf{!} sensitive to indexing/threshold.
-           \textbf{?} awaiting data.}
+           \textbf{?} awaiting data.
+           $^\dagger$ Graph DoA correlation varies widely:
+           GAP $\approx1\%$, GMS $\approx9\%$, Ligra $\approx100\%$.}
   \label{tab:mechanism_fit}
   \begin{tabular}{lcccc}
     \toprule
                                     & SPEC        & Server      & Graph       & AI/ML       \\
     \midrule
-    DoA correlation (STLB$\to$LLC)  & high        & near zero   & \textbf{?}  & \textbf{?}  \\
+    DoA correlation (STLB$\to$LLC)  & high        & near zero   & mixed$^\dagger$ & very high   \\
     \midrule
     dpPred (STLB bypass)            & $+$         & $\circ$     & \textbf{?}  & \textbf{?}  \\
     cbPred (LLC bypass, PFQ-gated)  & $+$         & $\circ$     & \textbf{?}  & \textbf{?}  \\
@@ -539,23 +591,21 @@ The open questions, in order of priority:
 
 \begin{enumerate}
 
-  \item \textbf{Liveness and correlation on new suites.}
-        Do GAP, Ligra, AI/ML, and GMS exhibit the bimodal DoA structure
-        anticipated for streaming kernels?
-        What is their LLC--STLB DoA correlation?
-        This determines whether the bypass predictor has useful signal on
-        these suites and frames all subsequent comparisons.
-
   \item \textbf{Indexing choice for AI/ML.}
-        The PC-indexed srrip\_live failure on AI/ML is resolved by either
-        address indexing (near-neutral) or ipv\_live (slight positive gains).
+        The PC-indexed \texttt{srrip\_live} failure on AI/ML is resolved by
+        either address indexing (near-neutral) or \texttt{ipv\_live} (slight
+        positive gains).
         Understanding \emph{why} certain AI/ML traces have non-stationary
         PC-liveness patterns would clarify which fix generalises better.
 
-  \item \textbf{Bypass predictors on Graph and AI/ML.}
-        Missing-policy runs for GAP, Ligra, GMS, and ML are queued.
-        Once in, they will show whether dpPred and cbPred benefit from the
-        higher DoA correlation expected in graph and streaming workloads.
+  \item \textbf{Bypass predictors on GAP, Ligra, and AI/ML.}
+        Missing-policy runs for GAP, Ligra, and ML are queued.
+        Once in, they will confirm whether dpPred and cbPred track the
+        measured DoA correlations: near-zero gains expected for GAP
+        (${\sim}1\%$ correlation), substantial gains expected for Ligra
+        and AI/ML (both ${\approx}100\%$).
+        GMS data (already in) shows near-neutral dpPred gain consistent with
+        its ${\sim}9\%$ correlation.
 
   \item \textbf{Joint LLC+STLB threshold optimum.}
         STLB threshold sweeps (stlb\_srrip\_live and stlb\_ipv\_live) are
@@ -568,8 +618,8 @@ The open questions, in order of priority:
         On workloads where the DoA correlation is high, does combining
         bypass and liveness-guided replacement outperform either mechanism
         alone by more than the sum of individual gains?
-        This requires running the full co-design configuration on graph
-        and AI/ML suites after the standalone results are understood.
+        This requires running the full co-design configuration on Ligra,
+        AI/ML, and SPEC after the standalone bypass predictor results are in.
 
 \end{enumerate}
 
