@@ -1184,11 +1184,12 @@ void CACHE::begin_phase()
   roi_stats.back().name = NAME;
   sim_stats.back().name = NAME;
 
-  // Reset the adaptive PFQ gate window at each phase boundary so warmup
-  // observations do not bias simulation-phase decisions.
+  // Reset only the in-progress window counters at each phase boundary so the
+  // next window starts fresh.  The gate decision (pfq_gate_on) is intentionally
+  // kept from the previous phase: warmup observations are a reasonable prior for
+  // the start of simulation, and the first simulation window will update it.
   pfq_win_probes = 0;
   pfq_win_hits   = 0;
-  pfq_gate_on    = true; // start each phase gated; relax after first window
 }
 
 void CACHE::end_phase(unsigned finished_cpu)
