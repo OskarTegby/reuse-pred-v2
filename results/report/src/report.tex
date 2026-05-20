@@ -336,17 +336,19 @@ Ligra, ML, and GMS cover both PC and address indexing.
 
 \subsection{Comparison with baselines}
 
-We organise the per-benchmark comparison into two collections.
-\textit{Collection~1} (Figure~\ref{fig:optimal_thd_dpc3}) selects up to
-twelve SPEC workloads to match the Mazumdar~2021 workload set, enabling a
-direct comparison against their reported results on a different simulator.
-\textit{Collection~2} covers server workloads (Figure~\ref{fig:optimal_thd_server})
-and the four new benchmark suites (Figure~\ref{fig:optimal_thd_new_suites}).
+We present two complementary figures.
+Figure~\ref{fig:optimal_thd_dpc3} selects twelve SPEC workloads to match
+the Mazumdar~2021 workload set, enabling a direct comparison against their
+reported results on a different simulator.
+Figure~\ref{fig:optimal_thd_new_setting} covers the extended setting:
+server workloads (Google and Qualcomm) and the four new benchmark suites,
+with two representative traces per suite to keep the figure legible while
+spanning the behavioural range.
 
 \begin{figure}[htbp]
   \centering
   \includegraphics[width=\linewidth]{../../plots/optimal_thd_dpc3.png}
-  \caption{Collection~1 --- IPC speedup vs.\ LRU for \texttt{srrip\_live}
+  \caption{SPEC comparison --- IPC speedup vs.\ LRU for \texttt{srrip\_live}
            at its per-benchmark optimal threshold (PC-indexed), alongside
            SRRIP and \texttt{ipv\_live}, for twelve representative SPEC
            workloads chosen to match Mazumdar~2021.
@@ -357,21 +359,12 @@ and the four new benchmark suites (Figure~\ref{fig:optimal_thd_new_suites}).
 
 \begin{figure}[htbp]
   \centering
-  \includegraphics[width=\linewidth]{../../plots/optimal_thd_server.png}
-  \caption{Collection~2a --- per-workload speedup for Google and Qualcomm
-           server suites (three representative traces per suite).
-           Individual traces cluster tightly around the suite geomean,
-           so a small sample is representative of the full suite.}
-  \label{fig:optimal_thd_server}
-\end{figure}
-
-\begin{figure}[htbp]
-  \centering
-  \includegraphics[width=\linewidth]{../../plots/optimal_thd_new_suites.png}
-  \caption{Collection~2b --- per-workload speedup for the four new suites
-           (six representative traces per suite, PC-indexed history at the
-           per-benchmark optimal threshold).}
-  \label{fig:optimal_thd_new_suites}
+  \includegraphics[width=\linewidth]{../../plots/optimal_thd_new_setting.png}
+  \caption{Extended setting --- per-workload speedup for server suites
+           (Google, Qualcomm) and the four new suites (GAP, Ligra, GMS,
+           ML), two representative traces per suite.
+           Rightmost bar per group: geomean over the full suite.}
+  \label{fig:optimal_thd_new_setting}
 \end{figure}
 
 \textit{SPEC (Figure~\ref{fig:optimal_thd_dpc3}).}
@@ -394,11 +387,11 @@ where plain SRRIP outperforms \texttt{srrip\_live}: the mid-RRPV
 heuristic happens to match its access pattern without needing per-PC
 history.
 
-\textit{Server workloads (Figure~\ref{fig:optimal_thd_server}).}
+\textit{Server workloads (Figure~\ref{fig:optimal_thd_new_setting}).}
 A notable feature of both server suites is their low inter-trace variance:
 individual Google workloads span only $+0.3\%$ to $+8.5\%$ and Qualcomm
-workloads span $+2.8\%$ to $+5.2\%$, so any three representative traces
-capture the suite behaviour accurately.
+workloads span $+2.8\%$ to $+5.2\%$, so two representative traces per
+suite capture the suite behaviour accurately.
 This uniformity reflects the shared infrastructure and access patterns
 within each fleet.
 All server traces gain with \texttt{srrip\_live} despite the near-zero
@@ -408,7 +401,7 @@ SRRIP is consistently near zero or slightly negative for Google and
 Qualcomm: its uniform mid-RRPV assignment cannot exploit the per-PC
 liveness skew that \texttt{srrip\_live} captures.
 
-\textit{New suites (Figure~\ref{fig:optimal_thd_new_suites}).}
+\textit{New suites (Figure~\ref{fig:optimal_thd_new_setting}).}
 GAP graph-traversal workloads gain strongly (geomean $+7.9\%$) because
 frontier access PCs are persistently dead and the history table classifies
 them quickly.
