@@ -221,6 +221,14 @@ class CACHE : public champsim::operable, public MemoryRequestConsumer, public Me
   bool cbpred = false;
   bool     cbpred_weighted     = false; // weight bhist updates by insertion quality (CBPRED_WEIGHTED=1)
   bool     cbpred_no_pfq       = false; // bypass on bhist confidence alone; skip PFQ membership check (CBPRED_NO_PFQ=1)
+  // Adaptive PFQ gate: re-evaluate whether to require PFQ membership every
+  // pfq_adaptive_window probes.  When the measured hit-rate falls below
+  // pfq_adaptive_thd (%), the gate is opened (PFQ not required).
+  uint64_t pfq_adaptive_window = 0;    // evaluation window in probes; 0 = gate always on
+  uint64_t pfq_adaptive_thd    = 10;   // hit-rate % threshold; gate on iff hit_rate >= thd
+  uint64_t pfq_win_probes      = 0;    // probes counted in the current window
+  uint64_t pfq_win_hits        = 0;    // PFQ hits counted in the current window
+  bool     pfq_gate_on         = true; // current window decision: true = require PFQ
   bool     cbpred_trace        = false;        // log bypass threshold crossings to stderr (CBPRED_TRACE=1)
   uint64_t cbpred_trace_addr   = UINT64_MAX;   // full per-block trace for one address (CBPRED_TRACE_ADDR=<hex>)
   bool     tracing_cbpred()    const { return cbpred_trace || cbpred_trace_addr != UINT64_MAX; }

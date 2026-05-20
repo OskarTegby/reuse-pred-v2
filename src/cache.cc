@@ -176,16 +176,33 @@ bool CACHE::cbpred_bypass(const PACKET& fill_mshr)
   if (in_pfq)
     sim_stats.back().pfq_hits++;
 
-  // Count bhist lookups only when the PFQ gate would normally be active.
-  if (in_pfq || cbpred_no_pfq) {
+  // Adaptive PFQ gate: update the sliding window and re-evaluate whether to
+  // require PFQ membership once every pfq_adaptive_window probes.
+  if (pfq_adaptive_window > 0) {
+    pfq_win_probes++;
+    if (in_pfq) pfq_win_hits++;
+    if (pfq_win_probes >= pfq_adaptive_window) {
+      const uint64_t hit_pct = (pfq_win_hits * 100) / pfq_win_probes;
+      pfq_gate_on    = (hit_pct >= pfq_adaptive_thd);
+      pfq_win_probes = 0;
+      pfq_win_hits   = 0;
+    }
+  }
+
+  // Determine whether PFQ membership is required for this fill.
+  // Priority: cbpred_no_pfq (static off) > adaptive gate > always-on default.
+  const bool require_pfq = !cbpred_no_pfq && (pfq_adaptive_window == 0 || pfq_gate_on);
+
+  // Count bhist lookups whenever the gate passes (PFQ hit, or gate inactive).
+  if (in_pfq || !require_pfq) {
     sim_stats.back().bhist_lookups++;
     if (bhist_entry_exists(block_addr)) sim_stats.back().bhist_hits++;
   }
   // Adaptive threshold: raise bconf proportionally to accumulated mispredict debt.
   const uint64_t effective_bconf = bconf_thd
       + (bypass_debt_scale > 0 ? bypass_debt / bypass_debt_scale : 0);
-  // cbpred_no_pfq: bypass on bhist confidence alone, no PFQ membership required.
-  if ((!in_pfq && !cbpred_no_pfq) || get_bhist_entry(block_addr).doa <= effective_bconf)
+  // Gate: skip fill when PFQ membership passes (or is not required) and bconf is high.
+  if ((!in_pfq && require_pfq) || get_bhist_entry(block_addr).doa <= effective_bconf)
     return false;
 
   assert(get_bhist_entry(block_addr).doa > effective_bconf); // bypass must fire above threshold
@@ -479,7 +496,9 @@ CACHE::liveness_class CACHE::predict_liveness(uint64_t full_addr, uint64_t ip) c
 //   DPPRED=1           enable dead-page predictor on the STLB
 //   CBPRED=1           enable dead-block predictor on the LLC
 //   CBPRED_WEIGHTED=1  weight bhist updates by insertion quality (cbpred_weighted)
-//   CBPRED_NO_PFQ=1    bypass on bhist confidence alone; skip PFQ membership check (cbpred_no_pfq)
+//   CBPRED_NO_PFQ=1           bypass on bhist confidence alone; skip PFQ check entirely (cbpred_no_pfq)
+//   PFQ_ADAPTIVE_WINDOW=<n>  probes per hit-rate evaluation window; 0 = gate always on (pfq_adaptive_window)
+//   PFQ_ADAPTIVE_THD=<n>     hit-rate % to keep PFQ gate active, 0–100 (default 10) (pfq_adaptive_thd)
 //   CBPRED_TRACE=1          log bypass threshold crossings to stderr for all blocks
 //   CBPRED_TRACE_ADDR=<hex> log all events for one specific block address (hex, no 0x prefix)
 //   CBPRED_W_NORMAL=<n>     DoA-eviction bhist increment after normal insertion (default 2)
@@ -510,7 +529,12 @@ void CACHE::load_predictor_settings()
   if (const char* v = std::getenv("CBPRED"); v && std::stoull(v))
     cbpred = true;
   cbpred_weighted     = (getenv_uint64("CBPRED_WEIGHTED",    0) != 0);
-  cbpred_no_pfq       = (getenv_uint64("CBPRED_NO_PFQ",      0) != 0);
+  cbpred_no_pfq        = (getenv_uint64("CBPRED_NO_PFQ",           0) != 0);
+  pfq_adaptive_window  = getenv_uint64("PFQ_ADAPTIVE_WINDOW",      0);
+  pfq_adaptive_thd     = getenv_uint64("PFQ_ADAPTIVE_THD",         10);
+  pfq_win_probes       = 0;
+  pfq_win_hits         = 0;
+  pfq_gate_on          = true;
   cbpred_trace        = (getenv_uint64("CBPRED_TRACE",       0) != 0);
   if (const char* v = std::getenv("CBPRED_TRACE_ADDR"))
     cbpred_trace_addr = std::stoull(v, nullptr, 16);
@@ -1159,6 +1183,12 @@ void CACHE::begin_phase()
 
   roi_stats.back().name = NAME;
   sim_stats.back().name = NAME;
+
+  // Reset the adaptive PFQ gate window at each phase boundary so warmup
+  // observations do not bias simulation-phase decisions.
+  pfq_win_probes = 0;
+  pfq_win_hits   = 0;
+  pfq_gate_on    = true; // start each phase gated; relax after first window
 }
 
 void CACHE::end_phase(unsigned finished_cpu)
