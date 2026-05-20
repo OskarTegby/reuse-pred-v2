@@ -225,7 +225,7 @@ class CACHE : public champsim::operable, public MemoryRequestConsumer, public Me
   // α = 1/pfq_adaptive_window; the gate requires PFQ membership when the
   // EMA exceeds pfq_adaptive_thd (%).  0 = gate always on (no adaptation).
   uint64_t pfq_adaptive_window = 10000; // EMA memory length in probes; 0 = gate always on
-  uint64_t pfq_adaptive_thd    = 10;    // hit-rate % threshold; gate on iff ema >= thd
+  uint64_t pfq_adaptive_thd    = 30;    // hit-rate % threshold; gate on iff ema >= thd
   double   pfq_hit_rate_ema    = 1.0;   // running EMA; starts at 1 (gate on) and adapts
   bool     cbpred_trace        = false;        // log bypass threshold crossings to stderr (CBPRED_TRACE=1)
   uint64_t cbpred_trace_addr   = UINT64_MAX;   // full per-block trace for one address (CBPRED_TRACE_ADDR=<hex>)
