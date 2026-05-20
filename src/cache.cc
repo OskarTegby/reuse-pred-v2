@@ -176,22 +176,17 @@ bool CACHE::cbpred_bypass(const PACKET& fill_mshr)
   if (in_pfq)
     sim_stats.back().pfq_hits++;
 
-  // Adaptive PFQ gate: update the sliding window and re-evaluate whether to
-  // require PFQ membership once every pfq_adaptive_window probes.
+  // Adaptive PFQ gate: update the EMA of the PFQ hit rate and derive the
+  // gate decision.  α = 1/pfq_adaptive_window; no sharp window resets.
   if (pfq_adaptive_window > 0) {
-    pfq_win_probes++;
-    if (in_pfq) pfq_win_hits++;
-    if (pfq_win_probes >= pfq_adaptive_window) {
-      const uint64_t hit_pct = (pfq_win_hits * 100) / pfq_win_probes;
-      pfq_gate_on    = (hit_pct >= pfq_adaptive_thd);
-      pfq_win_probes = 0;
-      pfq_win_hits   = 0;
-    }
+    const double alpha = 1.0 / static_cast<double>(pfq_adaptive_window);
+    pfq_hit_rate_ema += alpha * ((in_pfq ? 1.0 : 0.0) - pfq_hit_rate_ema);
   }
 
   // Determine whether PFQ membership is required for this fill.
-  // Priority: cbpred_no_pfq (static off) > adaptive gate > always-on default.
-  const bool require_pfq = !cbpred_no_pfq && (pfq_adaptive_window == 0 || pfq_gate_on);
+  // Priority: cbpred_no_pfq (static off) > adaptive EMA > always-on default.
+  const bool require_pfq = !cbpred_no_pfq &&
+      (pfq_adaptive_window == 0 || pfq_hit_rate_ema * 100.0 >= static_cast<double>(pfq_adaptive_thd));
 
   // Count bhist lookups whenever the gate passes (PFQ hit, or gate inactive).
   if (in_pfq || !require_pfq) {
@@ -532,9 +527,7 @@ void CACHE::load_predictor_settings()
   cbpred_no_pfq        = (getenv_uint64("CBPRED_NO_PFQ",           0) != 0);
   pfq_adaptive_window  = getenv_uint64("PFQ_ADAPTIVE_WINDOW",      0);
   pfq_adaptive_thd     = getenv_uint64("PFQ_ADAPTIVE_THD",         10);
-  pfq_win_probes       = 0;
-  pfq_win_hits         = 0;
-  pfq_gate_on          = true;
+  pfq_hit_rate_ema     = 1.0; // start conservative; adapts toward true rate
   cbpred_trace        = (getenv_uint64("CBPRED_TRACE",       0) != 0);
   if (const char* v = std::getenv("CBPRED_TRACE_ADDR"))
     cbpred_trace_addr = std::stoull(v, nullptr, 16);
@@ -1184,12 +1177,9 @@ void CACHE::begin_phase()
   roi_stats.back().name = NAME;
   sim_stats.back().name = NAME;
 
-  // Reset only the in-progress window counters at each phase boundary so the
-  // next window starts fresh.  The gate decision (pfq_gate_on) is intentionally
-  // kept from the previous phase: warmup observations are a reasonable prior for
-  // the start of simulation, and the first simulation window will update it.
-  pfq_win_probes = 0;
-  pfq_win_hits   = 0;
+  // EMA carries forward across phase boundaries naturally — no reset needed.
+  // Warmup observations are a reasonable prior for the start of simulation
+  // and are downweighted automatically as simulation fills accumulate.
 }
 
 void CACHE::end_phase(unsigned finished_cpu)
