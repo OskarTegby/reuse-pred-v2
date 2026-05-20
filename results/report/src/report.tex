@@ -336,21 +336,45 @@ Ligra, ML, and GMS cover both PC and address indexing.
 
 \subsection{Comparison with baselines}
 
+We organise the per-benchmark comparison into two collections.
+\textit{Collection~1} (Figure~\ref{fig:optimal_thd_dpc3}) selects up to
+twelve SPEC workloads to match the Mazumdar~2021 workload set, enabling a
+direct comparison against their reported results on a different simulator.
+\textit{Collection~2} covers server workloads (Figure~\ref{fig:optimal_thd_server})
+and the four new benchmark suites (Figure~\ref{fig:optimal_thd_new_suites}).
+
 \begin{figure}[htbp]
   \centering
-  \includegraphics[width=\linewidth]{../../plots/optimal_thd_per_benchmark_pc.png}
-  \caption{IPC speedup vs.\ LRU for \texttt{srrip\_live} at its
-           per-benchmark optimal threshold (PC-indexed), alongside SRRIP
-           and IPV, for a representative selection of workloads per suite.
+  \includegraphics[width=\linewidth]{../../plots/optimal_thd_dpc3.png}
+  \caption{Collection~1 --- IPC speedup vs.\ LRU for \texttt{srrip\_live}
+           at its per-benchmark optimal threshold (PC-indexed), alongside
+           SRRIP and \texttt{ipv\_live}, for twelve representative SPEC
+           workloads chosen to match Mazumdar~2021.
            Bar shading: light$\to$dark = low$\to$high optimal threshold.
-           Rightmost cluster: geomean over \emph{all} workloads in each suite.}
-  \label{fig:optimal_thd_pc}
+           Rightmost cluster: geomean over all SPEC workloads.}
+  \label{fig:optimal_thd_dpc3}
 \end{figure}
 
-Figure~\ref{fig:optimal_thd_pc} shows representative workloads chosen to
-span the range of behaviours.
+\begin{figure}[htbp]
+  \centering
+  \includegraphics[width=\linewidth]{../../plots/optimal_thd_server.png}
+  \caption{Collection~2a --- per-workload speedup for Google and Qualcomm
+           server suites (three representative traces per suite).
+           Individual traces cluster tightly around the suite geomean,
+           so a small sample is representative of the full suite.}
+  \label{fig:optimal_thd_server}
+\end{figure}
 
-\textit{SPEC.}
+\begin{figure}[htbp]
+  \centering
+  \includegraphics[width=\linewidth]{../../plots/optimal_thd_new_suites.png}
+  \caption{Collection~2b --- per-workload speedup for the four new suites
+           (six representative traces per suite, PC-indexed history at the
+           per-benchmark optimal threshold).}
+  \label{fig:optimal_thd_new_suites}
+\end{figure}
+
+\textit{SPEC (Figure~\ref{fig:optimal_thd_dpc3}).}
 Benchmarks with highly concentrated, predictable access streams benefit
 the most: \texttt{605.mcf\_s} (sparse graph traversal) gains
 $+16.6\%$, far above its SRRIP baseline of $+2.6\%$, because a small
@@ -370,25 +394,34 @@ where plain SRRIP outperforms \texttt{srrip\_live}: the mid-RRPV
 heuristic happens to match its access pattern without needing per-PC
 history.
 
-\textit{Google.}
-All seven Google workloads gain with \texttt{srrip\_live} ($+0.3\%$ to
-$+8.5\%$) despite the near-zero LLC--STLB DoA correlation, confirming
-that block-level liveness is recoverable even when the page-level signal
-is absent.
-The \texttt{sierra.a} traces show the largest gains, and SRRIP is
-consistently positive for them, suggesting a workload with moderate
-liveness skew across PCs.
-\texttt{charlie} and \texttt{yankee} traces show SRRIP near or below
-zero while \texttt{srrip\_live} gains $+4$--$7\%$: SRRIP's uniform
-mid-RRPV assignment actively harms these workloads.
-\texttt{tahoe\_0002} is the outlier ($+0.3\%$), where SRRIP ($+0.9\%$)
-does marginally better, indicating a near-uniform liveness distribution
-that the history table cannot exploit.
+\textit{Server workloads (Figure~\ref{fig:optimal_thd_server}).}
+A notable feature of both server suites is their low inter-trace variance:
+individual Google workloads span only $+0.3\%$ to $+8.5\%$ and Qualcomm
+workloads span $+2.8\%$ to $+5.2\%$, so any three representative traces
+capture the suite behaviour accurately.
+This uniformity reflects the shared infrastructure and access patterns
+within each fleet.
+All server traces gain with \texttt{srrip\_live} despite the near-zero
+LLC--STLB DoA correlation, confirming that block-level liveness is
+recoverable even when the page-level signal is absent.
+SRRIP is consistently near zero or slightly negative for Google and
+Qualcomm: its uniform mid-RRPV assignment cannot exploit the per-PC
+liveness skew that \texttt{srrip\_live} captures.
 
-\textit{Qualcomm.}
-The QMM server workloads are strikingly uniform ($+2.8\%$ to $+5.2\%$),
-reflecting their shared architecture as mobile-server traces.
-No single threshold or pattern dominates.
+\textit{New suites (Figure~\ref{fig:optimal_thd_new_suites}).}
+GAP graph-traversal workloads gain strongly (geomean $+7.9\%$) because
+frontier access PCs are persistently dead and the history table classifies
+them quickly.
+Ligra graph-computing workloads show wide per-trace variance: some
+streaming kernels (e.g.\ Triangle) gain $+33.9\%$, while others gain
+only $+1$--$2\%$.
+GMS graph-mining workloads show modest gains (under $+1\%$), consistent
+with short, compute-intensive kernels leaving little room for replacement
+policy differentiation.
+AI/ML is a failure case for PC-indexed history on several traces
+(bark.cpp.5 $-69\%$, stable-diffusion $-60\%$): non-stationary
+PC-liveness patterns cause the history table to give misleading guidance.
+Address-indexed history resolves this (see Figure~\ref{fig:srrip_live_thd_addr_new}).
 
 No single threshold is universally optimal across workloads (shading
 varies), confirming the need for per-suite threshold tuning.
