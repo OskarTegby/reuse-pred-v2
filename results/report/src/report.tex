@@ -623,4 +623,101 @@ The open questions, in order of priority:
 
 \end{enumerate}
 
+% ─────────────────────────────────────────────────────────────────────────────
+\subsection{Adaptive gating and replacement co-design}
+\label{sec:adaptive_design}
+% ─────────────────────────────────────────────────────────────────────────────
+
+The results above suggest a structured programme of mechanism extensions.
+The steps are ordered by dependency: each one requires the preceding
+experiment to validate its premise before implementation is worthwhile.
+
+\paragraph{Step 1 --- bconf-only bypass.}
+The first experiment removes the PFQ membership requirement from cbPred and
+runs all seven suites with block-level confidence (\texttt{bconf}) as the sole
+gate on LLC bypass.
+On low-correlation workloads (server, GAP) the PFQ gate currently suppresses
+nearly all LLC bypasses, because the PFQ is rarely populated with the right
+PFN --- yet \texttt{srrip\_live} already demonstrates that block-level
+liveness signal is strong and exploitable on exactly those workloads.
+The bconf-only experiment directly tests whether releasing the suppressed
+bypasses translates to IPC gain.
+On high-correlation workloads (Ligra, AI/ML) the gate is already
+near-redundant, so bconf-only bypass should match or slightly exceed the
+current gated design by extending coverage to blocks whose page dpPred
+happened not to flag.
+The expected outcome is a clear IPC improvement on low-correlation suites and
+no regression on high-correlation ones --- establishing that the block-level
+signal is independently sufficient and that the PFQ gate is a bottleneck
+rather than a filter.
+
+\paragraph{Step 2 --- PFQ hit rate as a fill-time correlation proxy.}
+The LLC--STLB DoA correlation is measured at eviction time: we observe after
+the fact that $X\%$ of DoA LLC evictions were on DoA STLB pages.
+The PFQ hit rate is the same quantity measured at fill time: the fraction of
+LLC fills whose PFN is currently in the PFQ.
+The two numbers track each other closely because both reflect the underlying
+alignment between STLB and LLC liveness.
+Crucially, fill time is the more purposeful measurement point, because that
+is precisely when the insertion decision must be made --- whether to bypass
+the fill, insert with high RRPV, or insert normally.
+Measuring correlation at eviction time cannot help that decision; the PFQ
+hit rate provides the same information at the moment it is needed, using
+counters that are already computed by the existing hardware.
+
+\paragraph{Step 3 --- Adaptive PFQ gate.}
+Once bconf-only performance is characterised, the adaptive design follows:
+maintain a rolling PFQ hit rate counter (hits per $N$ LLC fills) and
+switch between gated and ungated bypass at a configurable threshold.
+Below threshold, bypass on bconf alone --- the page-level filter contributes
+noise rather than signal.
+Above threshold, require PFQ membership --- the filter adds precision by
+ensuring the block-level bypass is corroborated by a STLB-level DoA
+prediction.
+Sweeping the threshold across suites will reveal whether a single value
+generalises or whether per-suite tuning is required.
+
+\paragraph{Step 4 --- PFQ-guided replacement at high correlation.}
+When the PFQ hit rate exceeds the threshold, the STLB signal is reliable
+enough to inform the replacement policy as well as the bypass decision.
+The extension inserts any block whose PFN is currently in the PFQ with a
+high RRPV, even if \texttt{bconf} has not yet accumulated enough evidence to
+justify full bypass.
+This fills a coverage gap in the current design: DoA blocks from PCs that
+are early in their confidence-building phase currently receive the default
+RRPV, wasting the page-level signal that dpPred has already committed to.
+The same PFQ hit rate threshold that governs the bypass gate also governs
+the replacement guidance, keeping the two modes consistent: on
+low-correlation workloads neither mechanism uses the STLB signal; on
+high-correlation workloads both use it aggressively at fill time.
+
+\paragraph{Step 5 --- Prediction accuracy feedback (deferred).}
+A known failure mode for aggressive RRPV assignment is a self-sealing
+feedback loop: inserting a block with RRPV\_MAX causes it to be evicted
+before any hits can arrive, and the resulting hitless eviction then
+\emph{appears} to confirm the DoA classification, reinforcing it.
+A principled correction maintains a small \emph{post-removal buffer} of
+recently bypassed or high-RRPV-evicted block addresses.
+On every demand miss, the buffer is checked; a hit indicates the removal
+was premature, and the responsible PC's DoA confidence is reduced.
+The mechanism is symmetric for bypass (block never inserted) and aggressive
+replacement (block inserted but evicted early): in both cases the actionable
+signal is a demand miss on an address that the predictor recently removed.
+A simpler first approximation is to give borderline blocks slightly more
+residence time --- a modest RRPV reduction rather than a full confidence
+reset --- and rely on captured hits during that extended window to naturally
+correct the history.
+Either variant is left to a later experimental stage, after the adaptive
+gating experiments have established the baseline benefit.
+
+\paragraph{Step 6 --- Bypass accuracy tracking (later stage).}
+Tracking the number and accuracy of past bypasses per PC can further refine
+\texttt{bconf}: a PC whose bypasses are frequently followed by demand misses
+(false bypasses) should have its threshold raised, while a PC with
+consistently accurate bypasses can safely use a lower threshold.
+This closes the feedback loop at the predictor level and is the natural
+generalisation of the post-removal buffer described above.
+Implementation is deferred until the adaptive gating mechanism (Steps 1--4)
+is validated and its gains are well-understood.
+
 \end{document}
