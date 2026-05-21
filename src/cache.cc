@@ -186,12 +186,33 @@ bool CACHE::cbpred_bypass(const PACKET& fill_mshr)
   if (in_pc_pfq)
     sim_stats.back().pc_pfq_hits++;
 
-  // Select the active queue and history entry based on the indexing mode.
-  const bool in_active_queue = (cbpred_idx == cbpred_idx_t::pc) ? in_pc_pfq : in_pfq;
-  const auto pc_bhist_it     = pc_bhist.find(fill_pc);
-  const uint64_t active_doa  = (cbpred_idx == cbpred_idx_t::pc)
-      ? (pc_bhist_it != pc_bhist.end() ? pc_bhist_it->second.doa : 0)
-      : get_bhist_entry(block_addr).doa;
+  // Select the active queue signal and history entry based on the indexing mode.
+  const bool in_combined_strict = in_pfq && in_pc_pfq;
+  const bool in_combined_loose  = in_pfq || in_pc_pfq;
+  bool in_active_queue;
+  switch (cbpred_idx) {
+    case cbpred_idx_t::pc:         in_active_queue = in_pc_pfq;          break;
+    case cbpred_idx_t::pc_addr:    in_active_queue = in_combined_strict; break;
+    case cbpred_idx_t::pc_or_addr: in_active_queue = in_combined_loose;  break;
+    default:                        in_active_queue = in_pfq;             break;
+  }
+
+  const auto pc_bhist_it      = pc_bhist.find(fill_pc);
+  const auto pc_key            = std::make_pair(fill_pc, block_addr);
+  const auto pc_addr_bhist_it  = pc_addr_bhist.find(pc_key);
+  uint64_t active_doa;
+  switch (cbpred_idx) {
+    case cbpred_idx_t::pc:
+      active_doa = (pc_bhist_it != pc_bhist.end()) ? pc_bhist_it->second.doa : 0;
+      break;
+    case cbpred_idx_t::pc_addr:
+    case cbpred_idx_t::pc_or_addr:
+      active_doa = (pc_addr_bhist_it != pc_addr_bhist.end()) ? pc_addr_bhist_it->second.doa : 0;
+      break;
+    default:
+      active_doa = get_bhist_entry(block_addr).doa;
+      break;
+  }
 
   // Adaptive PFQ gate: EMA tracks whichever queue signal is active.
   if (pfq_adaptive_window > 0) {
@@ -206,12 +227,20 @@ bool CACHE::cbpred_bypass(const PACKET& fill_mshr)
 
   // Count history lookups whenever the gate passes (queue hit, or gate inactive).
   if (in_active_queue || !require_pfq) {
-    if (cbpred_idx == cbpred_idx_t::pc) {
-      sim_stats.back().pc_bhist_lookups++;
-      if (pc_bhist_it != pc_bhist.end()) sim_stats.back().pc_bhist_hits++;
-    } else {
-      sim_stats.back().bhist_lookups++;
-      if (bhist_entry_exists(block_addr)) sim_stats.back().bhist_hits++;
+    switch (cbpred_idx) {
+      case cbpred_idx_t::pc:
+        sim_stats.back().pc_bhist_lookups++;
+        if (pc_bhist_it != pc_bhist.end()) sim_stats.back().pc_bhist_hits++;
+        break;
+      case cbpred_idx_t::pc_addr:
+      case cbpred_idx_t::pc_or_addr:
+        sim_stats.back().pc_addr_bhist_lookups++;
+        if (pc_addr_bhist_it != pc_addr_bhist.end()) sim_stats.back().pc_addr_bhist_hits++;
+        break;
+      default:
+        sim_stats.back().bhist_lookups++;
+        if (bhist_entry_exists(block_addr)) sim_stats.back().bhist_hits++;
+        break;
     }
   }
 
@@ -225,7 +254,7 @@ bool CACHE::cbpred_bypass(const PACKET& fill_mshr)
 
   assert(active_doa > effective_bconf); // bypass must fire above threshold
   if (tracing_cbpred()) {
-    const uint64_t key = (cbpred_idx == cbpred_idx_t::pc) ? fill_pc : block_addr;
+    const uint64_t key = (cbpred_idx == cbpred_idx_t::addr) ? block_addr : fill_pc;
     trace_cbpred_event("bypass", key, active_doa, active_doa);
   }
   sim_stats.back().llc_bypasses++;
@@ -397,6 +426,8 @@ void CACHE::update_eviction_counters(const BLOCK& victim, liveness_class lv)
   } else if (cbpred && NAME == "LLC" && victim.dp) {
     if (cbpred_idx == cbpred_idx_t::pc) {
       update(pc_bhist[victim.ip]);
+    } else if (cbpred_idx == cbpred_idx_t::pc_addr || cbpred_idx == cbpred_idx_t::pc_or_addr) {
+      update(pc_addr_bhist[{victim.ip, victim.address >> OFFSET_BITS}]);
     } else if (cbpred_weighted) {
       // Normal-insert DoA is strong evidence; pessimistic-insert DoA is weak.
       // Smooth de-escalation: partial decrement instead of hard reset.
@@ -571,8 +602,12 @@ void CACHE::load_predictor_settings()
   bypass_debt       = 0;
   mid_key          = (getenv_uint64("MID_KEY",     0) == 1) ? mid_key_t::pc : mid_key_t::addr;
   mid_promote_on_hit = (getenv_uint64("MID_PROMOTE", 0) == 1);
-  if (const char* v = std::getenv("CBPRED_IDX"))
-    cbpred_idx = (std::strcmp(v, "pc") == 0) ? cbpred_idx_t::pc : cbpred_idx_t::addr;
+  if (const char* v = std::getenv("CBPRED_IDX")) {
+    if      (std::strcmp(v, "pc")         == 0) cbpred_idx = cbpred_idx_t::pc;
+    else if (std::strcmp(v, "pc_addr")    == 0) cbpred_idx = cbpred_idx_t::pc_addr;
+    else if (std::strcmp(v, "pc_or_addr") == 0) cbpred_idx = cbpred_idx_t::pc_or_addr;
+    else                                         cbpred_idx = cbpred_idx_t::addr;
+  }
 
   phist_hash = (getenv_uint64("PHIST_HASH", 1) != 0);
   bhist_hash = (getenv_uint64("BHIST_HASH", 1) != 0);
@@ -1241,8 +1276,10 @@ void CACHE::end_phase(unsigned finished_cpu)
   roi_stats.back().phist_hits       = sim_stats.back().phist_hits;
   roi_stats.back().bhist_lookups    = sim_stats.back().bhist_lookups;
   roi_stats.back().bhist_hits       = sim_stats.back().bhist_hits;
-  roi_stats.back().pc_bhist_lookups = sim_stats.back().pc_bhist_lookups;
-  roi_stats.back().pc_bhist_hits    = sim_stats.back().pc_bhist_hits;
+  roi_stats.back().pc_bhist_lookups      = sim_stats.back().pc_bhist_lookups;
+  roi_stats.back().pc_bhist_hits         = sim_stats.back().pc_bhist_hits;
+  roi_stats.back().pc_addr_bhist_lookups = sim_stats.back().pc_addr_bhist_lookups;
+  roi_stats.back().pc_addr_bhist_hits    = sim_stats.back().pc_addr_bhist_hits;
   roi_stats.back().st_lookups    = sim_stats.back().st_lookups;
   roi_stats.back().st_hits       = sim_stats.back().st_hits;
 
