@@ -100,6 +100,9 @@ void champsim::plain_printer::print(CACHE::stats_type stats)
       if (stats.pfq_probes > 0)
         stream << stats.name << " PFQ PROBES: " << std::setw(10) << stats.pfq_probes
                << "  HITS: " << std::setw(10) << stats.pfq_hits << std::endl;
+      if (stats.pc_pfq_probes > 0)
+        stream << stats.name << " PC-PFQ PROBES: " << std::setw(10) << stats.pc_pfq_probes
+               << "  HITS: " << std::setw(10) << stats.pc_pfq_hits << std::endl;
       if (stats.bhist_lookups > 0)
         stream << stats.name << " BHIST LOOKUPS: " << std::setw(10) << stats.bhist_lookups
                << "  HITS: " << std::setw(10) << stats.bhist_hits << std::endl;

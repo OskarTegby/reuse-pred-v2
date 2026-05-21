@@ -59,8 +59,10 @@ struct cache_stats {
 
   uint64_t llt_bypasses = 0;
   uint64_t llc_bypasses = 0;
-  uint64_t pfq_probes   = 0;   // LLC fills checked against PFQ (CBPRED=1 only)
-  uint64_t pfq_hits     = 0;   // subset of pfq_probes whose page was in PFQ
+  uint64_t pfq_probes    = 0;   // LLC fills checked against PFQ by PFN (CBPRED=1 only)
+  uint64_t pfq_hits      = 0;   // subset of pfq_probes whose PFN was in PFQ
+  uint64_t pc_pfq_probes = 0;   // LLC fills checked against PC-PFQ by PC (CBPRED=1 only)
+  uint64_t pc_pfq_hits   = 0;   // subset of pc_pfq_probes whose PC was in PC-PFQ
 
   // ── Bypass regret (LLC and STLB only; only populated when bypass is active) ──
   // bypass_incorrect – bypassed line demanded while it would still have been resident
@@ -213,8 +215,20 @@ class CACHE : public champsim::operable, public MemoryRequestConsumer, public Me
 
 
   // Shared physical-frame queue: dpPred fills it; cbPred reads it.
-  inline static std::deque<uint64_t> pfq{};
+  // pfq     — PFN-only entries; cbPred matches by physical page (existing design).
+  // pc_pfq  — (PC, PFN) pairs; cbPred can match by PC, PFN, or both.
+  // Both queues are populated simultaneously on every dpPred bypass and share pfq_cap.
+  inline static std::deque<uint64_t>                       pfq{};
+  inline static std::deque<std::pair<uint64_t, uint64_t>>  pc_pfq{};  // (PC, PFN)
   inline static uint64_t pfq_cap = 8;
+
+  // Shadow table entry: records the context of a bypassed fill so that
+  // a subsequent demand on the same VPN can be identified as a misprediction.
+  struct shadow_entry_t {
+    uint64_t vpn;          // virtual page number of the bypassed block
+    uint64_t pc;           // instruction PC that triggered the bypass
+    uint64_t translation;  // physical translation data (PFN + flags)
+  };
 
   // Per-instance state
   bool dppred = false;
@@ -266,7 +280,7 @@ class CACHE : public champsim::operable, public MemoryRequestConsumer, public Me
 
   std::map<uint64_t, std::map<uint64_t,    hist_entry>> phist;      // [vpn_hash][pc_hash] → entry  (hashed)
   std::map<uint64_t, std::map<phist_key_t, hist_entry>> phist_full; // [pc_set][{pc_tag,vpn}] → entry (full-key)
-  std::deque<std::pair<uint64_t, uint64_t>> shadow_table;           // recently bypassed (VPN, translation data)
+  std::deque<shadow_entry_t> shadow_table;                          // recently bypassed {vpn, pc, translation}
   std::map<uint64_t, hist_entry> bhist;                             // [block_hash] → entry           (hashed)
   std::map<uint64_t, std::map<uint64_t, hist_entry>> bhist_full;   // [addr_set][addr_tag] → entry   (full-key)
 

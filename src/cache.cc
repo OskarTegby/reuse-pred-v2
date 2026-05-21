@@ -114,13 +114,13 @@ bool CACHE::dppred_shadow_lookup(const PACKET& handle_pkt)
 {
   const auto vpn = handle_pkt.address >> OFFSET_BITS;
   sim_stats.back().st_lookups++;
-  auto it = std::find_if(shadow_table.begin(), shadow_table.end(), [vpn](const auto& e) { return e.first == vpn; });
+  auto it = std::find_if(shadow_table.begin(), shadow_table.end(), [vpn](const auto& e) { return e.vpn == vpn; });
   if (it == shadow_table.end())
     return false;
   sim_stats.back().st_hits++;
 
   phist_clear_vpn(vpn);
-  const auto stored_data = it->second;
+  const auto stored_data = it->translation;
   shadow_table.erase(it);
 
   // Serve the translation to all waiting requesters.
@@ -150,15 +150,19 @@ bool CACHE::dppred_bypass(const PACKET& fill_mshr)
   if (get_phist_entry(pc, vpn).doa <= pconf_thd)
     return false;
 
-  // Push physical frame into the shared queue for cbPred (FIFO)
+  // Push PFN into the PFN-keyed queue and (PC, PFN) into the PC-keyed queue (FIFO, shared cap).
   if (pfq.size() >= pfq_cap)
     pfq.pop_front();
   pfq.push_back(fill_mshr.data >> LOG2_PAGE_SIZE);
 
-  // Remember the bypassed (VPN, translation) for re-insertion on re-access (FIFO)
+  if (pc_pfq.size() >= pfq_cap)
+    pc_pfq.pop_front();
+  pc_pfq.push_back({fill_mshr.ip, fill_mshr.data >> LOG2_PAGE_SIZE});
+
+  // Remember the bypassed {VPN, PC, translation} for re-insertion on re-access (FIFO).
   if (shadow_table.size() >= st_size)
     shadow_table.pop_front();
-  shadow_table.push_back({fill_mshr.address >> OFFSET_BITS, fill_mshr.data});
+  shadow_table.push_back({fill_mshr.address >> OFFSET_BITS, fill_mshr.ip, fill_mshr.data});
 
   sim_stats.back().llt_bypasses++;
   return true;
@@ -170,11 +174,17 @@ bool CACHE::cbpred_bypass(const PACKET& fill_mshr)
 {
   const auto pfn        = fill_mshr.address >> LOG2_PAGE_SIZE;
   const auto block_addr = fill_mshr.address >> OFFSET_BITS;
+  const auto fill_pc    = fill_mshr.ip;
   const bool in_pfq     = std::find(pfq.begin(), pfq.end(), pfn) != pfq.end();
+  const bool in_pc_pfq  = std::find_if(pc_pfq.begin(), pc_pfq.end(),
+                              [fill_pc](const auto& e){ return e.first == fill_pc; }) != pc_pfq.end();
 
   sim_stats.back().pfq_probes++;
   if (in_pfq)
     sim_stats.back().pfq_hits++;
+  sim_stats.back().pc_pfq_probes++;
+  if (in_pc_pfq)
+    sim_stats.back().pc_pfq_hits++;
 
   // Adaptive PFQ gate: update the EMA of the PFQ hit rate and derive the
   // gate decision.  α = 1/pfq_adaptive_window; no sharp window resets.
@@ -1205,8 +1215,10 @@ void CACHE::end_phase(unsigned finished_cpu)
   roi_stats.back().bypass_shadow_overflow    = sim_stats.back().bypass_shadow_overflow;
   roi_stats.back().cbpred_doa_normal_inserts      = sim_stats.back().cbpred_doa_normal_inserts;
   roi_stats.back().cbpred_doa_pessimistic_inserts = sim_stats.back().cbpred_doa_pessimistic_inserts;
-  roi_stats.back().pfq_probes   = sim_stats.back().pfq_probes;
-  roi_stats.back().pfq_hits     = sim_stats.back().pfq_hits;
+  roi_stats.back().pfq_probes    = sim_stats.back().pfq_probes;
+  roi_stats.back().pfq_hits      = sim_stats.back().pfq_hits;
+  roi_stats.back().pc_pfq_probes = sim_stats.back().pc_pfq_probes;
+  roi_stats.back().pc_pfq_hits   = sim_stats.back().pc_pfq_hits;
 
   roi_stats.back().phist_lookups = sim_stats.back().phist_lookups;
   roi_stats.back().phist_hits    = sim_stats.back().phist_hits;
