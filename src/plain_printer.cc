@@ -106,6 +106,9 @@ void champsim::plain_printer::print(CACHE::stats_type stats)
       if (stats.bhist_lookups > 0)
         stream << stats.name << " BHIST LOOKUPS: " << std::setw(10) << stats.bhist_lookups
                << "  HITS: " << std::setw(10) << stats.bhist_hits << std::endl;
+      if (stats.pc_bhist_lookups > 0)
+        stream << stats.name << " PC-BHIST LOOKUPS: " << std::setw(10) << stats.pc_bhist_lookups
+               << "  HITS: " << std::setw(10) << stats.pc_bhist_hits << std::endl;
     }
     if ((stats.name == "cpu0_STLB" || stats.name == "LLC") &&
         (stats.bypass_incorrect + stats.bypass_correct + stats.bypass_shadow_overflow > 0)) {

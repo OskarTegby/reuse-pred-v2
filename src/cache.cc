@@ -186,34 +186,47 @@ bool CACHE::cbpred_bypass(const PACKET& fill_mshr)
   if (in_pc_pfq)
     sim_stats.back().pc_pfq_hits++;
 
-  // Adaptive PFQ gate: update the EMA of the PFQ hit rate and derive the
-  // gate decision.  α = 1/pfq_adaptive_window; no sharp window resets.
+  // Select the active queue and history entry based on the indexing mode.
+  const bool in_active_queue = (cbpred_idx == cbpred_idx_t::pc) ? in_pc_pfq : in_pfq;
+  const auto pc_bhist_it     = pc_bhist.find(fill_pc);
+  const uint64_t active_doa  = (cbpred_idx == cbpred_idx_t::pc)
+      ? (pc_bhist_it != pc_bhist.end() ? pc_bhist_it->second.doa : 0)
+      : get_bhist_entry(block_addr).doa;
+
+  // Adaptive PFQ gate: EMA tracks whichever queue signal is active.
   if (pfq_adaptive_window > 0) {
     const double alpha = 1.0 / static_cast<double>(pfq_adaptive_window);
-    pfq_hit_rate_ema += alpha * ((in_pfq ? 1.0 : 0.0) - pfq_hit_rate_ema);
+    pfq_hit_rate_ema += alpha * ((in_active_queue ? 1.0 : 0.0) - pfq_hit_rate_ema);
   }
 
-  // Determine whether PFQ membership is required for this fill.
+  // Determine whether queue membership is required for this fill.
   // Priority: cbpred_no_pfq (static off) > adaptive EMA > always-on default.
   const bool require_pfq = !cbpred_no_pfq &&
       (pfq_adaptive_window == 0 || pfq_hit_rate_ema * 100.0 >= static_cast<double>(pfq_adaptive_thd));
 
-  // Count bhist lookups whenever the gate passes (PFQ hit, or gate inactive).
-  if (in_pfq || !require_pfq) {
-    sim_stats.back().bhist_lookups++;
-    if (bhist_entry_exists(block_addr)) sim_stats.back().bhist_hits++;
+  // Count history lookups whenever the gate passes (queue hit, or gate inactive).
+  if (in_active_queue || !require_pfq) {
+    if (cbpred_idx == cbpred_idx_t::pc) {
+      sim_stats.back().pc_bhist_lookups++;
+      if (pc_bhist_it != pc_bhist.end()) sim_stats.back().pc_bhist_hits++;
+    } else {
+      sim_stats.back().bhist_lookups++;
+      if (bhist_entry_exists(block_addr)) sim_stats.back().bhist_hits++;
+    }
   }
+
   // Adaptive threshold: raise bconf proportionally to accumulated mispredict debt.
   const uint64_t effective_bconf = bconf_thd
       + (bypass_debt_scale > 0 ? bypass_debt / bypass_debt_scale : 0);
-  // Gate: skip fill when PFQ membership passes (or is not required) and bconf is high.
-  if ((!in_pfq && require_pfq) || get_bhist_entry(block_addr).doa <= effective_bconf)
+
+  // Gate: skip fill when queue membership passes (or not required) and confidence is high.
+  if ((!in_active_queue && require_pfq) || active_doa <= effective_bconf)
     return false;
 
-  assert(get_bhist_entry(block_addr).doa > effective_bconf); // bypass must fire above threshold
+  assert(active_doa > effective_bconf); // bypass must fire above threshold
   if (tracing_cbpred()) {
-    const uint64_t d = get_bhist_entry(block_addr).doa;
-    trace_cbpred_event("bypass", block_addr, d, d);
+    const uint64_t key = (cbpred_idx == cbpred_idx_t::pc) ? fill_pc : block_addr;
+    trace_cbpred_event("bypass", key, active_doa, active_doa);
   }
   sim_stats.back().llc_bypasses++;
   return true;
@@ -382,7 +395,9 @@ void CACHE::update_eviction_counters(const BLOCK& victim, liveness_class lv)
   if (dppred && NAME == "cpu0_STLB") {
     update(get_phist_entry(victim.ip, victim.address >> OFFSET_BITS));
   } else if (cbpred && NAME == "LLC" && victim.dp) {
-    if (cbpred_weighted) {
+    if (cbpred_idx == cbpred_idx_t::pc) {
+      update(pc_bhist[victim.ip]);
+    } else if (cbpred_weighted) {
       // Normal-insert DoA is strong evidence; pessimistic-insert DoA is weak.
       // Smooth de-escalation: partial decrement instead of hard reset.
       assert(victim.insert_liveness_class <= 2); // must be a valid liveness_class value
@@ -556,6 +571,8 @@ void CACHE::load_predictor_settings()
   bypass_debt       = 0;
   mid_key          = (getenv_uint64("MID_KEY",     0) == 1) ? mid_key_t::pc : mid_key_t::addr;
   mid_promote_on_hit = (getenv_uint64("MID_PROMOTE", 0) == 1);
+  if (const char* v = std::getenv("CBPRED_IDX"))
+    cbpred_idx = (std::strcmp(v, "pc") == 0) ? cbpred_idx_t::pc : cbpred_idx_t::addr;
 
   phist_hash = (getenv_uint64("PHIST_HASH", 1) != 0);
   bhist_hash = (getenv_uint64("BHIST_HASH", 1) != 0);
@@ -1220,10 +1237,12 @@ void CACHE::end_phase(unsigned finished_cpu)
   roi_stats.back().pc_pfq_probes = sim_stats.back().pc_pfq_probes;
   roi_stats.back().pc_pfq_hits   = sim_stats.back().pc_pfq_hits;
 
-  roi_stats.back().phist_lookups = sim_stats.back().phist_lookups;
-  roi_stats.back().phist_hits    = sim_stats.back().phist_hits;
-  roi_stats.back().bhist_lookups = sim_stats.back().bhist_lookups;
-  roi_stats.back().bhist_hits    = sim_stats.back().bhist_hits;
+  roi_stats.back().phist_lookups    = sim_stats.back().phist_lookups;
+  roi_stats.back().phist_hits       = sim_stats.back().phist_hits;
+  roi_stats.back().bhist_lookups    = sim_stats.back().bhist_lookups;
+  roi_stats.back().bhist_hits       = sim_stats.back().bhist_hits;
+  roi_stats.back().pc_bhist_lookups = sim_stats.back().pc_bhist_lookups;
+  roi_stats.back().pc_bhist_hits    = sim_stats.back().pc_bhist_hits;
   roi_stats.back().st_lookups    = sim_stats.back().st_lookups;
   roi_stats.back().st_hits       = sim_stats.back().st_hits;
 

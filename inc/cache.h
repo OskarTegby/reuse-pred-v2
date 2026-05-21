@@ -78,9 +78,10 @@ struct cache_stats {
   uint64_t cbpred_doa_normal_inserts      = 0;
   uint64_t cbpred_doa_pessimistic_inserts = 0;
 
-  uint64_t phist_lookups = 0, phist_hits = 0;  // dpPred prediction queries (DPPRED=1 only)
-  uint64_t bhist_lookups = 0, bhist_hits = 0;  // cbPred prediction queries (CBPRED=1 only)
-  uint64_t st_lookups    = 0, st_hits    = 0;  // shadow-table lookups (DPPRED=1 only)
+  uint64_t phist_lookups    = 0, phist_hits    = 0;  // dpPred prediction queries (DPPRED=1 only)
+  uint64_t bhist_lookups    = 0, bhist_hits    = 0;  // cbPred addr-indexed queries (CBPRED=1 only)
+  uint64_t pc_bhist_lookups = 0, pc_bhist_hits = 0;  // cbPred PC-indexed queries   (CBPRED=1, CBPRED_IDX=pc)
+  uint64_t st_lookups       = 0, st_hits       = 0;  // shadow-table lookups (DPPRED=1 only)
 
   // ── Block/page liveness stats (LLC and STLB only) ─────────────────────────
   // Recorded at every valid eviction during the ROI.
@@ -283,6 +284,14 @@ class CACHE : public champsim::operable, public MemoryRequestConsumer, public Me
   std::deque<shadow_entry_t> shadow_table;                          // recently bypassed {vpn, pc, translation}
   std::map<uint64_t, hist_entry> bhist;                             // [block_hash] → entry           (hashed)
   std::map<uint64_t, std::map<uint64_t, hist_entry>> bhist_full;   // [addr_set][addr_tag] → entry   (full-key)
+  std::map<uint64_t, hist_entry> pc_bhist;                         // [PC] → entry  (PC-indexed bypass history)
+
+  // Selects the indexing key for cbPred's history table and PFQ match.
+  // Controlled by the CBPRED_IDX env var ("addr" (default) | "pc").
+  //   addr — existing design: bhist keyed by block address, PFQ matched by PFN
+  //   pc   — new design:   pc_bhist keyed by fill PC,    pc_pfq matched by PC
+  enum class cbpred_idx_t : uint8_t { addr, pc };
+  cbpred_idx_t cbpred_idx = cbpred_idx_t::addr;
 
   // Selects which history signal drives needs_mid_insertion().
   // Controlled by the MID_KEY env var (0 = addr, 1 = pc; default 0).
