@@ -111,18 +111,17 @@ source "${SCRIPT_DIR}/_manifest.sh"
 write_manifest
 
 # Config format:
-#   exp_name  dppred cbpred  cbpred_idx  phist_hash bhist_hash  phist_ways bhist_ways
+#   exp_name  dppred cbpred  dppred_idx cbpred_idx  phist_hash bhist_hash  phist_ways bhist_ways
 #
 # All pred configs share: PCONF_THD=6, BCONF_THD=6, PFQ_CAP=8, ST_SIZE=2.
-# Hashed phist (PHIST_HASH=1): matches paper baseline for dpPred.
-# bhist_hash is irrelevant for pc/merged modes but kept consistent.
+# addr_pred:    vpn_pc+addr — paper baseline (hashed phist, hashed bhist)
+# pc_pred:      pc+pc       — symmetric PC-only indexing at both STLB and LLC
+# merged_pred:  vpn_pc+merged — existing dpPred drives the STLB gate; LLC uses merged table
 configs=(
-  "lru_baseline      0 0   addr   1 1   1024 4096"
-  "addr_pred         1 1   addr   1 1   1024 4096"
-  "pc_pred           1 1   pc     1 1   1024 4096"
-  "pc_addr_pred      1 1   pc_addr     1 1   1024 4096"
-  "pc_or_addr_pred   1 1   pc_or_addr  1 1   1024 4096"
-  "merged_pred       1 1   merged 1 1   1024 4096"
+  "lru_baseline    0 0   vpn_pc addr    1 1   1024 4096"
+  "addr_pred       1 1   vpn_pc addr    1 1   1024 4096"
+  "pc_pred         1 1   pc     pc      1 1   1024 4096"
+  "merged_pred     1 1   vpn_pc merged  1 1   1024 4096"
 )
 
 echo "Submitting ${#configs[@]} configs × ${N} traces (${TASK_RANGE})"
@@ -134,7 +133,7 @@ echo "Logs    : logs/${BASE_LABEL}/"
 echo ""
 
 for cfg in "${configs[@]}"; do
-  read -r exp_name dppred cbpred cbpred_idx phist_hash bhist_hash phist_ways bhist_ways <<< "$cfg"
+  read -r exp_name dppred cbpred dppred_idx cbpred_idx phist_hash bhist_hash phist_ways bhist_ways <<< "$cfg"
 
   RUN_LABEL="${BASE_LABEL}/${exp_name}"
   mkdir -p "${PROJECT_ROOT}/results/${RUN_LABEL}"
@@ -150,11 +149,12 @@ DPPRED="$dppred",CBPRED="$cbpred",PCONF_THD=6,BCONF_THD=6,\
 MID_THD=1,MID_KEY=0,MID_PROMOTE=0,\
 PHIST_HASH="$phist_hash",BHIST_HASH="$bhist_hash",\
 PHIST_SETS=1,PHIST_WAYS="$phist_ways",BHIST_SETS=1,BHIST_WAYS="$bhist_ways",\
-CBPRED_IDX="$cbpred_idx",CBPRED_NO_PFQ=0,\
+DPPRED_IDX="$dppred_idx",CBPRED_IDX="$cbpred_idx",CBPRED_NO_PFQ=0,\
 PFQ_CAP=8,ST_SIZE=2 \
              "${PROJECT_ROOT}/scripts/submit/run_cs.sh")
   jid=$(echo "$raw" | awk '/Your job/ {print $3}' | cut -d. -f1)
-  printf "  [jid=%-8s] %-22s  CBPRED_IDX=%-12s\n" "$jid" "$exp_name" "$cbpred_idx"
+  printf "  [jid=%-8s] %-22s  DPPRED_IDX=%-8s  CBPRED_IDX=%-12s\n" \
+         "$jid" "$exp_name" "$dppred_idx" "$cbpred_idx"
 done
 
 # Behavioral study: merged_pred with PC_STATS=1 to collect merged_pc_hist CSV.

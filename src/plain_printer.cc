@@ -91,6 +91,9 @@ void champsim::plain_printer::print(CACHE::stats_type stats)
       if (stats.phist_lookups > 0)
         stream << stats.name << " PHIST LOOKUPS: " << std::setw(10) << stats.phist_lookups
                << "  HITS: " << std::setw(10) << stats.phist_hits << std::endl;
+      if (stats.pc_phist_lookups > 0)
+        stream << stats.name << " PC-PHIST LOOKUPS: " << std::setw(10) << stats.pc_phist_lookups
+               << "  HITS: " << std::setw(10) << stats.pc_phist_hits << std::endl;
       if (stats.st_lookups > 0)
         stream << stats.name << " SHADOW TABLE LOOKUPS: " << std::setw(10) << stats.st_lookups
                << "  HITS: " << std::setw(10) << stats.st_hits << std::endl;

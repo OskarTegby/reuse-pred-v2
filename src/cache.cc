@@ -145,10 +145,19 @@ bool CACHE::dppred_bypass(const PACKET& fill_mshr)
 {
   const auto vpn = fill_mshr.address >> OFFSET_BITS;
   const auto pc  = fill_mshr.ip;
-  sim_stats.back().phist_lookups++;
-  if (phist_entry_exists(pc, vpn)) sim_stats.back().phist_hits++;
-  if (get_phist_entry(pc, vpn).doa <= pconf_thd)
-    return false;
+
+  if (dppred_idx == dppred_idx_t::pc) {
+    sim_stats.back().pc_phist_lookups++;
+    const auto it = pc_phist.find(pc);
+    if (it != pc_phist.end()) sim_stats.back().pc_phist_hits++;
+    if (it == pc_phist.end() || it->second.doa <= pconf_thd)
+      return false;
+  } else {
+    sim_stats.back().phist_lookups++;
+    if (phist_entry_exists(pc, vpn)) sim_stats.back().phist_hits++;
+    if (get_phist_entry(pc, vpn).doa <= pconf_thd)
+      return false;
+  }
 
   // Push PFN into the PFN-keyed queue and (PC, PFN) into the PC-keyed queue (FIFO, shared cap).
   if (pfq.size() >= pfq_cap)
@@ -430,7 +439,10 @@ void CACHE::update_eviction_counters(const BLOCK& victim, liveness_class lv)
 
   // Predictor tables: phist unchanged; bhist uses weighted updates when cbpred_weighted.
   if (dppred && NAME == "cpu0_STLB") {
-    update(get_phist_entry(victim.ip, victim.address >> OFFSET_BITS));
+    if (dppred_idx == dppred_idx_t::pc)
+      update(pc_phist[victim.ip]);
+    else
+      update(get_phist_entry(victim.ip, victim.address >> OFFSET_BITS));
     // Merged table: record STLB-side liveness unconditionally.
     auto& m = merged_pc_hist[victim.ip];
     switch (lv) {
@@ -642,6 +654,9 @@ void CACHE::load_predictor_settings()
   mid_key          = (getenv_uint64("MID_KEY",     0) == 1) ? mid_key_t::pc : mid_key_t::addr;
   mid_promote_on_hit = (getenv_uint64("MID_PROMOTE", 0) == 1);
   mid_pfq_gate     = (getenv_uint64("MID_PFQ_GATE", 0) == 1);
+  if (const char* v = std::getenv("DPPRED_IDX"))
+    dppred_idx = (std::strcmp(v, "pc") == 0) ? dppred_idx_t::pc : dppred_idx_t::vpn_pc;
+
   if (const char* v = std::getenv("CBPRED_IDX")) {
     if      (std::strcmp(v, "pc")         == 0) cbpred_idx = cbpred_idx_t::pc;
     else if (std::strcmp(v, "pc_addr")    == 0) cbpred_idx = cbpred_idx_t::pc_addr;
@@ -1315,6 +1330,8 @@ void CACHE::end_phase(unsigned finished_cpu)
 
   roi_stats.back().phist_lookups    = sim_stats.back().phist_lookups;
   roi_stats.back().phist_hits       = sim_stats.back().phist_hits;
+  roi_stats.back().pc_phist_lookups = sim_stats.back().pc_phist_lookups;
+  roi_stats.back().pc_phist_hits    = sim_stats.back().pc_phist_hits;
   roi_stats.back().bhist_lookups    = sim_stats.back().bhist_lookups;
   roi_stats.back().bhist_hits       = sim_stats.back().bhist_hits;
   roi_stats.back().pc_bhist_lookups      = sim_stats.back().pc_bhist_lookups;

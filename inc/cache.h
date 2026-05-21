@@ -93,7 +93,8 @@ struct cache_stats {
   uint64_t cbpred_doa_normal_inserts      = 0;
   uint64_t cbpred_doa_pessimistic_inserts = 0;
 
-  uint64_t phist_lookups          = 0, phist_hits          = 0;  // dpPred prediction queries (DPPRED=1 only)
+  uint64_t phist_lookups          = 0, phist_hits          = 0;  // dpPred vpn_pc-indexed queries (DPPRED=1 only)
+  uint64_t pc_phist_lookups       = 0, pc_phist_hits       = 0;  // dpPred PC-indexed queries    (DPPRED_IDX=pc)
   uint64_t bhist_lookups          = 0, bhist_hits          = 0;  // cbPred addr-indexed queries (CBPRED=1 only)
   uint64_t pc_bhist_lookups       = 0, pc_bhist_hits       = 0;  // cbPred PC-indexed queries   (CBPRED_IDX=pc)
   uint64_t pc_addr_bhist_lookups  = 0, pc_addr_bhist_hits  = 0;  // cbPred combined queries     (CBPRED_IDX=pc_addr|pc_or_addr)
@@ -298,6 +299,7 @@ class CACHE : public champsim::operable, public MemoryRequestConsumer, public Me
 
   std::map<uint64_t, std::map<uint64_t,    hist_entry>> phist;      // [vpn_hash][pc_hash] → entry  (hashed)
   std::map<uint64_t, std::map<phist_key_t, hist_entry>> phist_full; // [pc_set][{pc_tag,vpn}] → entry (full-key)
+  std::map<uint64_t, hist_entry> pc_phist;                          // [PC] → entry  (PC-only dpPred history)
   std::deque<shadow_entry_t> shadow_table;                          // recently bypassed {vpn, pc, translation}
   std::map<uint64_t, hist_entry> bhist;                             // [block_hash] → entry           (hashed)
   std::map<uint64_t, std::map<uint64_t, hist_entry>> bhist_full;   // [addr_set][addr_tag] → entry   (full-key)
@@ -305,6 +307,13 @@ class CACHE : public champsim::operable, public MemoryRequestConsumer, public Me
   std::map<std::pair<uint64_t,uint64_t>, hist_entry> pc_addr_bhist;            // [{PC, block_addr}] → entry
 
   // (declared public below — needs to be read by the plain_printer)
+
+  // Selects the indexing key for dpPred's history table.
+  // Controlled by the DPPRED_IDX env var.
+  //   vpn_pc — existing: phist keyed by (VPN, PC)  (default)
+  //   pc     — new:      pc_phist keyed by PC only  (symmetric with CBPRED_IDX=pc)
+  enum class dppred_idx_t : uint8_t { vpn_pc, pc };
+  dppred_idx_t dppred_idx = dppred_idx_t::vpn_pc;
 
   // Selects the indexing key for cbPred's history table and PFQ match.
   // Controlled by the CBPRED_IDX env var.
