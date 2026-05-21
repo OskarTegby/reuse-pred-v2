@@ -112,6 +112,9 @@ void champsim::plain_printer::print(CACHE::stats_type stats)
       if (stats.pc_addr_bhist_lookups > 0)
         stream << stats.name << " PC-ADDR-BHIST LOOKUPS: " << std::setw(10) << stats.pc_addr_bhist_lookups
                << "  HITS: " << std::setw(10) << stats.pc_addr_bhist_hits << std::endl;
+      if (stats.merged_pc_hist_lookups > 0)
+        stream << stats.name << " MERGED-PC-HIST LOOKUPS: " << std::setw(10) << stats.merged_pc_hist_lookups
+               << "  HITS: " << std::setw(10) << stats.merged_pc_hist_hits << std::endl;
     }
     if ((stats.name == "cpu0_STLB" || stats.name == "LLC") &&
         (stats.bypass_incorrect + stats.bypass_correct + stats.bypass_shadow_overflow > 0)) {
@@ -215,6 +218,31 @@ void champsim::plain_printer::print(CACHE::stats_type stats)
                      << "," << e.doa
                      << "," << e.mostly_dead
                      << "," << e.mostly_alive << "\n";
+        }
+      }
+
+      // ── Merged per-PC STLB+LLC breakdown (LLC print only; separate section) ─
+      if (s.name == "LLC" && pc_stream != nullptr && !CACHE::merged_pc_hist.empty()) {
+        using entry_t = std::pair<uint64_t, merged_pc_entry>;
+        std::vector<entry_t> merged_sorted(CACHE::merged_pc_hist.begin(),
+                                           CACHE::merged_pc_hist.end());
+        std::sort(merged_sorted.begin(), merged_sorted.end(),
+                  [](const entry_t& a, const entry_t& b) {
+                    return a.second.llc_total() > b.second.llc_total();
+                  });
+
+        *pc_stream << "\n# merged_pc_hist\n"
+                   << "pc,"
+                   << "stlb_total,stlb_doa,stlb_mostly_dead,stlb_mostly_alive,"
+                   << "llc_total,llc_doa,llc_mostly_dead,llc_mostly_alive\n";
+        for (const auto& [ip, e] : merged_sorted) {
+          *pc_stream << "0x" << std::hex << std::setw(16) << std::setfill('0') << ip
+                     << std::dec << std::setfill(' ')
+                     << "," << e.stlb_total()
+                     << "," << e.stlb_doa << "," << e.stlb_mostly_dead << "," << e.stlb_mostly_alive
+                     << "," << e.llc_total()
+                     << "," << e.llc_doa  << "," << e.llc_mostly_dead  << "," << e.llc_mostly_alive
+                     << "\n";
         }
       }
     }

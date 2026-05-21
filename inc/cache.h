@@ -43,6 +43,21 @@ struct pc_liveness_entry {
   uint64_t total() const { return doa + mostly_dead + mostly_alive; }
 };
 
+// Merged per-PC liveness counts from both STLB (page-level) and LLC (block-level).
+// STLB columns are updated on every STLB eviction when dppred=1.
+// LLC columns are updated on every LLC eviction when cbpred=1, regardless of victim.dp.
+// Stored as an inline static so both STLB and LLC CACHE instances share it.
+struct merged_pc_entry {
+  uint64_t stlb_doa         = 0;
+  uint64_t stlb_mostly_dead  = 0;
+  uint64_t stlb_mostly_alive = 0;
+  uint64_t llc_doa          = 0;
+  uint64_t llc_mostly_dead   = 0;
+  uint64_t llc_mostly_alive  = 0;
+  uint64_t stlb_total() const { return stlb_doa + stlb_mostly_dead + stlb_mostly_alive; }
+  uint64_t llc_total()  const { return llc_doa  + llc_mostly_dead  + llc_mostly_alive;  }
+};
+
 struct cache_stats {
   std::string name;
   // prefetch stats
@@ -78,11 +93,12 @@ struct cache_stats {
   uint64_t cbpred_doa_normal_inserts      = 0;
   uint64_t cbpred_doa_pessimistic_inserts = 0;
 
-  uint64_t phist_lookups         = 0, phist_hits         = 0;  // dpPred prediction queries (DPPRED=1 only)
-  uint64_t bhist_lookups         = 0, bhist_hits         = 0;  // cbPred addr-indexed queries (CBPRED=1 only)
-  uint64_t pc_bhist_lookups      = 0, pc_bhist_hits      = 0;  // cbPred PC-indexed queries   (CBPRED_IDX=pc)
-  uint64_t pc_addr_bhist_lookups = 0, pc_addr_bhist_hits = 0;  // cbPred combined queries     (CBPRED_IDX=pc_addr|pc_or_addr)
-  uint64_t st_lookups            = 0, st_hits            = 0;  // shadow-table lookups (DPPRED=1 only)
+  uint64_t phist_lookups          = 0, phist_hits          = 0;  // dpPred prediction queries (DPPRED=1 only)
+  uint64_t bhist_lookups          = 0, bhist_hits          = 0;  // cbPred addr-indexed queries (CBPRED=1 only)
+  uint64_t pc_bhist_lookups       = 0, pc_bhist_hits       = 0;  // cbPred PC-indexed queries   (CBPRED_IDX=pc)
+  uint64_t pc_addr_bhist_lookups  = 0, pc_addr_bhist_hits  = 0;  // cbPred combined queries     (CBPRED_IDX=pc_addr|pc_or_addr)
+  uint64_t merged_pc_hist_lookups = 0, merged_pc_hist_hits = 0;  // cbPred merged queries       (CBPRED_IDX=merged)
+  uint64_t st_lookups             = 0, st_hits             = 0;  // shadow-table lookups (DPPRED=1 only)
 
   // ── Block/page liveness stats (LLC and STLB only) ─────────────────────────
   // Recorded at every valid eviction during the ROI.
@@ -288,13 +304,16 @@ class CACHE : public champsim::operable, public MemoryRequestConsumer, public Me
   std::map<uint64_t, hist_entry> pc_bhist;                                      // [PC] → entry
   std::map<std::pair<uint64_t,uint64_t>, hist_entry> pc_addr_bhist;            // [{PC, block_addr}] → entry
 
+  // (declared public below — needs to be read by the plain_printer)
+
   // Selects the indexing key for cbPred's history table and PFQ match.
   // Controlled by the CBPRED_IDX env var.
   //   addr        — existing: bhist keyed by block addr,  PFQ matched by PFN
   //   pc          — new:      pc_bhist keyed by PC,       pc_pfq matched by PC
   //   pc_addr     — combined: pc_addr_bhist keyed by (PC,addr),  strict AND: both PFN and PC must hit
   //   pc_or_addr  — combined: pc_addr_bhist keyed by (PC,addr), permissive OR: PFN or PC suffices
-  enum class cbpred_idx_t : uint8_t { addr, pc, pc_addr, pc_or_addr };
+  //   merged      — new:      merged_pc_hist[PC].llc_doa, PFQ matched by PFN (same gate as addr)
+  enum class cbpred_idx_t : uint8_t { addr, pc, pc_addr, pc_or_addr, merged };
   cbpred_idx_t cbpred_idx = cbpred_idx_t::addr;
 
   // Selects which history signal drives needs_mid_insertion() / predict_liveness().
@@ -351,6 +370,11 @@ class CACHE : public champsim::operable, public MemoryRequestConsumer, public Me
                           uint8_t insert_class = 2) const;               // stderr trace (CBPRED_TRACE=1 only)
 
 public:
+  // Merged per-PC history shared across STLB and LLC instances.
+  // STLB writes stlb_* columns; LLC writes llc_* columns (neither dp-gated).
+  // Public so the plain_printer can read it without a friend declaration.
+  inline static std::map<uint64_t, merged_pc_entry> merged_pc_hist{};
+
   struct NonTranslatingQueues : public champsim::operable {
     std::deque<PACKET> RQ, PQ, WQ, PTWQ;
     const std::size_t RQ_SIZE, PQ_SIZE, WQ_SIZE, PTWQ_SIZE;

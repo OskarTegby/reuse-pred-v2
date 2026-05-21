@@ -194,12 +194,13 @@ bool CACHE::cbpred_bypass(const PACKET& fill_mshr)
     case cbpred_idx_t::pc:         in_active_queue = in_pc_pfq;          break;
     case cbpred_idx_t::pc_addr:    in_active_queue = in_combined_strict; break;
     case cbpred_idx_t::pc_or_addr: in_active_queue = in_combined_loose;  break;
-    default:                        in_active_queue = in_pfq;             break;
+    default:                        in_active_queue = in_pfq;             break; // addr + merged
   }
 
   const auto pc_bhist_it      = pc_bhist.find(fill_pc);
   const auto pc_key            = std::make_pair(fill_pc, block_addr);
   const auto pc_addr_bhist_it  = pc_addr_bhist.find(pc_key);
+  const auto merged_it         = merged_pc_hist.find(fill_pc);
   uint64_t active_doa;
   switch (cbpred_idx) {
     case cbpred_idx_t::pc:
@@ -208,6 +209,9 @@ bool CACHE::cbpred_bypass(const PACKET& fill_mshr)
     case cbpred_idx_t::pc_addr:
     case cbpred_idx_t::pc_or_addr:
       active_doa = (pc_addr_bhist_it != pc_addr_bhist.end()) ? pc_addr_bhist_it->second.doa : 0;
+      break;
+    case cbpred_idx_t::merged:
+      active_doa = (merged_it != merged_pc_hist.end()) ? merged_it->second.llc_doa : 0;
       break;
     default:
       active_doa = get_bhist_entry(block_addr).doa;
@@ -236,6 +240,10 @@ bool CACHE::cbpred_bypass(const PACKET& fill_mshr)
       case cbpred_idx_t::pc_or_addr:
         sim_stats.back().pc_addr_bhist_lookups++;
         if (pc_addr_bhist_it != pc_addr_bhist.end()) sim_stats.back().pc_addr_bhist_hits++;
+        break;
+      case cbpred_idx_t::merged:
+        sim_stats.back().merged_pc_hist_lookups++;
+        if (merged_it != merged_pc_hist.end()) sim_stats.back().merged_pc_hist_hits++;
         break;
       default:
         sim_stats.back().bhist_lookups++;
@@ -423,7 +431,24 @@ void CACHE::update_eviction_counters(const BLOCK& victim, liveness_class lv)
   // Predictor tables: phist unchanged; bhist uses weighted updates when cbpred_weighted.
   if (dppred && NAME == "cpu0_STLB") {
     update(get_phist_entry(victim.ip, victim.address >> OFFSET_BITS));
-  } else if (cbpred && NAME == "LLC" && victim.dp) {
+    // Merged table: record STLB-side liveness unconditionally.
+    auto& m = merged_pc_hist[victim.ip];
+    switch (lv) {
+      case liveness_class::doa:         m.stlb_doa++;          break;
+      case liveness_class::mostly_dead: m.stlb_mostly_dead++;  break;
+      default:                          m.stlb_mostly_alive++;  break;
+    }
+  } else if (cbpred && NAME == "LLC") {
+    // Merged table: record LLC-side liveness unconditionally (not dp-gated).
+    {
+      auto& m = merged_pc_hist[victim.ip];
+      switch (lv) {
+        case liveness_class::doa:         m.llc_doa++;          break;
+        case liveness_class::mostly_dead: m.llc_mostly_dead++;  break;
+        default:                          m.llc_mostly_alive++;  break;
+      }
+    }
+    if (!victim.dp) { /* nothing more to update for dp-gated tables */ } else
     if (cbpred_idx == cbpred_idx_t::pc) {
       update(pc_bhist[victim.ip]);
     } else if (cbpred_idx == cbpred_idx_t::pc_addr || cbpred_idx == cbpred_idx_t::pc_or_addr) {
@@ -621,6 +646,7 @@ void CACHE::load_predictor_settings()
     if      (std::strcmp(v, "pc")         == 0) cbpred_idx = cbpred_idx_t::pc;
     else if (std::strcmp(v, "pc_addr")    == 0) cbpred_idx = cbpred_idx_t::pc_addr;
     else if (std::strcmp(v, "pc_or_addr") == 0) cbpred_idx = cbpred_idx_t::pc_or_addr;
+    else if (std::strcmp(v, "merged")     == 0) cbpred_idx = cbpred_idx_t::merged;
     else                                         cbpred_idx = cbpred_idx_t::addr;
   }
 
@@ -1293,8 +1319,10 @@ void CACHE::end_phase(unsigned finished_cpu)
   roi_stats.back().bhist_hits       = sim_stats.back().bhist_hits;
   roi_stats.back().pc_bhist_lookups      = sim_stats.back().pc_bhist_lookups;
   roi_stats.back().pc_bhist_hits         = sim_stats.back().pc_bhist_hits;
-  roi_stats.back().pc_addr_bhist_lookups = sim_stats.back().pc_addr_bhist_lookups;
-  roi_stats.back().pc_addr_bhist_hits    = sim_stats.back().pc_addr_bhist_hits;
+  roi_stats.back().pc_addr_bhist_lookups  = sim_stats.back().pc_addr_bhist_lookups;
+  roi_stats.back().pc_addr_bhist_hits     = sim_stats.back().pc_addr_bhist_hits;
+  roi_stats.back().merged_pc_hist_lookups = sim_stats.back().merged_pc_hist_lookups;
+  roi_stats.back().merged_pc_hist_hits    = sim_stats.back().merged_pc_hist_hits;
   roi_stats.back().st_lookups    = sim_stats.back().st_lookups;
   roi_stats.back().st_hits       = sim_stats.back().st_hits;
 
