@@ -505,6 +505,13 @@ void CACHE::trace_cbpred_event(std::string_view tag, uint64_t block_addr,
 // mostly-dead, meaning it should be inserted at the set midpoint in lru_mid.
 bool CACHE::needs_mid_insertion(uint64_t full_addr, uint64_t ip) const
 {
+  if (mid_pfq_gate) {
+    const bool in_q = (mid_key == mid_key_t::pc)
+        ? std::find_if(pc_pfq.begin(), pc_pfq.end(),
+                       [ip](const auto& e){ return e.first == ip; }) != pc_pfq.end()
+        : std::find(pfq.begin(), pfq.end(), full_addr >> LOG2_PAGE_SIZE) != pfq.end();
+    if (!in_q) return false;
+  }
   auto check = [this](const std::map<uint64_t, hist_entry>& tbl, uint64_t key) {
     const auto it = tbl.find(key);
     return it != tbl.end() && (it->second.doa >= mid_thd || it->second.mostly_dead >= mid_thd);
@@ -525,6 +532,13 @@ bool CACHE::needs_mid_insertion(uint64_t full_addr, uint64_t ip) const
 // DoA takes priority: if both counters meet the threshold, returns doa.
 CACHE::liveness_class CACHE::predict_liveness(uint64_t full_addr, uint64_t ip) const
 {
+  if (mid_pfq_gate) {
+    const bool in_q = (mid_key == mid_key_t::pc)
+        ? std::find_if(pc_pfq.begin(), pc_pfq.end(),
+                       [ip](const auto& e){ return e.first == ip; }) != pc_pfq.end()
+        : std::find(pfq.begin(), pfq.end(), full_addr >> LOG2_PAGE_SIZE) != pfq.end();
+    if (!in_q) return liveness_class::mostly_alive;
+  }
   auto classify = [this](const std::map<uint64_t, hist_entry>& tbl, uint64_t key) -> liveness_class {
     const auto it = tbl.find(key);
     if (it == tbl.end())                      return liveness_class::mostly_alive;
@@ -602,6 +616,7 @@ void CACHE::load_predictor_settings()
   bypass_debt       = 0;
   mid_key          = (getenv_uint64("MID_KEY",     0) == 1) ? mid_key_t::pc : mid_key_t::addr;
   mid_promote_on_hit = (getenv_uint64("MID_PROMOTE", 0) == 1);
+  mid_pfq_gate     = (getenv_uint64("MID_PFQ_GATE", 0) == 1);
   if (const char* v = std::getenv("CBPRED_IDX")) {
     if      (std::strcmp(v, "pc")         == 0) cbpred_idx = cbpred_idx_t::pc;
     else if (std::strcmp(v, "pc_addr")    == 0) cbpred_idx = cbpred_idx_t::pc_addr;

@@ -297,10 +297,16 @@ class CACHE : public champsim::operable, public MemoryRequestConsumer, public Me
   enum class cbpred_idx_t : uint8_t { addr, pc, pc_addr, pc_or_addr };
   cbpred_idx_t cbpred_idx = cbpred_idx_t::addr;
 
-  // Selects which history signal drives needs_mid_insertion().
+  // Selects which history signal drives needs_mid_insertion() / predict_liveness().
   // Controlled by the MID_KEY env var (0 = addr, 1 = pc; default 0).
   enum class mid_key_t : uint8_t { addr = 0, pc = 1 };
   mid_key_t mid_key = mid_key_t::addr;
+
+  // When true, predict_liveness() / needs_mid_insertion() also require PFQ
+  // membership before returning a non-alive prediction.  The queue checked
+  // follows mid_key: addr → pfq (PFN-based), pc → pc_pfq (PC-based).
+  // Controlled by the MID_PFQ_GATE env var (0 = off (default), 1 = on).
+  bool mid_pfq_gate = false;
 
   // Unbounded insertion-policy tables: always updated at eviction regardless
   // of predictor state.  No hashing — no collisions.  Budget is intentionally
