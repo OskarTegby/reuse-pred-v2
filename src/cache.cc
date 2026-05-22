@@ -81,6 +81,20 @@ bool CACHE::phist_entry_exists(uint64_t pc, uint64_t vpn) const
   return outer != phist_full.end() && outer->second.count(phist_key_t{addr_tag(pc, phist_sets), vpn});
 }
 
+uint64_t CACHE::get_phist_doa(uint64_t pc, uint64_t vpn) const
+{
+  if (phist_hash) {
+    const auto ot = phist.find(fold_xor(vpn, VPN_BITS));
+    if (ot == phist.end()) return 0;
+    const auto it = ot->second.find(fold_xor(pc, PC_BITS));
+    return (it != ot->second.end()) ? it->second.doa : 0;
+  }
+  const auto ot = phist_full.find(addr_set(pc, phist_sets));
+  if (ot == phist_full.end()) return 0;
+  const auto it = ot->second.find({addr_tag(pc, phist_sets), vpn});
+  return (it != ot->second.end()) ? it->second.doa : 0;
+}
+
 CACHE::hist_entry& CACHE::get_phist_entry(uint64_t pc, uint64_t vpn)
 {
   if (phist_hash)
@@ -114,6 +128,18 @@ bool CACHE::bhist_entry_exists(uint64_t block_addr) const
   if (bhist_hash) return bhist.count(fold_xor(block_addr, BHT_BITS));
   const auto outer = bhist_full.find(addr_set(block_addr, bhist_sets));
   return outer != bhist_full.end() && outer->second.count(addr_tag(block_addr, bhist_sets));
+}
+
+uint64_t CACHE::get_bhist_doa(uint64_t block_addr) const
+{
+  if (bhist_hash) {
+    const auto it = bhist.find(fold_xor(block_addr, BHT_BITS));
+    return (it != bhist.end()) ? it->second.doa : 0;
+  }
+  const auto ot = bhist_full.find(addr_set(block_addr, bhist_sets));
+  if (ot == bhist_full.end()) return 0;
+  const auto it = ot->second.find(addr_tag(block_addr, bhist_sets));
+  return (it != ot->second.end()) ? it->second.doa : 0;
 }
 
 CACHE::hist_entry& CACHE::get_bhist_entry(uint64_t block_addr)
@@ -179,7 +205,7 @@ bool CACHE::dppred_bypass(const PACKET& fill_mshr)
   } else {
     sim_stats.back().phist_lookups++;
     if (phist_entry_exists(pc, vpn)) sim_stats.back().phist_hits++;
-    if (get_phist_entry(pc, vpn).doa <= pconf_thd)
+    if (get_phist_doa(pc, vpn) <= pconf_thd)
       return false;
   }
 
@@ -247,7 +273,7 @@ bool CACHE::cbpred_bypass(const PACKET& fill_mshr)
       active_doa = (merged_it != merged_pc_hist.end()) ? merged_it->second.llc_doa : 0;
       break;
     default:
-      active_doa = get_bhist_entry(block_addr).doa;
+      active_doa = get_bhist_doa(block_addr);
       break;
   }
 
@@ -860,7 +886,7 @@ bool CACHE::handle_fill(const PACKET& fill_mshr)
         // made correctly at check time.  The invariant is enforced at bypass-check time
         // (inside cbpred_bypass()), not here.
         if (tracing_cbpred()) {
-          const uint64_t d = get_bhist_entry(fill_mshr.address >> OFFSET_BITS).doa;
+          const uint64_t d = get_bhist_doa(fill_mshr.address >> OFFSET_BITS);
           trace_cbpred_event("fill", fill_mshr.address >> OFFSET_BITS, d, d, way->insert_liveness_class);
         }
       }

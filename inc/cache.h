@@ -369,10 +369,12 @@ class CACHE : public champsim::operable, public MemoryRequestConsumer, public Me
 
   uint64_t fold_xor(uint64_t val, unsigned bits) const;
   bool        phist_entry_exists(uint64_t pc, uint64_t vpn) const;
-  hist_entry& get_phist_entry(uint64_t pc, uint64_t vpn);     // dispatches to phist or phist_full
-  void        phist_clear_vpn(uint64_t vpn);                  // invalidate all entries for a VPN
+  uint64_t    get_phist_doa(uint64_t pc, uint64_t vpn) const;  // read-only doa lookup; never inserts
+  hist_entry& get_phist_entry(uint64_t pc, uint64_t vpn);      // update path: inserts + updates LRU/LFU
+  void        phist_clear_vpn(uint64_t vpn);                   // invalidate all entries for a VPN
   bool        bhist_entry_exists(uint64_t block_addr) const;
-  hist_entry& get_bhist_entry(uint64_t block_addr);           // dispatches to bhist or bhist_full
+  uint64_t    get_bhist_doa(uint64_t block_addr) const;        // read-only doa lookup; never inserts
+  hist_entry& get_bhist_entry(uint64_t block_addr);            // update path: inserts + updates LRU/LFU
   void load_predictor_settings();                               // reads env vars to configure dpPred/cbPred at construction
   bool dppred_shadow_lookup(const PACKET& handle_pkt);          // true → shadow hit: history reset, data served, entry re-inserted into STLB, PTW skipped
   bool dppred_bypass(const PACKET& fill_mshr);                  // true → skip STLB fill
