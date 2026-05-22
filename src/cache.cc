@@ -387,9 +387,17 @@ void CACHE::record_eviction_liveness(const BLOCK& victim, liveness_class lv)
   }
 
   // STLB: record this page's DoA status in the evict log so the LLC can
-  // cross-reference it even after it leaves the STLB.
+  // cross-reference it even after it leaves the STLB.  FIFO-capped.
   if (NAME == "cpu0_STLB") {
-    stlb_evict_log[victim.data >> LOG2_PAGE_SIZE] = (lv == liveness_class::doa);
+    const uint64_t pfn = victim.data >> LOG2_PAGE_SIZE;
+    if (!stlb_evict_log.count(pfn)) {
+      while (stlb_evict_log.size() >= stlb_evict_log_cap && !stlb_evict_log_order.empty()) {
+        stlb_evict_log.erase(stlb_evict_log_order.front());
+        stlb_evict_log_order.pop_front();
+      }
+      stlb_evict_log_order.push_back(pfn);
+    }
+    stlb_evict_log[pfn] = (lv == liveness_class::doa);
   }
 
   // For LLC DoA blocks: check whether the evicted block's PFN has STLB info.
@@ -574,13 +582,17 @@ void CACHE::update_eviction_counters(const BLOCK& victim, liveness_class lv)
     }
   }
 
-  // Insertion-policy tables: always updated for LLC and STLB, no hashing.
+  // Insertion-policy tables: always updated for LLC and STLB, FIFO-capped.
   if (NAME == "LLC") {
-    update(llc_mid_hist_addr[victim.address >> OFFSET_BITS]);
-    update(llc_mid_hist_pc[victim.ip]);
+    update(pc_table_get(llc_mid_hist_addr, llc_mid_hist_addr_order,
+                        victim.address >> OFFSET_BITS, mid_hist_cap));
+    update(pc_table_get(llc_mid_hist_pc,   llc_mid_hist_pc_order,
+                        victim.ip,          mid_hist_cap));
   } else if (NAME == "cpu0_STLB") {
-    update(stlb_mid_hist_addr[victim.address >> OFFSET_BITS]);
-    update(stlb_mid_hist_pc[victim.ip]);
+    update(pc_table_get(stlb_mid_hist_addr, stlb_mid_hist_addr_order,
+                        victim.address >> OFFSET_BITS, mid_hist_cap));
+    update(pc_table_get(stlb_mid_hist_pc,   stlb_mid_hist_pc_order,
+                        victim.ip,          mid_hist_cap));
   }
 }
 
@@ -748,6 +760,12 @@ void CACHE::load_predictor_settings()
   merged_pc_hist_cap = phist_ways + bhist_ways;
   if (const char* pol = std::getenv("REPL_POL"))
     repl_pol = (std::strcmp(pol, "lfu") == 0) ? repl_pol_t::lfu : repl_pol_t::lru;
+
+  // Capacity for the four mid-insertion-policy history tables and stlb_evict_log.
+  // Default 65536 prevents OOM on large-footprint workloads while covering
+  // working sets up to ~4 MB (64× the 2 MB LLC).
+  mid_hist_cap = getenv_uint64("MID_HIST_CAP", mid_hist_cap);
+  stlb_evict_log_cap = getenv_uint64("STLB_EVICT_LOG_CAP", stlb_evict_log_cap);
 }
 
 bool CACHE::handle_fill(const PACKET& fill_mshr)

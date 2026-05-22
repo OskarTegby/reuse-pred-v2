@@ -295,7 +295,11 @@ class CACHE : public champsim::operable, public MemoryRequestConsumer, public Me
   // PFN → was_doa: populated when an STLB entry is evicted; entries removed
   // when the page is re-inserted into the STLB.  Gives LLC the ability to
   // cross-reference against pages that have already left the STLB.
-  inline static std::map<uint64_t, bool> stlb_evict_log{};
+  // Capped at stlb_evict_log_cap entries (FIFO); prevents unbounded growth on
+  // large-footprint workloads.
+  inline static std::map<uint64_t, bool>  stlb_evict_log{};
+  inline static std::deque<uint64_t>      stlb_evict_log_order{};
+  inline static uint64_t                  stlb_evict_log_cap = 1024;
 
   std::map<uint64_t, std::map<uint64_t,    hist_entry>> phist;      // [vpn_hash][pc_hash] → entry  (hashed)
   std::map<uint64_t, std::map<phist_key_t, hist_entry>> phist_full; // [pc_set][{pc_tag,vpn}] → entry (full-key)
@@ -347,18 +351,24 @@ class CACHE : public champsim::operable, public MemoryRequestConsumer, public Me
 
   // Unbounded insertion-policy tables: always updated at eviction regardless
   // of predictor state.  No hashing — no collisions.  Budget is intentionally
-  // unrealistic for now.  LLC and STLB keep separate tables because they track
-  // different address granularities (cache lines vs pages) and have independent
-  // liveness behaviour.
+  // LLC and STLB keep separate tables because they track different address
+  // granularities (cache lines vs pages) and have independent liveness behaviour.
   //   llc_mid_hist_addr  : LLC, keyed by block address (full_addr >> OFFSET_BITS)
   //   llc_mid_hist_pc    : LLC, keyed by the PC that triggered the access
   //   stlb_mid_hist_addr : STLB, keyed by VPN (full_addr >> OFFSET_BITS)
   //   stlb_mid_hist_pc   : STLB, keyed by the PC that triggered the access
   // needs_mid_insertion() consults only the table selected by mid_key.
+  // All four are FIFO-capped to prevent unbounded growth on large-footprint
+  // workloads (see mid_hist_cap, loaded from MID_HIST_CAP env var).
   std::map<uint64_t, hist_entry> llc_mid_hist_addr;
+  std::deque<uint64_t>           llc_mid_hist_addr_order;
   std::map<uint64_t, hist_entry> llc_mid_hist_pc;
+  std::deque<uint64_t>           llc_mid_hist_pc_order;
   std::map<uint64_t, hist_entry> stlb_mid_hist_addr;
+  std::deque<uint64_t>           stlb_mid_hist_addr_order;
   std::map<uint64_t, hist_entry> stlb_mid_hist_pc;
+  std::deque<uint64_t>           stlb_mid_hist_pc_order;
+  uint64_t                       mid_hist_cap = 65536; // set in load_predictor_settings
 
   static constexpr unsigned VPN_BITS = 4;
   static constexpr unsigned PC_BITS  = 6;
