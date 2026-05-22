@@ -299,12 +299,21 @@ class CACHE : public champsim::operable, public MemoryRequestConsumer, public Me
 
   std::map<uint64_t, std::map<uint64_t,    hist_entry>> phist;      // [vpn_hash][pc_hash] → entry  (hashed)
   std::map<uint64_t, std::map<phist_key_t, hist_entry>> phist_full; // [pc_set][{pc_tag,vpn}] → entry (full-key)
-  std::map<uint64_t, hist_entry> pc_phist;                          // [PC] → entry  (PC-only dpPred history)
+  std::map<uint64_t, hist_entry> pc_phist;        // [PC] → entry  (PC-only dpPred history)
+  std::deque<uint64_t>           pc_phist_order;  // FIFO eviction order for pc_phist
+  uint64_t                       pc_phist_cap = 1024; // capacity = phist_ways (set in load_predictor_settings)
+
   std::deque<shadow_entry_t> shadow_table;                          // recently bypassed {vpn, pc, translation}
   std::map<uint64_t, hist_entry> bhist;                             // [block_hash] → entry           (hashed)
   std::map<uint64_t, std::map<uint64_t, hist_entry>> bhist_full;   // [addr_set][addr_tag] → entry   (full-key)
-  std::map<uint64_t, hist_entry> pc_bhist;                                      // [PC] → entry
-  std::map<std::pair<uint64_t,uint64_t>, hist_entry> pc_addr_bhist;            // [{PC, block_addr}] → entry
+
+  std::map<uint64_t, hist_entry> pc_bhist;        // [PC] → entry  (PC-only cbPred history)
+  std::deque<uint64_t>           pc_bhist_order;  // FIFO eviction order for pc_bhist
+  uint64_t                       pc_bhist_cap = 4096; // capacity = bhist_ways (set in load_predictor_settings)
+
+  std::map<std::pair<uint64_t,uint64_t>, hist_entry> pc_addr_bhist; // [{PC, block_addr}] → entry
+  std::deque<std::pair<uint64_t,uint64_t>>           pc_addr_bhist_order; // FIFO eviction order
+  uint64_t                                           pc_addr_bhist_cap = 4096; // capacity = bhist_ways
 
   // (declared public below — needs to be read by the plain_printer)
 
@@ -383,6 +392,8 @@ public:
   // STLB writes stlb_* columns; LLC writes llc_* columns (neither dp-gated).
   // Public so the plain_printer can read it without a friend declaration.
   inline static std::map<uint64_t, merged_pc_entry> merged_pc_hist{};
+  inline static std::deque<uint64_t>                merged_pc_hist_order{};
+  inline static uint64_t                            merged_pc_hist_cap = 5120; // phist_ways + bhist_ways
 
   struct NonTranslatingQueues : public champsim::operable {
     std::deque<PACKET> RQ, PQ, WQ, PTWQ;
