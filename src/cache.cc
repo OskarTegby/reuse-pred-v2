@@ -467,21 +467,40 @@ void CACHE::update_eviction_counters(const BLOCK& victim, liveness_class lv)
       update(pc_table_get(pc_phist, pc_phist_order, victim.ip, pc_phist_cap));
     else
       update(get_phist_entry(victim.ip, victim.address >> OFFSET_BITS));
-    // Merged table: record STLB-side liveness unconditionally.
+    // Merged table: record STLB-side liveness with the same reset semantics as phist.
     auto& m = pc_table_get(merged_pc_hist, merged_pc_hist_order, victim.ip, merged_pc_hist_cap);
     switch (lv) {
-      case liveness_class::doa:         m.stlb_doa++;          break;
-      case liveness_class::mostly_dead: m.stlb_mostly_dead++;  break;
-      default:                          m.stlb_mostly_alive++;  break;
+      case liveness_class::doa:
+        m.stlb_doa++;
+        break;
+      case liveness_class::mostly_dead:
+        m.stlb_mostly_dead++;
+        m.stlb_doa = 0;
+        break;
+      default:
+        m.stlb_doa         = 0;
+        m.stlb_mostly_dead = 0;
+        m.stlb_mostly_alive++;
+        break;
     }
   } else if (cbpred && NAME == "LLC") {
-    // Merged table: record LLC-side liveness unconditionally (not dp-gated).
+    // Merged table: record LLC-side liveness unconditionally (not dp-gated),
+    // with the same reset semantics as bhist.
     {
       auto& m = pc_table_get(merged_pc_hist, merged_pc_hist_order, victim.ip, merged_pc_hist_cap);
       switch (lv) {
-        case liveness_class::doa:         m.llc_doa++;          break;
-        case liveness_class::mostly_dead: m.llc_mostly_dead++;  break;
-        default:                          m.llc_mostly_alive++;  break;
+        case liveness_class::doa:
+          m.llc_doa++;
+          break;
+        case liveness_class::mostly_dead:
+          m.llc_mostly_dead++;
+          m.llc_doa = 0;
+          break;
+        default:
+          m.llc_doa          = 0;
+          m.llc_mostly_dead  = 0;
+          m.llc_mostly_alive++;
+          break;
       }
     }
     if (!victim.dp) { /* nothing more to update for dp-gated tables */ } else
