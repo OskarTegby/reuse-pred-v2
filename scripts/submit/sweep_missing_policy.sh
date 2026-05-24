@@ -35,7 +35,7 @@ SIM_OVERRIDE=""
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    dpc3|google|qmm|test) token="${1,,}"; shift ;;
+    dpc3|google|qmm|gms|test) token="${1,,}"; shift ;;
     --test)     TEST=1; shift ;;
     --debug)    DEBUG=1; shift ;;
     --warmup)   WARMUP_OVERRIDE="$2"; shift 2 ;;
@@ -49,13 +49,13 @@ while [[ $# -gt 0 ]]; do
       esac
       shift 2 ;;
     *) echo "Unknown argument: $1" >&2
-       echo "Usage: $0 {dpc3|google|qmm|test} [--mid-thd N] [--mid-key addr|pc] [--debug] [--warmup N] [--sim N]" >&2
+       echo "Usage: $0 {dpc3|google|qmm|gms|test} [--mid-thd N] [--mid-key addr|pc] [--debug] [--warmup N] [--sim N]" >&2
        exit 2 ;;
   esac
 done
 
 if [ -z "$token" ]; then
-  echo "Usage: $0 {dpc3|google|qmm|test} [--mid-thd N] [--mid-key addr|pc] [--debug] [--warmup N] [--sim N]" >&2
+  echo "Usage: $0 {dpc3|google|qmm|gms|test} [--mid-thd N] [--mid-key addr|pc] [--debug] [--warmup N] [--sim N]" >&2
   exit 2
 fi
 
@@ -77,6 +77,11 @@ case "$token" in
     TRACE_DIR="${PROJECT_ROOT}/trace-files/QMM"; TRACE_EXT="champsimtrace.xz"
     [ -z "$MID_KEY_STR" ] && { MID_KEY_STR="pc"; MID_KEY_VAL=1; }
     [ -z "$MID_THD" ]     && MID_THD=4 ;;
+  gms)
+    WARMUP=50000000; SIM=100000000
+    TRACE_DIR="${PROJECT_ROOT}/trace-files/gms"; TRACE_EXT="gz"
+    [ -z "$MID_KEY_STR" ] && { MID_KEY_STR="addr"; MID_KEY_VAL=0; }
+    [ -z "$MID_THD" ]     && MID_THD=8 ;;
   test)
     WARMUP=25000000; SIM=50000000
     TRACE_DIR="${PROJECT_ROOT}/trace-files/TEST"; TRACE_EXT="champsimtrace.xz"
