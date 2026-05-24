@@ -1,20 +1,19 @@
 #!/usr/bin/env bash
 # sweep_stlb_policy.sh — compare STLB replacement policies (LLC fixed to LRU).
 #
-# Submits four configurations for each trace in the chosen suite:
+# Submits three configurations for each trace in the chosen suite:
 #   lru           : champsim_lru             (STLB=LRU,          LLC=LRU) — baseline
-#   stlb_lru_mid  : champsim_stlb_lru_mid    (STLB=lru_mid,      LLC=LRU)
 #   stlb_srrip    : champsim_stlb_srrip      (STLB=SRRIP,        LLC=LRU)
 #   stlb_srrip_live : champsim_stlb_srrip_live (STLB=srrip_live, LLC=LRU)
 #
-# For the two threshold-sensitive policies (lru_mid, srrip_live), mid_thd is
-# set via --mid-thd (default 8).  Both use addr-keyed history (MID_KEY=0).
+# For the threshold-sensitive policy (srrip_live), mid_thd is set via --mid-thd
+# (default 8).  History indexing is controlled by --mid-key addr|pc|0|1 (default addr).
 #
 # Requires binaries built on the cluster with:
-#   ./build_all.sh --nopref stlb_lru_mid stlb_srrip stlb_srrip_live
+#   ./build_all.sh --nopref stlb_srrip stlb_srrip_live
 #
 # Usage:
-#   ./sweep_stlb_policy.sh {dpc3|google|qmm|test} [--mid-thd N] [--debug] [--warmup N] [--sim N]
+#   ./sweep_stlb_policy.sh {dpc3|google|qmm|test} [--mid-thd N] [--mid-key addr|pc|0|1] [--debug] [--warmup N] [--sim N]
 
 set -euo pipefail
 
@@ -32,21 +31,27 @@ SIM_OVERRIDE=""
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    dpc3|google|qmm|test) token="${1,,}"; shift ;;
+    dpc3|google|qmm|gap|gms|ligra|ml|maz|mazumdar|test) token="${1,,}"; shift ;;
     --test)    TEST=1; shift ;;
     --debug)   DEBUG=1; shift ;;
     --mid-thd) MID_THD="$2"; shift 2 ;;
-    --mid-key) MID_KEY="$2"; shift 2 ;;
+    --mid-key)
+      case "$2" in
+        addr|0) MID_KEY=0 ;;
+        pc|1)   MID_KEY=1 ;;
+        *) echo "Unknown --mid-key value: $2 (expected addr|0 or pc|1)" >&2; exit 2 ;;
+      esac
+      shift 2 ;;
     --warmup)  WARMUP_OVERRIDE="$2"; shift 2 ;;
     --sim)     SIM_OVERRIDE="$2"; shift 2 ;;
     *) echo "Unknown argument: $1" >&2
-       echo "Usage: $0 {dpc3|google|qmm|test} [--mid-thd N] [--mid-key 0|1] [--test] [--debug] [--warmup N] [--sim N]" >&2
+       echo "Usage: $0 {dpc3|google|qmm|gap|gms|ligra|ml|maz|test} [--mid-thd N] [--mid-key addr|pc|0|1] [--test] [--debug] [--warmup N] [--sim N]" >&2
        exit 2 ;;
   esac
 done
 
 if [ -z "$token" ]; then
-  echo "Usage: $0 {dpc3|google|qmm|test} [--mid-thd N] [--mid-key 0|1] [--test] [--debug] [--warmup N] [--sim N]" >&2
+  echo "Usage: $0 {dpc3|google|qmm|gap|gms|ligra|ml|maz|test} [--mid-thd N] [--mid-key addr|pc|0|1] [--test] [--debug] [--warmup N] [--sim N]" >&2
   exit 2
 fi
 
@@ -67,6 +72,31 @@ case "$token" in
   qmm)
     WARMUP=50000000; SIM=100000000
     TRACE_DIR="${PROJECT_ROOT}/trace-files/QMM"
+    TRACE_EXT="champsimtrace.xz"
+    ;;
+  gap)
+    WARMUP=50000000; SIM=100000000
+    TRACE_DIR="${PROJECT_ROOT}/trace-files/gap"
+    TRACE_EXT="trace.gz"
+    ;;
+  gms)
+    WARMUP=50000000; SIM=100000000
+    TRACE_DIR="${PROJECT_ROOT}/trace-files/gms"
+    TRACE_EXT="gz"
+    ;;
+  ligra)
+    WARMUP=50000000; SIM=100000000
+    TRACE_DIR="${PROJECT_ROOT}/trace-files/ligra"
+    TRACE_EXT="champsimtrace.xz"
+    ;;
+  ml)
+    WARMUP=50000000; SIM=100000000
+    TRACE_DIR="${PROJECT_ROOT}/trace-files/ml"
+    TRACE_EXT="champsimtrace.gz"
+    ;;
+  maz|mazumdar)
+    WARMUP=100000000; SIM=100000000
+    TRACE_DIR="${PROJECT_ROOT}/trace-files/MAZUMDAR"
     TRACE_EXT="champsimtrace.xz"
     ;;
   test)
@@ -96,10 +126,10 @@ else
 fi
 
 # ── Verify required binaries ──────────────────────────────────────────────────
-for bin in champsim_lru champsim_stlb_lru_mid champsim_stlb_srrip champsim_stlb_srrip_live; do
+for bin in champsim_lru champsim_stlb_srrip champsim_stlb_srrip_live; do
   if [ ! -x "${PROJECT_ROOT}/bin/${bin}" ]; then
     echo "ERROR: binary not found: bin/${bin}" >&2
-    echo "Run: ./build_all.sh --nopref stlb_lru_mid stlb_srrip stlb_srrip_live" >&2
+    echo "Run: ./build_all.sh --nopref stlb_srrip stlb_srrip_live" >&2
     exit 2
   fi
 done
@@ -139,7 +169,6 @@ submit_one() {
 }
 
 submit_one "lru"             "champsim_lru"             "PCONF_THD=6,BCONF_THD=6,MID_THD=1,MID_KEY=${MID_KEY},MID_PROMOTE=0"
-submit_one "stlb_lru_mid"   "champsim_stlb_lru_mid"   "PCONF_THD=6,BCONF_THD=6,MID_THD=${MID_THD},MID_KEY=${MID_KEY},MID_PROMOTE=0"
 submit_one "stlb_srrip"     "champsim_stlb_srrip"     "PCONF_THD=6,BCONF_THD=6,MID_THD=1,MID_KEY=${MID_KEY},MID_PROMOTE=0"
 submit_one "stlb_srrip_live" "champsim_stlb_srrip_live" "PCONF_THD=6,BCONF_THD=6,MID_THD=${MID_THD},MID_KEY=${MID_KEY},MID_PROMOTE=0"
 

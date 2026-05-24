@@ -706,13 +706,15 @@ void CACHE::load_predictor_settings()
 {
   auto getenv_uint64 = [](const char* var, uint64_t fallback) -> uint64_t {
     const char* val = std::getenv(var);
-    return val ? static_cast<uint64_t>(std::stoull(val)) : fallback;
+    if (!val || !*val) return fallback;
+    try { return static_cast<uint64_t>(std::stoull(val)); }
+    catch (...) { return fallback; }
   };
 
-  if (const char* v = std::getenv("DPPRED"); v && std::stoull(v))
-    dppred = true;
-  if (const char* v = std::getenv("CBPRED"); v && std::stoull(v))
-    cbpred = true;
+  if (const char* v = std::getenv("DPPRED"); v && *v)
+    try { if (std::stoull(v)) dppred = true; } catch (...) {}
+  if (const char* v = std::getenv("CBPRED"); v && *v)
+    try { if (std::stoull(v)) cbpred = true; } catch (...) {}
   cbpred_weighted     = (getenv_uint64("CBPRED_WEIGHTED",    0) != 0);
   cbpred_no_pfq        = (getenv_uint64("CBPRED_NO_PFQ",           0) != 0);
   pfq_adaptive_window  = getenv_uint64("PFQ_ADAPTIVE_WINDOW",      0);
