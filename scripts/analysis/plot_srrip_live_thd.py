@@ -109,8 +109,8 @@ def load_suite(thd_dir: Path, pol_dir: Path, thd_prefix: str = "srrip_live") -> 
     return {"srrip_gm": srrip_gm, "lru_mid_gm": lru_mid_gm, "thd_gm": thd_gm}
 
 
-def load_suite_stlb_thd(thd_dir: Path, pol_dir: Path) -> dict:
-    """Load STLB threshold sweep data (stlb_srrip_live_thd{N} + references)."""
+def load_suite_stlb_thd(thd_dir: Path, pol_dir: Path, prefix: str = "stlb_srrip_live") -> dict:
+    """Load STLB threshold sweep data ({prefix}_thd{N} + references)."""
     lru_dir = pol_dir / "lru"
     if not lru_dir.is_dir():
         sys.exit(f"ERROR: no lru/ baseline in {pol_dir}")
@@ -126,7 +126,7 @@ def load_suite_stlb_thd(thd_dir: Path, pol_dir: Path) -> dict:
 
     thd_gm = {}
     for thd in THD_VALUES:
-        subdir = thd_dir / f"stlb_srrip_live_thd{thd}"
+        subdir = thd_dir / f"{prefix}_thd{thd}"
         thd_gm[thd] = _geomean(_load_ipc(subdir), baselines) if subdir.is_dir() else None
 
     return {"stlb_srrip_gm": stlb_srrip_gm, "stlb_lru_mid_gm": stlb_lru_mid_gm, "thd_gm": thd_gm}
@@ -163,6 +163,8 @@ def main():
                     help="STLB policy sweep result dirs, one per suite (single-threshold mode)")
     ap.add_argument("--thd-prefix", default="srrip_live",
                     help="Policy prefix for threshold sweep subdirs (default: srrip_live)")
+    ap.add_argument("--stlb-thd-prefix", default="stlb_srrip_live",
+                    help="Subdir prefix for STLB threshold sweep (default: stlb_srrip_live)")
     ap.add_argument("--labels", nargs="+", default=None,
                     help="Suite labels (default: inferred from dir names)")
     ap.add_argument("--out", default=None)
@@ -181,10 +183,11 @@ def main():
         labels   = args.labels or [Path(d).name.split("_")[0].upper()
                                     for d in args.stlb_thd_dirs]
 
+        stlb_prefix = args.stlb_thd_prefix
         suites = []
         for thd_d, pol_d, label in zip(args.stlb_thd_dirs, args.stlb_pol_dirs, labels):
             print(f"Loading '{label}' ...")
-            data = load_suite_stlb_thd(Path(thd_d), Path(pol_d))
+            data = load_suite_stlb_thd(Path(thd_d), Path(pol_d), prefix=stlb_prefix)
             srrip_gm = data["stlb_srrip_gm"]
             print(f"  STLB-SRRIP: {srrip_gm:+.3f}%" if srrip_gm is not None else "  STLB-SRRIP: missing")
             for thd in THD_VALUES:
@@ -218,7 +221,7 @@ def main():
                     all_vals.append(gm)
 
             major_pos.append(g0 + (len(THD_VALUES) - 1) * bar_w / 2)
-            major_lbl.append("stlb_srrip_live")
+            major_lbl.append(stlb_prefix)
 
             g1 = len(THD_VALUES) * bar_w + group_gap
             minor_pos.append(g1)
@@ -301,7 +304,7 @@ def main():
                    loc="lower center", ncol=len(THD_VALUES) + 2, fontsize=10,
                    framealpha=0.9, bbox_to_anchor=(0.5, 0.0))
         fig.suptitle(
-            "IPC speedup vs. LRU as a function of stlb_srrip_live threshold",
+            f"IPC speedup vs. LRU as a function of {stlb_prefix} threshold",
             fontsize=11, fontweight="bold",
         )
         fig.tight_layout(rect=[0, 0.05, 1, 1])

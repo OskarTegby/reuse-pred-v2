@@ -58,7 +58,12 @@ _ALL_POLICIES = [
     ("stlb_ipv",         "IPV (STLB)"),
     ("stlb_ipv_live",    "ipv_live (STLB)"),
     ("lru_dp_only",      "lru+dp"),
+    ("hash_pred",        "hash+pred"),
     ("lru_pred",         "lru+pred"),
+    ("lfu_pred",         "lfu+pred"),
+    ("lru_pred_no_pfq",  "lru+pred (no PFQ)"),
+    ("lfu_pred_no_pfq",  "lfu+pred (no PFQ)"),
+    ("lru_pred_adaptive","lru+pred (adaptive)"),
     ("srrip_pred",       "SRRIP+pred"),
     ("lru_mid_pred",     "lru_mid+pred"),
     ("drrip",            "DRRIP"),
@@ -391,6 +396,8 @@ def main():
                     help="Exclude policies whose name contains any of these substrings (e.g. --exclude drrip)")
     ap.add_argument("--suffix", default="",
                     help="Suffix appended to all policy and baseline directory names (e.g. _paper_pref)")
+    ap.add_argument("--baseline", default=None,
+                    help="Baseline policy subdirectory name (default: lru)")
     ap.add_argument("--weights-dir", default=None,
                     help="Directory containing per-benchmark simpoint weight files "
                          "(subdirs named after benchmarks, each with weights.out + simpoints.out). "
@@ -408,6 +415,8 @@ def main():
 
     # Apply suffix to baseline and policies
     global BASELINE
+    if args.baseline is not None:
+        BASELINE = args.baseline
     BASELINE = BASELINE + args.suffix
     suffixed_policies = [p + args.suffix for p in POLICIES]
 
