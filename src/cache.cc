@@ -34,30 +34,6 @@
 #include "util.h"
 
 // ──────────────────────────────────────────────
-// PC-indexed table helpers
-// ──────────────────────────────────────────────
-
-// Look up or insert `key` into a full-key PC-indexed map bounded by `cap`.
-// When a new key would exceed the capacity, the oldest inserted key is evicted
-// (FIFO placeholder — replace `order` semantics later for LRU/LFU).
-// Lookups of existing keys are O(log n) and do not touch `order`.
-template<typename Key, typename Entry>
-static Entry& pc_table_get(std::map<Key, Entry>& tbl,
-                            std::deque<Key>& order,
-                            const Key& key, uint64_t cap)
-{
-  auto it = tbl.find(key);
-  if (it != tbl.end())
-    return it->second;
-  while (tbl.size() >= cap && !order.empty()) {
-    tbl.erase(order.front());
-    order.pop_front();
-  }
-  order.push_back(key);
-  return tbl[key];
-}
-
-// ──────────────────────────────────────────────
 // dpPred-cbPred helpers
 // ──────────────────────────────────────────────
 
@@ -498,11 +474,15 @@ void CACHE::update_eviction_counters(const BLOCK& victim, liveness_class lv)
   // Predictor tables: phist unchanged; bhist uses weighted updates when cbpred_weighted.
   if (dppred && NAME == "cpu0_STLB") {
     if (dppred_idx == dppred_idx_t::pc)
-      update(pc_table_get(pc_phist, pc_phist_order, victim.ip, pc_phist_cap));
+      update((repl_pol == repl_pol_t::lfu)
+               ? lfu_access(pc_phist, victim.ip, phist_ways, lru_clock)
+               : lru_access(pc_phist, victim.ip, phist_ways, lru_clock));
     else
       update(get_phist_entry(victim.ip, victim.address >> OFFSET_BITS));
     // Merged table: record STLB-side liveness with the same reset semantics as phist.
-    auto& m = pc_table_get(merged_pc_hist, merged_pc_hist_order, victim.ip, merged_pc_hist_cap);
+    auto& m = (repl_pol == repl_pol_t::lfu)
+                ? lfu_access(merged_pc_hist, victim.ip, merged_pc_hist_cap, merged_pc_hist_clock)
+                : lru_access(merged_pc_hist, victim.ip, merged_pc_hist_cap, merged_pc_hist_clock);
     switch (lv) {
       case liveness_class::doa:
         m.stlb_doa++;
@@ -521,7 +501,9 @@ void CACHE::update_eviction_counters(const BLOCK& victim, liveness_class lv)
     // Merged table: record LLC-side liveness unconditionally (not dp-gated),
     // with the same reset semantics as bhist.
     {
-      auto& m = pc_table_get(merged_pc_hist, merged_pc_hist_order, victim.ip, merged_pc_hist_cap);
+      auto& m = (repl_pol == repl_pol_t::lfu)
+                  ? lfu_access(merged_pc_hist, victim.ip, merged_pc_hist_cap, merged_pc_hist_clock)
+                  : lru_access(merged_pc_hist, victim.ip, merged_pc_hist_cap, merged_pc_hist_clock);
       switch (lv) {
         case liveness_class::doa:
           m.llc_doa++;
@@ -539,11 +521,14 @@ void CACHE::update_eviction_counters(const BLOCK& victim, liveness_class lv)
     }
     if (!victim.dp) { /* nothing more to update for dp-gated tables */ } else
     if (cbpred_idx == cbpred_idx_t::pc) {
-      update(pc_table_get(pc_bhist, pc_bhist_order, victim.ip, pc_bhist_cap));
+      update((repl_pol == repl_pol_t::lfu)
+               ? lfu_access(pc_bhist, victim.ip, bhist_ways, lru_clock)
+               : lru_access(pc_bhist, victim.ip, bhist_ways, lru_clock));
     } else if (cbpred_idx == cbpred_idx_t::pc_addr || cbpred_idx == cbpred_idx_t::pc_or_addr) {
-      update(pc_table_get(pc_addr_bhist, pc_addr_bhist_order,
-                          std::make_pair(victim.ip, victim.address >> OFFSET_BITS),
-                          pc_addr_bhist_cap));
+      const auto key = std::make_pair(victim.ip, victim.address >> OFFSET_BITS);
+      update((repl_pol == repl_pol_t::lfu)
+               ? lfu_access(pc_addr_bhist, key, bhist_ways, lru_clock)
+               : lru_access(pc_addr_bhist, key, bhist_ways, lru_clock));
     } else if (cbpred_weighted) {
       // Normal-insert DoA is strong evidence; pessimistic-insert DoA is weak.
       // Smooth de-escalation: partial decrement instead of hard reset.
@@ -582,17 +567,20 @@ void CACHE::update_eviction_counters(const BLOCK& victim, liveness_class lv)
     }
   }
 
-  // Insertion-policy tables: always updated for LLC and STLB, FIFO-capped.
   if (NAME == "LLC") {
-    update(pc_table_get(llc_mid_hist_addr, llc_mid_hist_addr_order,
-                        victim.address >> OFFSET_BITS, mid_hist_cap));
-    update(pc_table_get(llc_mid_hist_pc,   llc_mid_hist_pc_order,
-                        victim.ip,          mid_hist_cap));
+    update((repl_pol == repl_pol_t::lfu)
+             ? lfu_access(llc_mid_hist_addr, victim.address >> OFFSET_BITS, mid_hist_cap, lru_clock)
+             : lru_access(llc_mid_hist_addr, victim.address >> OFFSET_BITS, mid_hist_cap, lru_clock));
+    update((repl_pol == repl_pol_t::lfu)
+             ? lfu_access(llc_mid_hist_pc,   victim.ip,                     mid_hist_cap, lru_clock)
+             : lru_access(llc_mid_hist_pc,   victim.ip,                     mid_hist_cap, lru_clock));
   } else if (NAME == "cpu0_STLB") {
-    update(pc_table_get(stlb_mid_hist_addr, stlb_mid_hist_addr_order,
-                        victim.address >> OFFSET_BITS, mid_hist_cap));
-    update(pc_table_get(stlb_mid_hist_pc,   stlb_mid_hist_pc_order,
-                        victim.ip,          mid_hist_cap));
+    update((repl_pol == repl_pol_t::lfu)
+             ? lfu_access(stlb_mid_hist_addr, victim.address >> OFFSET_BITS, mid_hist_cap, lru_clock)
+             : lru_access(stlb_mid_hist_addr, victim.address >> OFFSET_BITS, mid_hist_cap, lru_clock));
+    update((repl_pol == repl_pol_t::lfu)
+             ? lfu_access(stlb_mid_hist_pc,   victim.ip,                     mid_hist_cap, lru_clock)
+             : lru_access(stlb_mid_hist_pc,   victim.ip,                     mid_hist_cap, lru_clock));
   }
 }
 
@@ -756,9 +744,6 @@ void CACHE::load_predictor_settings()
   phist_ways = getenv_uint64("PHIST_WAYS", phist_ways);
   bhist_sets = getenv_uint64("BHIST_SETS", bhist_sets);
   bhist_ways = getenv_uint64("BHIST_WAYS", bhist_ways);
-  pc_phist_cap       = phist_ways;
-  pc_bhist_cap       = bhist_ways;
-  pc_addr_bhist_cap  = bhist_ways;
   merged_pc_hist_cap = phist_ways + bhist_ways;
   if (const char* pol = std::getenv("REPL_POL"))
     repl_pol = (std::strcmp(pol, "lfu") == 0) ? repl_pol_t::lfu : repl_pol_t::lru;
