@@ -1,30 +1,27 @@
 #!/usr/bin/env bash
-# verify_baseline_qmm.sh — submit a baseline (DPPRED=0, CBPRED=0) run on QMM
-# traces using the first dpPred/cbPred implementation (fb719b249e65, 2026-03-15).
+# verify_baseline_qmm.sh — submit dpPred+cbPred (PCONF_THD=0, BCONF_THD=0) on
+# all 45 QMM traces using the first dpPred/cbPred implementation
+# (fb719b249e65, 2026-03-15) to verify the threshold-study result.
 #
-# This verifies that the original "no bypass" result is still reproducible with
-# the early implementation before any threshold/PC/PFQ complexity was added.
+# Config: DPPRED=1, CBPRED=1, PCONF_THD=0, BCONF_THD=0
+#   Both predictors enabled at threshold=0 (bypass as aggressively as possible).
+#   This is the optimal point from the threshold heatmap.
+#
+# Binary: champsim_verify (built locally from verify-threshold-study branch,
+#         transferred to ~/reuse-pred/bin/ on the cluster before submission).
 #
 # Usage: ./verify_baseline_qmm.sh [--debug]
 #   --debug   run only the first trace (quick sanity check)
-#
-# Prerequisites (run on Castillo cluster):
-#   1. git checkout verify-threshold-study
-#   2. python3 config.sh champsim_config.json configs/lru.json
-#   3. make static -j$(nproc)
-#      → produces bin/champsim_lru
-#   4. ./verify_baseline_qmm.sh
 
 set -euo pipefail
 
 PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-BINARY="champsim_lru"
+BINARY="champsim_verify"
 BIN="${PROJECT_ROOT}/bin/${BINARY}"
 
 if [ ! -x "$BIN" ]; then
   echo "ERROR: binary not found at ${BIN}" >&2
-  echo "Build first:" >&2
-  echo "  python3 config.sh champsim_config.json configs/lru.json && make static -j\$(nproc)" >&2
+  echo "Transfer bin/champsim_verify from local machine first." >&2
   exit 1
 fi
 
@@ -54,12 +51,12 @@ else
 fi
 
 DATE=$(date +%Y%m%d_%H%M)
-RUN_LABEL="qmm_baseline_verify_${DATE}${MODE_TAG}"
+RUN_LABEL="qmm_dppred_cbpred_verify_${DATE}${MODE_TAG}"
 LOG_DIR="${PROJECT_ROOT}/logs/${RUN_LABEL}"
 mkdir -p "${PROJECT_ROOT}/results/${RUN_LABEL}" "${LOG_DIR}"
 
 raw=$(qsub -t "$TASK_RANGE" \
-           -N "baseline_verify" \
+           -N "dppred_cbpred_verify" \
            -o "${LOG_DIR}/" \
            -e "${LOG_DIR}/" \
            -l h_rt=24:00:00 \
@@ -68,7 +65,7 @@ raw=$(qsub -t "$TASK_RANGE" \
            -v WARMUP="$WARMUP",SIM="$SIM",\
 TRACE_DIR="$TRACE_DIR",TRACE_EXT="$TRACE_EXT",\
 RUN_LABEL="$RUN_LABEL",BINARY="$BINARY",\
-DPPRED=0,CBPRED=0,PCONF_THD=0,BCONF_THD=0,\
+DPPRED=1,CBPRED=1,PCONF_THD=0,BCONF_THD=0,\
 MID_THD=0,MID_KEY=0,MID_PROMOTE=0 \
            "${PROJECT_ROOT}/verify_worker.sh")
 

@@ -25,6 +25,9 @@ include _configuration.mk
 
 all_execs: $(filter-out $(test_main_name), $(executable_name))
 
+static: LDFLAGS += -static-libstdc++ -static-libgcc
+static: all_execs
+
 # Remove all intermediate files
 clean:
 	@-find src test .csconfig $(module_dirs) \( -name '*.o' -o -name '*.d' \) -delete &> /dev/null
