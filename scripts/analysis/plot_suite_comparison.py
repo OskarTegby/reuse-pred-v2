@@ -255,7 +255,7 @@ def plot(suite_labels, suite_speedup_rows, out_path: Path):
 
     n_pol = len(pol_s)
     # Within each policy group, one bar per suite (hatched to distinguish)
-    suite_hatches = ["", "//", ".."]
+    suite_hatches = ["", "//", "..", "xx", "\\\\", "++", "oo"]
     bar_w = max(0.10, min(0.25, 0.75 / n_suites))
     step  = bar_w + 0.02
     offsets = [(j - (n_suites - 1) / 2) * step for j in range(n_suites)]
@@ -420,10 +420,13 @@ def main():
     BASELINE = BASELINE + args.suffix
     suffixed_policies = [p + args.suffix for p in POLICIES]
 
-    # Whitelist filter (--policies) then exclusion filter (--exclude)
+    # Whitelist filter (--policies) then exclusion filter (--exclude).
+    # Always drop the baseline itself from the plotted bars (it would show 0% by construction).
     whitelist = set(args.policies) if args.policies else None
     excl = args.exclude
     def excluded(pol_base, pol_sfx):
+        if pol_sfx == BASELINE:
+            return True
         if whitelist is not None and pol_base not in whitelist:
             return True
         return any(s in pol_sfx for s in excl)

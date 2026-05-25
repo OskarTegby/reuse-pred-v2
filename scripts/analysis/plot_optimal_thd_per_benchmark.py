@@ -32,14 +32,45 @@ from matplotlib.ticker import FixedFormatter, FixedLocator
 
 sys.path.insert(0, str(Path(__file__).parent))
 from champsim_utils import parse_ipc
+from liveness_utils import load_suite as _load_liveness_suite
 from spec_weights import SPEC_WEIGHTS, benchmark_name
 
 SRRIP_LIVE_COLOR = "#2E8B6A"
+
+import re as _re
+
+def _short_label(name: str) -> str:
+    """Strip suite prefixes for concise x-axis display."""
+    m = _re.match(r'^ligra_(.+)$', name)
+    if m:
+        return m.group(1)
+    return name
 IPV_LIVE_COLOR   = "#4169B8"
+IPV_COLOR        = "#C0514A"
 SRRIP_COLOR      = "#E8A87C"
-LRU_MID_COLOR    = "#A67CB9"
 THD_VALUES       = [1, 2, 4, 8, 16]
-STLB_POLICIES    = ["stlb_srrip", "stlb_srrip_live", "stlb_lru_mid"]
+STLB_POLICIES    = ["stlb_srrip", "stlb_srrip_live"]
+
+
+def _dead_fraction_order(liveness_dir: Path) -> list:
+    """Return benchmark names sorted by combined LLC+STLB dead fraction (desc)."""
+    rows = _load_liveness_suite(liveness_dir)
+    bm_data: dict = {}
+    for wl, data in rows:
+        bm = benchmark_name(wl)
+        bm_data.setdefault(bm, []).append(data)
+
+    def _score(data_list):
+        total_all = dead_all = 0
+        for data in data_list:
+            for stats in data.values():
+                if stats["total"] > 0:
+                    total_all += stats["total"]
+                    dead_all += stats["doa"] + stats["mostly_dead"]
+        return dead_all / total_all if total_all > 0 else 0.0
+
+    scored = sorted(bm_data.items(), key=lambda kv: _score(kv[1]), reverse=True)
+    return [bm for bm, _ in scored]
 
 
 def _diverse_select(items, fvec, k):
@@ -102,7 +133,8 @@ def _geomean_of_speedups(speedups):
     return (gm - 1) * 100
 
 
-def load_suite(thd_dir: Path, pol_dir: Path, ipv_thd_dir: Path = None):
+def load_suite(thd_dir: Path, pol_dir: Path, ipv_thd_dir: Path = None,
+               ipv_pol_dir: Path = None):
     lru_dir = pol_dir / "lru"
     if not lru_dir.is_dir():
         sys.exit(f"ERROR: no lru/ in {pol_dir}")
@@ -128,8 +160,9 @@ def load_suite(thd_dir: Path, pol_dir: Path, ipv_thd_dir: Path = None):
             if sub.is_dir():
                 ipv_thd_ipc[thd] = _load_ipc(sub)
 
-    srrip_ipc   = _load_ipc(pol_dir / "srrip")   if (pol_dir / "srrip").is_dir()   else {}
-    lru_mid_ipc = _load_ipc(pol_dir / "lru_mid") if (pol_dir / "lru_mid").is_dir() else {}
+    srrip_ipc = _load_ipc(pol_dir / "srrip") if (pol_dir / "srrip").is_dir() else {}
+    # Plain IPV from a policy result dir (e.g. missing_policy/ipv/)
+    ipv_ipc   = _load_ipc(ipv_pol_dir) if ipv_pol_dir is not None and ipv_pol_dir.is_dir() else {}
 
     # Group workloads by benchmark
     groups: dict = {}
@@ -158,16 +191,16 @@ def load_suite(thd_dir: Path, pol_dir: Path, ipv_thd_dir: Path = None):
         ipv_best_thd     = max(ipv_speedup, key=ipv_speedup.get) if ipv_speedup else None
         ipv_best_speedup = ipv_speedup[ipv_best_thd] if ipv_best_thd is not None else None
 
-        srrip_sp    = _bench_speedup_pct(wl_list, srrip_ipc,   lru_ipc)
-        lru_mid_sp  = _bench_speedup_pct(wl_list, lru_mid_ipc, lru_ipc)
+        srrip_sp = _bench_speedup_pct(wl_list, srrip_ipc, lru_ipc)
+        ipv_sp   = _bench_speedup_pct(wl_list, ipv_ipc,   lru_ipc)
 
         benchmarks[bm] = {
             "optimal_speedup":  best_speedup,
             "optimal_thd":      best_thd,
             "ipv_live_speedup": ipv_best_speedup,
             "ipv_live_thd":     ipv_best_thd,
+            "ipv_speedup":      ipv_sp,
             "srrip_speedup":    srrip_sp,
-            "lru_mid_speedup":  lru_mid_sp,
             "thd_speedup":      thd_speedup,
             "ipv_thd_speedup":  ipv_speedup,
         }
@@ -182,8 +215,7 @@ def load_suite_stlb_thd(thd_dir: Path, pol_dir: Path) -> dict:
         sys.exit(f"ERROR: no lru/ in {pol_dir}")
     lru_ipc = _load_ipc(lru_dir)
 
-    stlb_srrip_ipc   = _load_ipc(pol_dir / "stlb_srrip")   if (pol_dir / "stlb_srrip").is_dir()   else {}
-    stlb_lru_mid_ipc = _load_ipc(pol_dir / "stlb_lru_mid") if (pol_dir / "stlb_lru_mid").is_dir() else {}
+    stlb_srrip_ipc = _load_ipc(pol_dir / "stlb_srrip") if (pol_dir / "stlb_srrip").is_dir() else {}
 
     thd_ipc = {}
     for thd in THD_VALUES:
@@ -209,8 +241,7 @@ def load_suite_stlb_thd(thd_dir: Path, pol_dir: Path) -> dict:
         benchmarks[bm] = {
             "optimal_speedup": best_speedup,
             "optimal_thd":     best_thd,
-            "srrip_speedup":   _bench_speedup_pct(wl_list, stlb_srrip_ipc,   lru_ipc),
-            "lru_mid_speedup": _bench_speedup_pct(wl_list, stlb_lru_mid_ipc, lru_ipc),
+            "srrip_speedup":   _bench_speedup_pct(wl_list, stlb_srrip_ipc, lru_ipc),
             "thd_speedup":     thd_speedup,
         }
     return benchmarks
@@ -238,9 +269,8 @@ def load_suite_stlb(stlb_dir: Path) -> dict:
             continue
         benchmarks[bm] = {
             "optimal_speedup": live_sp,
-            "optimal_thd":     16,   # maps to darkest shade = full SRRIP_LIVE_COLOR
+            "optimal_thd":     16,
             "srrip_speedup":   _bench_speedup_pct(wl_list, pol_ipc.get("stlb_srrip", {}), lru_ipc),
-            "lru_mid_speedup": _bench_speedup_pct(wl_list, pol_ipc.get("stlb_lru_mid", {}), lru_ipc),
             "thd_speedup":     {},
         }
     return benchmarks
@@ -282,8 +312,9 @@ def _iqr_ylim(vals, pad=0.10):
 
 
 def draw_panel(ax, benchmarks, suite_label, clip_outliers=True, bm_order=None, max_bm=None,
-               annotate_individual=None):
-    has_ipv = any(d.get("ipv_live_speedup") is not None for d in benchmarks.values())
+               annotate_individual=None, dead_select=None):
+    has_ipv_live  = any(d.get("ipv_live_speedup") is not None for d in benchmarks.values())
+    has_plain_ipv = any(d.get("ipv_speedup")      is not None for d in benchmarks.values())
 
     if bm_order is not None:
         # Use the reference order; keep only benchmarks present in this suite
@@ -296,16 +327,30 @@ def draw_panel(ax, benchmarks, suite_label, clip_outliers=True, bm_order=None, m
         bm_names_all = sorted(benchmarks, key=lambda b: benchmarks[b]["optimal_speedup"], reverse=True)
     n_total = len(bm_names_all)
 
+    # Dead-fraction selection: use pre-ranked list from liveness data
+    if dead_select is not None and max_bm is not None and max_bm < n_total:
+        # Keep top-N by dead fraction that are present in this suite's benchmarks
+        bm_names = [b for b in dead_select if b in benchmarks][:max_bm]
+        # Restore the original sort order within the selected subset
+        order_map = {b: i for i, b in enumerate(bm_names_all)}
+        bm_names = sorted(bm_names, key=lambda b: order_map.get(b, 9999))
+        diversity_active = False
     # Diversity selection: keep all in geomean but limit what is drawn
-    diversity_active = max_bm is not None and max_bm < n_total
-    if diversity_active:
+    elif max_bm is not None and max_bm < n_total:
+        diversity_active = True
+    else:
+        diversity_active = False
+
+    if dead_select is not None and max_bm is not None and max_bm < n_total:
+        pass  # bm_names already set above
+    elif diversity_active:
         def _fvec(bm):
             d = benchmarks[bm]
             vec = [
                 d["optimal_speedup"],
                 d.get("ipv_live_speedup") or 0.0,
-                d["srrip_speedup"]   if d["srrip_speedup"]   is not None else 0.0,
-                d["lru_mid_speedup"] if d["lru_mid_speedup"] is not None else 0.0,
+                d["srrip_speedup"] if d["srrip_speedup"] is not None else 0.0,
+                d.get("ipv_speedup") or 0.0,
             ]
             return vec
         bm_names = _diverse_select(bm_names_all, _fvec, max_bm)
@@ -316,39 +361,37 @@ def draw_panel(ax, benchmarks, suite_label, clip_outliers=True, bm_order=None, m
         bm_names = bm_names_all
     n = len(bm_names)
 
-    n_bars  = 4 if has_ipv else 3
-    bar_w   = 0.22 if has_ipv else 0.26
+    n_bars  = 2 + int(has_ipv_live) + int(has_plain_ipv)
+    bar_w   = {4: 0.22, 3: 0.24, 2: 0.28}.get(n_bars, 0.22)
     gap_in  = 0.04
     step    = bar_w + gap_in
     group_w = n_bars * bar_w + (n_bars - 1) * gap_in
     gm_gap  = 1.5
 
-    sl_vals  = [benchmarks[b]["optimal_speedup"] for b in bm_names]
-    iv_vals  = [benchmarks[b].get("ipv_live_speedup") for b in bm_names] if has_ipv else []
-    sr_vals  = [benchmarks[b]["srrip_speedup"]   for b in bm_names]
-    lm_vals  = [benchmarks[b]["lru_mid_speedup"] for b in bm_names]
+    sl_vals  = [benchmarks[b]["optimal_speedup"]      for b in bm_names]
+    iv_vals  = [benchmarks[b].get("ipv_live_speedup") for b in bm_names] if has_ipv_live  else []
+    sr_vals  = [benchmarks[b]["srrip_speedup"]        for b in bm_names]
+    ipv_vals = [benchmarks[b].get("ipv_speedup")      for b in bm_names] if has_plain_ipv else []
 
     # Geomean computed over ALL benchmarks (not just the displayed subset)
-    sl_gm = _geomean_of_speedups([benchmarks[b]["optimal_speedup"] for b in bm_names_all])
-    iv_gm = _geomean_of_speedups([benchmarks[b].get("ipv_live_speedup") for b in bm_names_all
-                                   if benchmarks[b].get("ipv_live_speedup") is not None]) if has_ipv else None
-    sr_gm = _geomean_of_speedups([benchmarks[b]["srrip_speedup"]   for b in bm_names_all
-                                   if benchmarks[b]["srrip_speedup"] is not None])
-    lm_gm = _geomean_of_speedups([benchmarks[b]["lru_mid_speedup"] for b in bm_names_all
-                                   if benchmarks[b]["lru_mid_speedup"] is not None])
+    sl_gm  = _geomean_of_speedups([benchmarks[b]["optimal_speedup"] for b in bm_names_all])
+    iv_gm  = _geomean_of_speedups([benchmarks[b].get("ipv_live_speedup") for b in bm_names_all
+                                    if benchmarks[b].get("ipv_live_speedup") is not None]) if has_ipv_live  else None
+    sr_gm  = _geomean_of_speedups([benchmarks[b]["srrip_speedup"]   for b in bm_names_all
+                                    if benchmarks[b]["srrip_speedup"] is not None])
+    ipv_gm = _geomean_of_speedups([benchmarks[b].get("ipv_speedup") for b in bm_names_all
+                                    if benchmarks[b].get("ipv_speedup") is not None]) if has_plain_ipv else None
 
     x_centers = np.arange(n) * (group_w + 0.10)
     x_gm      = x_centers[-1] + group_w + gm_gap if n > 0 else group_w + gm_gap
 
-    if has_ipv:
-        sl_offset = -1.5 * step
-        iv_offset = -0.5 * step
-        sr_offset =  0.5 * step
-        lm_offset =  1.5 * step
-    else:
-        sl_offset = -step
-        sr_offset =  0.0
-        lm_offset =  step
+    # Assign bar offsets in order: srrip_live, [ipv_live], srrip, [ipv]
+    _slots     = [(j - (n_bars - 1) / 2) * step for j in range(n_bars)]
+    _si        = 0
+    sl_offset  = _slots[_si]; _si += 1
+    iv_offset  = _slots[_si] if has_ipv_live  else None; _si += int(has_ipv_live)
+    sr_offset  = _slots[_si]; _si += 1
+    ipv_offset = _slots[_si] if has_plain_ipv else None
 
     # Auto-disable individual-bar annotations for dense plots (>15 benchmarks with ≥4 bars)
     if annotate_individual is None:
@@ -367,7 +410,7 @@ def draw_panel(ax, benchmarks, suite_label, clip_outliers=True, bm_order=None, m
         if annotate_individual:
             bar_annots.append((x + sl_offset, d["optimal_speedup"], False))
 
-        if has_ipv and d.get("ipv_live_speedup") is not None:
+        if has_ipv_live and d.get("ipv_live_speedup") is not None:
             iv_color = shade(IPV_LIVE_COLOR, thd_idx.get(d.get("ipv_live_thd"), 0), len(THD_VALUES))
             ax.bar(x + iv_offset, d["ipv_live_speedup"], bar_w * 0.92,
                    color=iv_color, edgecolor="black", linewidth=0.35, zorder=3)
@@ -380,11 +423,11 @@ def draw_panel(ax, benchmarks, suite_label, clip_outliers=True, bm_order=None, m
             if annotate_individual:
                 bar_annots.append((x + sr_offset, d["srrip_speedup"], False))
 
-        if d["lru_mid_speedup"] is not None:
-            ax.bar(x + lm_offset, d["lru_mid_speedup"], bar_w * 0.92,
-                   color=LRU_MID_COLOR, edgecolor="black", linewidth=0.35, zorder=3)
+        if has_plain_ipv and d.get("ipv_speedup") is not None:
+            ax.bar(x + ipv_offset, d["ipv_speedup"], bar_w * 0.92,
+                   color=IPV_COLOR, edgecolor="black", linewidth=0.35, zorder=3)
             if annotate_individual:
-                bar_annots.append((x + lm_offset, d["lru_mid_speedup"], False))
+                bar_annots.append((x + ipv_offset, d["ipv_speedup"], False))
 
     # Geomean column
     if sl_gm is not None:
@@ -392,7 +435,7 @@ def draw_panel(ax, benchmarks, suite_label, clip_outliers=True, bm_order=None, m
         ax.bar(x_gm + sl_offset, sl_gm, bar_w * 0.92,
                color=gm_color, edgecolor="black", linewidth=0.5, zorder=3)
         bar_annots.append((x_gm + sl_offset, sl_gm, True))
-    if has_ipv and iv_gm is not None:
+    if has_ipv_live and iv_gm is not None:
         iv_gm_color = shade(IPV_LIVE_COLOR, len(THD_VALUES) - 1, len(THD_VALUES))
         ax.bar(x_gm + iv_offset, iv_gm, bar_w * 0.92,
                color=iv_gm_color, edgecolor="black", linewidth=0.5, zorder=3)
@@ -401,10 +444,10 @@ def draw_panel(ax, benchmarks, suite_label, clip_outliers=True, bm_order=None, m
         ax.bar(x_gm + sr_offset, sr_gm, bar_w * 0.92,
                color=SRRIP_COLOR, edgecolor="black", linewidth=0.5, zorder=3)
         bar_annots.append((x_gm + sr_offset, sr_gm, True))
-    if lm_gm is not None:
-        ax.bar(x_gm + lm_offset, lm_gm, bar_w * 0.92,
-               color=LRU_MID_COLOR, edgecolor="black", linewidth=0.5, zorder=3)
-        bar_annots.append((x_gm + lm_offset, lm_gm, True))
+    if has_plain_ipv and ipv_gm is not None:
+        ax.bar(x_gm + ipv_offset, ipv_gm, bar_w * 0.92,
+               color=IPV_COLOR, edgecolor="black", linewidth=0.5, zorder=3)
+        bar_annots.append((x_gm + ipv_offset, ipv_gm, True))
 
     # Axis decoration
     ax.axhline(0, color="black", linewidth=0.8, linestyle="--", zorder=1)
@@ -413,7 +456,7 @@ def draw_panel(ax, benchmarks, suite_label, clip_outliers=True, bm_order=None, m
 
     # X-axis: FixedLocator/FixedFormatter avoids matplotlib auto-tick interference
     all_x    = list(x_centers) + [x_gm]
-    xlabels  = list(bm_names) + ["Geomean"]
+    xlabels  = [_short_label(b) for b in bm_names] + ["Geomean"]
     ax.xaxis.set_major_locator(mticker.FixedLocator(all_x))
     ax.xaxis.set_major_formatter(mticker.FixedFormatter(xlabels))
     ax.tick_params(axis="x", which="major", length=3, width=0.6, pad=2)
@@ -427,17 +470,19 @@ def draw_panel(ax, benchmarks, suite_label, clip_outliers=True, bm_order=None, m
             tick.set_fontweight("bold")
 
     # Y-axis limits
-    all_vals = sl_vals + [v for v in sr_vals if v is not None] + [v for v in lm_vals if v is not None]
-    if has_ipv:
+    all_vals = sl_vals + [v for v in sr_vals if v is not None]
+    if has_ipv_live:
         all_vals += [v for v in iv_vals if v is not None]
+    if has_plain_ipv:
+        all_vals += [v for v in ipv_vals if v is not None]
     if sl_gm is not None:
         all_vals.append(sl_gm)
-    if has_ipv and iv_gm is not None:
+    if has_ipv_live and iv_gm is not None:
         all_vals.append(iv_gm)
     if sr_gm is not None:
         all_vals.append(sr_gm)
-    if lm_gm is not None:
-        all_vals.append(lm_gm)
+    if has_plain_ipv and ipv_gm is not None:
+        all_vals.append(ipv_gm)
 
     y_lo, y_hi = -1.0, 1.0
     if all_vals:
@@ -482,7 +527,7 @@ def draw_panel(ax, benchmarks, suite_label, clip_outliers=True, bm_order=None, m
     ax.yaxis.grid(True, linestyle="--", color="gray", alpha=0.55, linewidth=0.8, zorder=0)
     ax.set_axisbelow(True)
     ax.set_xlim(-0.6, x_gm + 0.6)
-    return {"sl_gm": sl_gm, "iv_gm": iv_gm, "sr_gm": sr_gm, "lm_gm": lm_gm,
+    return {"sl_gm": sl_gm, "iv_gm": iv_gm, "sr_gm": sr_gm, "ipv_gm": ipv_gm,
             "n_shown": n, "n_total": n_total}
 
 
@@ -493,19 +538,27 @@ def main():
     ap.add_argument("--pol-dirs",         nargs="+", default=None)
     ap.add_argument("--ipv-thd-dirs",    nargs="+", default=None,
                     help="ipv_live threshold sweep dirs (ipv_live_thd{N}/), one per suite")
+    ap.add_argument("--ipv-pol-dirs",    nargs="+", default=None,
+                    help="plain IPV policy result dirs, one per suite (e.g. missing_policy/ipv/)")
     ap.add_argument("--stlb-thd-dirs",   nargs="+", default=None,
                     help="stlb_srrip_live threshold sweep dirs, one per suite")
     ap.add_argument("--stlb-pol-dirs",   nargs="+", default=None,
-                    help="STLB policy dirs providing lru+stlb_srrip+stlb_lru_mid")
+                    help="STLB policy dirs providing lru+stlb_srrip")
     ap.add_argument("--stlb-dirs",        nargs="+", default=None,
                     help="STLB policy sweep result dirs, one per suite (single-threshold mode)")
     ap.add_argument("--sort-by-thd-dirs", nargs="+", default=None,
                     help="Reference dirs for benchmark sort order (threshold mode only)")
     ap.add_argument("--sort-by-pol-dirs", nargs="+", default=None)
     ap.add_argument("--labels",   nargs="+", default=None)
+    ap.add_argument("--ncols", type=int, default=1,
+                    help="Number of columns in the suite panel grid (default 1 = stacked)")
     ap.add_argument("--max-benchmarks", type=int, default=None,
                     help="Maximum number of diverse benchmarks to display per panel "
                          "(default: show all). Geomean always computed over all benchmarks.")
+    ap.add_argument("--liveness-dirs", nargs="+", default=None,
+                    help="Liveness result dirs (one per suite, one-to-one with --thd-dirs) "
+                         "used to rank benchmarks by combined LLC+STLB dead fraction. "
+                         "Overrides diversity selection when --max-benchmarks is set.")
     ap.add_argument("--out", default=None)
     ap.add_argument("--geomean-out", default=None,
                     help="If given, also save a suite-level geomean summary bar chart here")
@@ -557,12 +610,10 @@ def main():
                            label=f"stlb_srrip_live  thd={thd}  (optimal)")
             for i, thd in enumerate(THD_VALUES)
         ]
-        srrip_patch   = mpatches.Patch(facecolor=SRRIP_COLOR,   edgecolor="black",
-                                       linewidth=0.4, label="STLB-SRRIP")
-        lru_mid_patch = mpatches.Patch(facecolor=LRU_MID_COLOR, edgecolor="black",
-                                       linewidth=0.4, label="stlb_lru_mid")
-        fig.legend(handles=thd_patches + [srrip_patch, lru_mid_patch],
-                   loc="lower center", ncol=len(THD_VALUES) + 2, fontsize=9,
+        srrip_patch = mpatches.Patch(facecolor=SRRIP_COLOR, edgecolor="black",
+                                     linewidth=0.4, label="STLB-SRRIP")
+        fig.legend(handles=thd_patches + [srrip_patch],
+                   loc="lower center", ncol=len(THD_VALUES) + 1, fontsize=9,
                    framealpha=0.9, bbox_to_anchor=(0.5, 0.0))
         fig.suptitle(
             "Per-benchmark IPC speedup vs LRU: stlb_srrip_live at optimal threshold",
@@ -613,10 +664,8 @@ def main():
                                           linewidth=0.4, label="STLB-srrip_live")
         srrip_patch      = mpatches.Patch(facecolor=SRRIP_COLOR,      edgecolor="black",
                                           linewidth=0.4, label="STLB-SRRIP")
-        lru_mid_patch    = mpatches.Patch(facecolor=LRU_MID_COLOR,    edgecolor="black",
-                                          linewidth=0.4, label="STLB-lru_mid")
-        fig.legend(handles=[srrip_live_patch, srrip_patch, lru_mid_patch],
-                   loc="lower center", ncol=3, fontsize=10,
+        fig.legend(handles=[srrip_live_patch, srrip_patch],
+                   loc="lower center", ncol=2, fontsize=10,
                    framealpha=0.9, bbox_to_anchor=(0.5, 0.0))
         fig.suptitle(
             "Per-benchmark IPC speedup vs LRU: STLB replacement policy comparison",
@@ -637,12 +686,17 @@ def main():
         sys.exit("ERROR: --thd-dirs and --pol-dirs must match in length")
     if args.ipv_thd_dirs and len(args.ipv_thd_dirs) != len(args.thd_dirs):
         sys.exit("ERROR: --ipv-thd-dirs must have same length as --thd-dirs")
+    if args.ipv_pol_dirs and len(args.ipv_pol_dirs) != len(args.thd_dirs):
+        sys.exit("ERROR: --ipv-pol-dirs must have same length as --thd-dirs")
     if (args.sort_by_thd_dirs is None) != (args.sort_by_pol_dirs is None):
         sys.exit("ERROR: --sort-by-thd-dirs and --sort-by-pol-dirs must be given together")
     if args.sort_by_thd_dirs and len(args.sort_by_thd_dirs) != len(args.thd_dirs):
         sys.exit("ERROR: --sort-by-thd-dirs must have same length as --thd-dirs")
+    if args.liveness_dirs and len(args.liveness_dirs) != len(args.thd_dirs):
+        sys.exit("ERROR: --liveness-dirs must have same length as --thd-dirs")
 
-    has_ipv_global = args.ipv_thd_dirs is not None
+    has_ipv_global       = args.ipv_thd_dirs is not None
+    has_plain_ipv_global = args.ipv_pol_dirs  is not None
     n_suites = len(args.thd_dirs)
     labels   = args.labels or [Path(d).name.split("_")[0].upper() for d in args.thd_dirs]
 
@@ -656,14 +710,27 @@ def main():
     else:
         ref_orders = [None] * len(args.thd_dirs)
 
-    ipv_dirs = args.ipv_thd_dirs or ([None] * n_suites)
+    # Dead-fraction ordering from liveness dirs (overrides diversity selection)
+    live_orders = []
+    if args.liveness_dirs:
+        for ld in args.liveness_dirs:
+            print(f"Computing dead-fraction order from {Path(ld).name} ...")
+            live_orders.append(_dead_fraction_order(Path(ld)))
+    else:
+        live_orders = [None] * n_suites
+
+    ipv_dirs     = [None if d == "none" else d for d in args.ipv_thd_dirs] \
+        if args.ipv_thd_dirs else [None] * n_suites
+    ipv_pol_dirs = [None if d == "none" else d for d in args.ipv_pol_dirs] \
+        if args.ipv_pol_dirs else [None] * n_suites
 
     suites = []
-    for thd_d, pol_d, ipv_d, label, ref_order in zip(
-            args.thd_dirs, args.pol_dirs, ipv_dirs, labels, ref_orders):
+    for thd_d, pol_d, ipv_d, ipv_pol_d, label, ref_order, live_order in zip(
+            args.thd_dirs, args.pol_dirs, ipv_dirs, ipv_pol_dirs, labels, ref_orders, live_orders):
         print(f"Loading '{label}' ...")
         bms = load_suite(Path(thd_d), Path(pol_d),
-                         ipv_thd_dir=Path(ipv_d) if ipv_d else None)
+                         ipv_thd_dir=Path(ipv_d)     if ipv_d     else None,
+                         ipv_pol_dir=Path(ipv_pol_d) if ipv_pol_d else None)
         print(f"  {len(bms)} benchmarks")
         for bm, d in bms.items():
             sl = d["optimal_speedup"]
@@ -673,37 +740,48 @@ def main():
             sr_str = f"{sr:+.3f}%" if sr is not None else "N/A"
             print(f"  {bm:<35} opt_thd={d['optimal_thd']:<3} "
                   f"sl={sl:+.3f}%  ipv={iv_str}  srrip={sr_str}")
-        suites.append({"label": label, "benchmarks": bms, "ref_order": ref_order})
+        suites.append({"label": label, "benchmarks": bms,
+                        "ref_order": ref_order, "dead_select": live_order})
 
     max_bms_raw = max(len(s["benchmarks"]) for s in suites)
     n_shown_max = min(args.max_benchmarks, max_bms_raw) if args.max_benchmarks else max_bms_raw
-    n_bars_per_group = 4 if has_ipv_global else 3
-    # Each benchmark needs ~0.35 * n_bars inches; floor at 14 for small suites
-    fig_w   = max(14, min(36, n_shown_max * 0.35 * n_bars_per_group + 3))
-    panel_h = 4.0 if n_suites > 1 else 5.5
-    fig, axes = plt.subplots(n_suites, 1,
-                             figsize=(fig_w, panel_h * n_suites),
-                             sharey=False)
-    if n_suites == 1:
-        axes = [axes]
+    n_bars_per_group = 2 + int(has_ipv_global) + int(has_plain_ipv_global)
+    ncols   = args.ncols
+    nrows   = math.ceil(n_suites / ncols)
+    # Per-column width based on bars; panel height fixed at single-suite size
+    col_w   = max(7, min(18, n_shown_max * 0.35 * n_bars_per_group + 1.5))
+    fig_w   = col_w * ncols
+    panel_h = 7.0
+    fig, axes_arr = plt.subplots(nrows, ncols,
+                                 figsize=(fig_w, panel_h * nrows),
+                                 sharey=False, squeeze=False)
+    all_axes = list(axes_arr.flatten())
+    axes = all_axes[:n_suites]
+    for ax in all_axes[n_suites:]:
+        ax.set_visible(False)
 
     panel_stats = []
     for ax, suite in zip(axes, suites):
         is_spec = any(k in suite["benchmarks"] for k in ("605.mcf_s", "623.xalancbmk_s"))
         stats = draw_panel(ax, suite["benchmarks"], suite["label"],
                            clip_outliers=not is_spec, bm_order=suite["ref_order"],
-                           max_bm=args.max_benchmarks)
+                           max_bm=args.max_benchmarks, dead_select=suite["dead_select"])
         panel_stats.append(stats)
 
-    if has_ipv_global:
+    if has_ipv_global or has_plain_ipv_global:
         legend_handles = [
             mpatches.Patch(facecolor=shade(SRRIP_LIVE_COLOR, len(THD_VALUES) - 1, len(THD_VALUES)),
                            edgecolor="black", linewidth=0.4, label="srrip_live (optimal thd)"),
-            mpatches.Patch(facecolor=shade(IPV_LIVE_COLOR, len(THD_VALUES) - 1, len(THD_VALUES)),
-                           edgecolor="black", linewidth=0.4, label="ipv_live (optimal thd)"),
-            mpatches.Patch(facecolor=SRRIP_COLOR,   edgecolor="black", linewidth=0.4, label="SRRIP"),
-            mpatches.Patch(facecolor=LRU_MID_COLOR, edgecolor="black", linewidth=0.4, label="lru_mid"),
         ]
+        if has_ipv_global:
+            legend_handles.append(
+                mpatches.Patch(facecolor=shade(IPV_LIVE_COLOR, len(THD_VALUES) - 1, len(THD_VALUES)),
+                               edgecolor="black", linewidth=0.4, label="ipv_live (optimal thd)"))
+        legend_handles.append(
+            mpatches.Patch(facecolor=SRRIP_COLOR, edgecolor="black", linewidth=0.4, label="SRRIP"))
+        if has_plain_ipv_global:
+            legend_handles.append(
+                mpatches.Patch(facecolor=IPV_COLOR, edgecolor="black", linewidth=0.4, label="IPV"))
         note = "  (bar shading: light→dark = thd 1→16)"
     else:
         sl_thd_patches = [
@@ -713,8 +791,7 @@ def main():
             for i, thd in enumerate(THD_VALUES)
         ]
         legend_handles = sl_thd_patches + [
-            mpatches.Patch(facecolor=SRRIP_COLOR,   edgecolor="black", linewidth=0.4, label="SRRIP"),
-            mpatches.Patch(facecolor=LRU_MID_COLOR, edgecolor="black", linewidth=0.4, label="lru_mid"),
+            mpatches.Patch(facecolor=SRRIP_COLOR, edgecolor="black", linewidth=0.4, label="SRRIP"),
         ]
         note = ""
     n_legend_cols = len(legend_handles)
@@ -722,8 +799,12 @@ def main():
                loc="lower center", ncol=n_legend_cols, fontsize=9,
                framealpha=0.9, bbox_to_anchor=(0.5, 0.0))
 
-    title_policies = "srrip_live + ipv_live" if has_ipv_global else "srrip_live"
-    title_note     = "  (bar shading: light→dark = thd 1→16)" if has_ipv_global else ""
+    title_policies = "srrip_live"
+    if has_ipv_global:
+        title_policies += " + ipv_live"
+    if has_plain_ipv_global:
+        title_policies += " + IPV"
+    title_note = "  (bar shading: light→dark = thd 1→16)" if (has_ipv_global or has_plain_ipv_global) else ""
     fig.suptitle(
         f"Per-benchmark IPC speedup vs LRU: {title_policies} at optimal threshold vs SRRIP"
         + title_note,
@@ -748,6 +829,10 @@ def main():
         policies.append("SRRIP")
         colors.append(SRRIP_COLOR)
         gm_key.append("sr_gm")
+        if has_plain_ipv_global:
+            policies.append("IPV")
+            colors.append(IPV_COLOR)
+            gm_key.append("ipv_gm")
 
         n_pol    = len(policies)
         gm_bar_w = 0.20

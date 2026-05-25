@@ -21,6 +21,7 @@ Usage
 """
 
 import argparse
+import re
 import sys
 from pathlib import Path
 
@@ -34,6 +35,73 @@ from liveness_utils import load_suite
 from spec_weights import aggregate_spec_liveness, benchmark_weighted_geomean_frac
 
 MAX_WORKLOADS = 25   # maximum per-workload bars shown in each panel
+
+
+def _short_name(wl: str, suite: str = "") -> str:
+    """Return a concise display name for a workload filename."""
+    s = suite.lower()
+    # SPEC/DPC3 (post-aggregation): "607.cactuBSSN_s" -> "cactuBSSN"
+    if re.match(r'^\d{3}\.', wl):
+        return re.sub(r'^\d+\.(.+?)(?:_[sr])?$', r'\1', wl)
+    # Ligra: "ligra_BellmanFord.com-lj.ungraph.gcc_6..." -> "BellmanFord"
+    if wl.startswith("ligra_"):
+        return wl[len("ligra_"):].split(".")[0]
+    # GMS: "gms.k_clique_count_set_based.soc-pokec-relationships.slice-4.champsimtrace" -> "kclique_cnt.4"
+    if wl.startswith("gms."):
+        bench = wl[len("gms."):].split(".")[0]
+        _gms = {
+            "k_clique_count_set_based":            "kclique_cnt",
+            "k_clique_count":                      "kclique",
+            "k_clique_list_danisch_edge_parallel":  "kclique_ep",
+            "k_clique_list_danisch_node_parallel":  "kclique_np",
+            "k_clique_list_danisch_serial":         "kclique_ser",
+            "k_clique_star_list":                  "kclique_star",
+            "maximal_clique_enum_bron_kerbosch":    "max_clique",
+            "triangle_count":                      "tri_cnt",
+            "betweenness_centrality":              "bc",
+            "connected_components":                "cc",
+            "label_propagation":                   "lp",
+            "pagerank":                            "pagerank",
+            "bfs":                                 "bfs",
+        }
+        short = _gms.get(bench, bench[:12])
+        m = re.search(r'slice-(\d+)', wl)
+        return f"{short}.{m.group(1)}" if m else short
+    # ML: multiple naming conventions
+    if "ml" in s or "ai" in s:
+        # "clip_trace_1" / "whisper_trace_1" / "rwkv_trace_2"
+        m = re.match(r'^([a-zA-Z]+)_trace_(\d+)$', wl)
+        if m:
+            return f"{m.group(1)}.{m.group(2)}"
+        parts = wl.split(".")
+        app = parts[0]
+        inst = parts[-1] if parts[-1].isdigit() else ""
+        # stable-diffusion: "stable-diffusion.cpp-sd-v1-4.ckpt.1" -> "sd.v1.4.1"
+        if app == "stable-diffusion":
+            vm = re.search(r'[vs](\d+[-_]\d+)', parts[1]) if len(parts) > 1 else None
+            if vm:
+                ver = re.sub(r'[-_]', '.', vm.group(1))
+                return f"sd.v{ver}.{inst}" if inst else f"sd.v{ver}"
+            return f"sd.{inst}" if inst else "sd"
+        # vit: "vit.cpp-base-ggml..." -> "vit-base.1"
+        if app == "vit" and len(parts) > 1:
+            vm = re.search(r'-(base|large|small|tiny)', parts[1])
+            if vm:
+                return f"vit-{vm.group(1)}.{inst}" if inst else f"vit-{vm.group(1)}"
+        # llama2: "llama2.c-stories110M.1" -> "llama2-110M.1"
+        if "llama" in app and len(parts) > 1:
+            sm = re.search(r'(\d+[MBKGkmb])', parts[1], re.IGNORECASE)
+            if sm:
+                return f"{app}-{sm.group(1).upper()}.{inst}" if inst else f"{app}-{sm.group(1).upper()}"
+        return f"{app[:12]}.{inst}" if inst else app[:12]
+    # Google: "arizona_0000" -> "arizona.0", "charlie_0003" -> "charlie.3", "sierra.a.3_0001" -> "sierra.a.3.1"
+    if "google" in s:
+        m = re.match(r'^(.+)_(\d{4})$', wl)
+        if m:
+            return f"{m.group(1)}.{int(m.group(2))}"
+        return wl
+    # GAP: names already short ("bc-0", "bfs-10"); QMM: "srv_222" — return as-is
+    return wl
 
 
 def _diverse_select(items, feature_fn, k):
@@ -80,12 +148,14 @@ def _contrast(hex_color: str) -> str:
 
 # ── Plot ──────────────────────────────────────────────────────────────────────
 
-def plot_cache_panel(ax, rows, cache_name, sort_by_dead=True, colors=None):
+def plot_cache_panel(ax, rows, cache_name, sort_by_dead=True, colors=None, geomean_rows=None):
     """Draw one panel (one cache) onto ax.  rows = [(label, data_dict), ...].
 
     SPEC simpoints in rows must already be aggregated into parent benchmarks
     before calling this function (see aggregate_spec_liveness).
     colors: (color_doa, color_md, color_ma) tuple; defaults to module-level palette.
+    geomean_rows: if provided, compute the geomean over this set instead of rows
+                  (use the full uncapped suite data when --max-per-suite is active).
     """
     c_doa, c_md, c_ma = colors if colors else (COLOR_DOA, COLOR_MD, COLOR_MA)
     # Filter to workloads that have data for this cache
@@ -94,7 +164,7 @@ def plot_cache_panel(ax, rows, cache_name, sort_by_dead=True, colors=None):
         ax.set_visible(False)
         return
 
-    # Keep all valid for geomean computation; select diverse subset for display
+    # Select diverse display subset if needed; full set used for geomean below
     all_valid = valid
     if len(valid) > MAX_WORKLOADS:
         def _fvec(r):
@@ -102,6 +172,10 @@ def plot_cache_panel(ax, rows, cache_name, sort_by_dead=True, colors=None):
             return [r[1]["doa"] / tot, r[1]["mostly_dead"] / tot]
         sel = _diverse_select(valid, _fvec, MAX_WORKLOADS)
         valid = [valid[i] for i in sel]
+
+    # Use the full uncapped data for geomean when provided
+    if geomean_rows is not None:
+        all_valid = [(lbl, d[cache_name]) for lbl, d in geomean_rows if cache_name in d]
 
     # Sort selected subset by dead fraction for left-to-right readability
     if sort_by_dead:
@@ -213,6 +287,61 @@ def suite_geomean_row(label: str, rows: list, cache: str):
     }})
 
 
+_SUITE_DISPLAY = {
+    "spec":   "SPEC (DPC3)",
+    "dpc3":   "SPEC (DPC3)",
+    "google": "Google",
+    "qmm":    "Qualcomm (QMM)",
+    "gap":    "GAP",
+    "gms":    "GMS",
+    "ligra":  "Ligra",
+    "ml":     "AI/ML",
+}
+
+def _dead_pct(data, cache):
+    if cache not in data:
+        return None
+    d = data[cache]
+    tot = d.get("total", 0)
+    if tot == 0:
+        return None
+    return (d.get("doa", 0) + d.get("mostly_dead", 0)) / tot * 100
+
+
+def _latex(s: str) -> str:
+    """Escape LaTeX special characters in plain text."""
+    return s.replace("_", r"\_").replace("%", r"\%").replace("&", r"\&")
+
+
+def _print_latex_table(suites, orig_suites):
+    """Print a LaTeX table of selected workloads with STLB/LLC dead fractions."""
+    lines = []
+    lines.append(r"\begin{table}[tbp]")
+    lines.append(r"\caption{Selected workloads per suite (top-4 by combined LLC+STLB dead fraction)."
+                 r"  Dead\% = DoA + mostly-dead evictions at LLC or STLB eviction;")
+    lines.append(r"           dashes indicate fewer than one eviction recorded.}")
+    lines.append(r"\label{tab:selected_workloads}")
+    lines.append(r"\centering\small")
+    lines.append(r"\begin{tabular}{llrr}")
+    lines.append(r"\toprule")
+    lines.append(r"Suite & Workload & LLC dead\% & STLB dead\% \\")
+    lines.append(r"\midrule")
+    for lbl, rows in suites:
+        suite_name = _SUITE_DISPLAY.get(lbl.lower(), lbl)
+        for wl, data in rows:
+            short = _latex(_short_name(wl, lbl))
+            llc_dead  = _dead_pct(data, "LLC")
+            stlb_dead = _dead_pct(data, "cpu0_STLB")
+            llc_str  = f"{llc_dead:.0f}" if llc_dead is not None else "---"
+            stlb_str = f"{stlb_dead:.0f}" if stlb_dead is not None else "---"
+            lines.append(rf"  {suite_name} & \texttt{{{short}}} & {llc_str} & {stlb_str} \\")
+        lines.append(r"\addlinespace")
+    lines.append(r"\bottomrule")
+    lines.append(r"\end{tabular}")
+    lines.append(r"\end{table}")
+    print("\n".join(lines))
+
+
 def main():
     ap = argparse.ArgumentParser(
         description=__doc__,
@@ -228,6 +357,10 @@ def main():
                     help="Keep workloads in filename order instead of sorting by dead fraction")
     ap.add_argument("--summary", action="store_true",
                     help="Show one geomean bar per suite (policy comparison) instead of one bar per workload")
+    ap.add_argument("--max-per-suite", type=int, default=None, metavar="N",
+                    help="Keep at most N workloads per suite (top N by dead fraction)")
+    ap.add_argument("--print-table", action="store_true",
+                    help="Print a LaTeX table of selected workloads (with dead fractions) to stdout")
     args = ap.parse_args()
 
     dirs = [Path(d) for d in args.results_dirs]
@@ -243,14 +376,38 @@ def main():
     # Load all suites; aggregate SPEC simpoints into parent benchmarks
     suites = []
     for lbl, d in zip(labels, dirs):
-        print(f"Loading '{lbl}' from {d} ...")
+        print(f"Loading '{lbl}' from {d} ...", file=sys.stderr)
         suite_rows = load_suite(d)
         suite_rows = aggregate_spec_liveness(suite_rows)
         suites.append((lbl, suite_rows))
-        print(f"  {len(suite_rows)} workloads (after simpoint aggregation)")
+        print(f"  {len(suite_rows)} workloads (after simpoint aggregation)", file=sys.stderr)
 
     if not suites:
         sys.exit("ERROR: no data loaded")
+
+    orig_suites = list(suites)  # full data, used for accurate geomean
+
+    # Cap each suite to the top N workloads by dead fraction before combining
+    if args.max_per_suite is not None:
+        capped = []
+        for lbl, rows in suites:
+            if len(rows) > args.max_per_suite:
+                def _dead_key(r):
+                    for ck in ["LLC", "cpu0_STLB"]:
+                        d = r[1].get(ck, {})
+                        tot = max(d.get("total", 0), 1)
+                        if tot > 1:
+                            return (d.get("doa", 0) + d.get("mostly_dead", 0)) / tot
+                    return 0.0
+                rows = sorted(rows, key=_dead_key, reverse=True)[:args.max_per_suite]
+                print(f"  '{lbl}': capped to {args.max_per_suite} workloads by dead fraction", file=sys.stderr)
+            capped.append((lbl, rows))
+        suites = capped
+
+    # Print workload selection table if requested
+    if args.print_table:
+        _print_latex_table(suites, orig_suites)
+        return
 
     suite_desc = " + ".join(labels)
     out_path_obj = Path(args.out)
@@ -264,20 +421,27 @@ def main():
             # One geomean bar per suite — policy comparison view
             all_rows = [r for lbl, rows in suites
                         for r in [suite_geomean_row(lbl, rows, cache)] if r]
+            geomean_rows = None
             fig_w = max(6, len(all_rows) * 1.0 + 2)
         else:
-            # One bar per workload across all suites
+            # One bar per workload across all suites (display-capped set)
             all_rows = []
             for lbl, rows in suites:
-                tagged = [(f"{lbl}/{wl}" if len(suites) > 1 else wl, data)
+                tagged = [(f"{lbl}/{_short_name(wl, lbl)}" if len(suites) > 1 else _short_name(wl, lbl), data)
                           for wl, data in rows]
                 all_rows.extend(tagged)
+            # Full uncapped set for geomean (avoids bias from top-N dead selection)
+            geomean_rows = []
+            for lbl, rows in orig_suites:
+                tagged = [(f"{lbl}/{_short_name(wl, lbl)}" if len(orig_suites) > 1 else _short_name(wl, lbl), data)
+                          for wl, data in rows]
+                geomean_rows.extend(tagged)
             # Figure width based on displayed workloads (capped at MAX_WORKLOADS)
             n_display = min(len(all_rows), MAX_WORKLOADS)
             fig_w = max(8, n_display * 0.75 + 3)
 
         if not all_rows:
-            print(f"  WARNING: no data for {cache} — skipped")
+            print(f"  WARNING: no data for {cache} — skipped", file=sys.stderr)
             continue
 
         # Pick palette from the first suite label (or default if multiple suites)
@@ -298,18 +462,23 @@ def main():
         fig, ax = plt.subplots(figsize=(fig_w, 6))
         plot_cache_panel(ax, all_rows, cache,
                          sort_by_dead=not args.no_sort and not args.summary,
-                         colors=suite_colors)
+                         colors=suite_colors,
+                         geomean_rows=geomean_rows)
         n_total = len(all_rows)
-        title = (f"{cache_display[cache]} liveness at eviction"
-                 if args.summary else
-                 f"{cache_display[cache]} liveness at eviction — {suite_desc}\n"
-                 f"({min(n_total, MAX_WORKLOADS)} most diverse of {n_total}; geomean over all)")
+        if args.summary:
+            title = f"{cache_display[cache]} liveness at eviction"
+        elif args.max_per_suite is not None:
+            title = (f"{cache_display[cache]} liveness at eviction — {suite_desc}\n"
+                     f"(top-{args.max_per_suite} per suite by dead fraction; geomean over all)")
+        else:
+            title = (f"{cache_display[cache]} liveness at eviction — {suite_desc}\n"
+                     f"({min(n_total, MAX_WORKLOADS)} most diverse of {n_total}; geomean over all)")
         fig.suptitle(title, fontsize=14)
         fig.tight_layout()
         out_path = str(out_dir / f"{out_stem}_{cache_display[cache]}{out_suffix}")
         fig.savefig(out_path, dpi=200, bbox_inches="tight")
         plt.close(fig)
-        print(f"Saved: {out_path}")
+        print(f"Saved: {out_path}", file=sys.stderr)
 
 
 if __name__ == "__main__":

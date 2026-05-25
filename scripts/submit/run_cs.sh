@@ -49,8 +49,12 @@ export ST_SIZE=${ST_SIZE:-2}
 BINARY=${BINARY:-champsim_lru}
 BIN="./bin/${BINARY}"
 
-# Build sorted list of traces at runtime
-mapfile -t TRACES < <(find "${TRACE_DIR}" -name "*.${TRACE_EXT}" | sort)
+# Build sorted list of traces at runtime (TRACE_FILTER narrows to selected workloads)
+if [ -n "${TRACE_FILTER:-}" ]; then
+  mapfile -t TRACES < <(find "${TRACE_DIR}" -name "*.${TRACE_EXT}" | sort | grep -E "${TRACE_FILTER}")
+else
+  mapfile -t TRACES < <(find "${TRACE_DIR}" -name "*.${TRACE_EXT}" | sort)
+fi
 N=${#TRACES[@]}
 if [ "$N" -eq 0 ]; then
   echo "ERROR: No traces found in ${TRACE_DIR}" >&2

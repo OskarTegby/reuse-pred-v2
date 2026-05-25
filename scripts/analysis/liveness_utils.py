@@ -85,7 +85,7 @@ def load_suite(results_dir) -> list:
         workload = f.parent.name if nested else f.stem
         data = parse_liveness_file(f)
         if not data:
-            print(f"  WARNING: no LIVENESS lines in {f} — skipped")
+            print(f"  WARNING: no LIVENESS lines in {f} — skipped", file=sys.stderr)
             continue
         rows.append((workload, data))
     return rows

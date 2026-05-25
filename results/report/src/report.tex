@@ -8,6 +8,7 @@
 \usepackage{float}
 \usepackage[section]{placeins}
 \usepackage{caption}
+\usepackage{subcaption}
 \usepackage{hyperref}
 \usepackage{libertine}
 \usepackage[libertine]{newtxmath}
@@ -100,21 +101,32 @@ Warmup is 50\,M instructions; simulation is 100\,M instructions.
 
 \subsection{How much dead traffic is there?}
 
+Table~\ref{tab:selected_workloads} lists the workloads selected for the
+per-suite overview figures.  From each suite we keep the four workloads
+with the highest combined LLC + STLB dead fraction (DoA + mostly-dead),
+matching the presentation style of Mazumdar~et~al., but extended to all
+seven suites.  Geomean bars are computed over all workloads in the suite,
+not just the four displayed.
+
+\input{workload_table}
+
 \begin{figure}[htbp]
   \centering
-  \includegraphics[width=\linewidth]{../../plots/liveness/mazumdar_liveness_bar_LLC_STLB.png}
-  \caption{Suite-level geomean liveness class breakdown at the LLC (left)
-           and STLB (right) for SPEC, GAP, and Ligra (suites shared with
-           Mazumdar~2021).}
+  \includegraphics[width=\linewidth]{../../plots/liveness/maz_liveness_bar_all.png}
+  \caption{Per-workload liveness breakdown (STLB top, LLC bottom) for the
+           Mazumdar-comparable domain: SPEC (DPC3), GAP, and Ligra.
+           Each bar shows one workload (top-4 per suite by dead fraction);
+           rightmost bar per suite is the geomean over all suite workloads.}
   \label{fig:liveness_bar_mazumdar}
 \end{figure}
 
 \begin{figure}[htbp]
   \centering
-  \includegraphics[width=\linewidth]{../../plots/liveness/new_suites_liveness_bar_LLC_STLB.png}
-  \caption{Suite-level geomean liveness class breakdown at the LLC (left)
-           and STLB (right) for Google, Qualcomm, GMS, and AI/ML (suites
-           beyond Mazumdar's evaluation).}
+  \includegraphics[width=\linewidth,height=0.55\textheight,keepaspectratio]{../../plots/liveness/new_liveness_bar_all.png}
+  \caption{Per-workload liveness breakdown (STLB top, LLC bottom) for the
+           new domains: Qualcomm, Google, GMS, and AI/ML.
+           Each bar shows one workload (top-4 per suite by dead fraction);
+           rightmost bar per suite is the geomean over all suite workloads.}
   \label{fig:liveness_bar_new}
 \end{figure}
 
@@ -128,66 +140,8 @@ graph traversal patterns; AI/ML shows a bimodal structure reflecting the
 mix of streaming model weights (uniformly dead) and hot KV-cache blocks
 (mostly alive).
 
-\subsection{Structural differences across suites}
-
-\begin{figure}[htbp]
-  \centering
-  \includegraphics[width=\linewidth,height=0.36\textheight,keepaspectratio]{../../plots/liveness/spec_liveness_all.png}
-  \caption{Per-workload liveness for SPEC DPC3 (STLB top, LLC bottom).
-           The rightmost bar is the SimPoint-weighted geomean.}
-  \label{fig:liveness_spec}
-\end{figure}
-
-\begin{figure}[htbp]
-  \centering
-  \includegraphics[width=\linewidth,height=0.36\textheight,keepaspectratio]{../../plots/liveness/google_liveness_all.png}
-  \caption{Per-workload liveness for Google (STLB top, LLC bottom).
-           Rightmost bar: equal-weight geomean over all 43 workloads.}
-  \label{fig:liveness_google}
-\end{figure}
-
-\begin{figure}[htbp]
-  \centering
-  \includegraphics[width=\linewidth,height=0.36\textheight,keepaspectratio]{../../plots/liveness/qmm_liveness_all.png}
-  \caption{Per-workload liveness for Qualcomm (STLB top, LLC bottom).
-           Rightmost bar: equal-weight geomean over all 45 workloads.}
-  \label{fig:liveness_qmm}
-\end{figure}
-
-Comparing Figures~\ref{fig:liveness_spec}, \ref{fig:liveness_google},
-and \ref{fig:liveness_qmm} reveals two structural differences across the
-suite classes.
-
-\emph{Variance.}
-SPEC has high per-workload variance: some benchmarks are almost entirely
-DoA while others are predominantly mostly-alive, making the suite geomean
-an unrepresentative summary.
-Google and Qualcomm are much more uniform --- individual workloads cluster
-tightly around their respective suite means, so a small sample is
-representative of the full fleet.
-GAP and Ligra fall between these extremes: most traces are high-DoA, but
-a handful of algorithmic variants (e.g.\ BFS vs.\ triangle counting) show
-noticeably different fractions.
-
-\emph{LLC--STLB alignment.}
-In SPEC, STLB liveness tracks LLC liveness closely: a benchmark with a
-high LLC DoA fraction also has a high STLB DoA fraction.
-In server workloads this alignment breaks down.
-The cause is the mixed-liveness page: a single physical page hosts many
-LLC blocks, some live and some dead.
-The STLB Accessed bit is set by \emph{any} access to the page, so even a
-page carrying mostly dead blocks will not be classified DoA as long as one
-block on it is occasionally touched.
-Graph and AI/ML workloads behave differently again: their access streams
-are so uniform that individual pages tend to be either entirely dead or
-entirely live, restoring alignment between LLC and STLB liveness.
-This asymmetry is quantified by the LLC--STLB DoA correlation in
-Section~\ref{sec:correlation}.
-
-% ─────────────────────────────────────────────────────────────────────────────
-\section{LLC--STLB DoA Correlation}
+\subsection{LLC--STLB DoA Correlation}
 \label{sec:correlation}
-% ─────────────────────────────────────────────────────────────────────────────
 
 \begin{figure}[htbp]
   \centering
@@ -236,26 +190,17 @@ This correlation is the single most important number for predicting
 bypass predictor effectiveness: high correlation means the STLB can
 identify which pages to bypass; near-zero correlation means it cannot.
 
-% ─────────────────────────────────────────────────────────────────────────────
-\section{STLB Bypass Predictor (dpPred)}
-\label{sec:dppred}
-% ─────────────────────────────────────────────────────────────────────────────
+\subsection{Bypass Predictor Performance}
+\label{sec:bypass_perf}
 
-\subsection{Mechanism}
-
-At each STLB page fault, dpPred decides whether the faulting page is
-likely to be DoA.
-It maintains a PC-indexed page-history table (\texttt{phist}) that counts
-how often each faulting PC has produced pages whose STLB Accessed bit was
-clear at check time (i.e.\ the page was never re-accessed after its fault
-was handled).
-When the counter for a given PC exceeds a confidence threshold
-\texttt{pconf}, the faulting page frame number (PFN) is pushed into the
-Page Frame Queue (PFQ, capacity~8).
-The PFQ acts as a sliding window over the most recently predicted-DoA
-pages; when full, the oldest entry is displaced.
-
-\subsection{Performance}
+dpPred maintains a PC-indexed page-history table that tracks how often
+each faulting PC produces pages whose STLB Accessed bit is clear at check
+time.
+When the counter exceeds a confidence threshold \texttt{pconf}, the page
+frame number (PFN) is pushed into the Page Frame Queue (PFQ, capacity~8).
+cbPred then gates LLC bypass on PFQ membership plus a block-level counter
+(\texttt{bconf}).
+Full mechanism details are in Section~\ref{sec:bypass}.
 
 \begin{figure}[htbp]
   \centering
@@ -296,27 +241,8 @@ pages are predicted DoA but does not yet alter LLC behaviour.
 The IPC gain at this stage is entirely from STLB policy changes
 (bypassing page-table walks for predicted-DoA pages).
 
-% ─────────────────────────────────────────────────────────────────────────────
-\section{LLC Bypass Predictor (cbPred)}
-\label{sec:cbpred}
-% ─────────────────────────────────────────────────────────────────────────────
-
-\subsection{Mechanism}
-
-cbPred acts at LLC fill time.
-It bypasses a fill if two conditions hold simultaneously: (1)~the block's
-PFN is currently in the PFQ, meaning dpPred already predicted its page DoA,
-and (2)~the block's own PC-indexed block-history counter (\texttt{bconf})
-exceeds a threshold.
-The double gate is conservative by design: requiring both a page-level and
-a block-level prediction reduces false bypasses but also limits reach ---
-a DoA LLC block whose page dpPred did not flag will never be bypassed.
-
-\subsection{Marginal effect}
-
-The top-right panels of Figures~\ref{fig:bypass_pred_mazumdar} and
-\ref{fig:bypass_pred_new} show the PFQ hit rate: the fraction of LLC
-fills whose PFN was in the PFQ.
+The top-right panels show the PFQ hit rate: the fraction of LLC fills
+whose PFN was in the PFQ.
 This rate tracks the DoA correlation closely across all suites.
 On SPEC (correlation ${\sim}33\%$) cbPred adds a consistent positive
 margin over dpPred alone; on Google and Qualcomm (correlation
@@ -327,17 +253,11 @@ GAP, despite high LLC DoA rates, shows a low PFQ hit rate consistent
 with its near-zero correlation --- the PFQ is rarely populated with
 the right PFN.
 
-\subsection{The PFQ gate as a bottleneck}
-
 The double-gate structure caps cbPred's coverage at the PFQ hit rate,
 which in turn is bounded by the DoA correlation.
-On mixed-liveness workloads (server, GAP) the PFQ is rarely populated
-with the right PFN, so most DoA LLC blocks are inserted regardless of
-their block-level confidence.
-Relaxing the gate --- allowing cbPred to bypass on block-level confidence
-alone without requiring a PFQ match --- would decouple the LLC bypass
-from the page-level signal and is an open question addressed in
-Section~\ref{sec:synthesis}.
+On mixed-liveness workloads (server, GAP) most DoA LLC blocks are
+inserted regardless of their block-level confidence.
+Relaxing the gate is explored in Section~\ref{sec:bconf_only}.
 
 % ─────────────────────────────────────────────────────────────────────────────
 \section{Liveness-Guided Replacement Policy}
@@ -359,61 +279,46 @@ Individual blocks on a mixed-liveness page can therefore be classified
 independently --- the signal that was lost at the STLB level is
 recoverable at the LLC level.
 
-\subsection{Threshold sensitivity and indexing}
+\subsection{LLC-only: threshold sensitivity and indexing}
 
 \begin{figure}[htbp]
   \centering
-  \includegraphics[width=\linewidth]{../../plots/srrip_live_thd_pc.png}
-  \caption{Geomean IPC speedup vs.\ LRU for \texttt{srrip\_live} at
-           mid\_thd $\in \{1,2,4,8,16\}$, per suite.
-           SPEC uses address-indexed history (optimal for SPEC);
-           Google and Qualcomm use PC-indexed history.}
+  \includegraphics[width=\linewidth]{../../plots/optimal_thd_maz_pc.png}
+  \caption{Per-workload IPC speedup vs.\ LRU for \texttt{srrip\_live}
+           at each workload's individually optimal mid\_thd (PC-indexed
+           history) for SPEC, GAP, and Ligra.
+           Four workloads per suite (top-4 by dead fraction) plus suite geomean.
+           Bar shading (light~$\to$~dark) = threshold $1 \to 16$.
+           SRRIP bars shown for reference.}
   \label{fig:srrip_live_thd}
 \end{figure}
 
-Figure~\ref{fig:srrip_live_thd} sweeps the activation threshold
-\texttt{mid\_thd} for PC-indexed history.
-The optimal threshold varies across suites: SPEC favours lower thresholds
-(fewer observations needed before changing RRPV), while server workloads
-benefit from higher thresholds (requiring more evidence before
-overriding the default).
-This motivates the per-suite threshold selection used in the comparisons
-below, and it is the reason the threshold sweeps submitted for GAP,
-Ligra, ML, and GMS cover both PC and address indexing.
-
-\subsection{Comparison with baselines}
-
-We present two complementary figures.
-Figure~\ref{fig:optimal_thd_mazumdar} selects four representative traces
-per suite from SPEC, GAP, and Ligra --- the suites shared with
-Mazumdar~2021 --- enabling a direct comparison on a different simulator.
-Figure~\ref{fig:optimal_thd_new_suites} covers the four suites not
-evaluated by Mazumdar (Google, Qualcomm, GMS, AI/ML), with three
-representative traces per suite.
-
 \begin{figure}[htbp]
   \centering
-  \includegraphics[width=\linewidth]{../../plots/optimal_thd_mazumdar.png}
-  \caption{Mazumdar-comparable suites (SPEC, GAP, Ligra) --- IPC speedup
-           vs.\ LRU for \texttt{srrip\_live} at its per-benchmark optimal
-           threshold (PC-indexed), alongside SRRIP and \texttt{ipv\_live},
-           for four representative workloads per suite.
-           Bar shading: light$\to$dark = low$\to$high optimal threshold.
-           Rightmost cluster: geomean over all workloads in each suite.}
-  \label{fig:optimal_thd_mazumdar}
+  \includegraphics[width=\linewidth]{../../plots/optimal_thd_new_pc.png}
+  \caption{As Figure~\ref{fig:srrip_live_thd} for Qualcomm, Google, GMS,
+           and AI/ML.}
+  \label{fig:srrip_live_thd_new}
 \end{figure}
 
-\begin{figure}[htbp]
-  \centering
-  \includegraphics[width=\linewidth]{../../plots/optimal_thd_new_suites.png}
-  \caption{New suites (Google, Qualcomm, GMS, AI/ML) --- per-workload
-           speedup for three representative traces per suite, PC-indexed
-           history at the per-benchmark optimal threshold.
-           Rightmost cluster: geomean over the full suite.}
-  \label{fig:optimal_thd_new_suites}
-\end{figure}
+Figures~\ref{fig:srrip_live_thd} and~\ref{fig:srrip_live_thd_new} show each workload at its individually
+optimal threshold, revealing the within-suite variance that suite geomeans
+would obscure.
+SPEC is the most heterogeneous: \texttt{605.mcf\_s} gains $+16.6\%$
+while \texttt{619.lbm\_s} loses $-4.4\%$, both at their respective
+optimal thresholds.
+Server suites (Qualcomm, Google) are consistently positive and
+tightly clustered, reflecting uniform fleet workload profiles.
+Graph suites (GAP, Ligra) show a range from small gains to large ones;
+GAP frontier-access traces benefit strongly.
+GMS shows only modest gains throughout.
+AI/ML is the clearest failure case: with PC-indexed history, several
+traces are substantially hurt regardless of threshold.
+Address-indexed history resolves this
+(Figure~\ref{fig:srrip_live_thd_addr}), recovering near-neutral or
+positive speedup across all AI/ML workloads.
 
-\textit{SPEC (Figure~\ref{fig:optimal_thd_mazumdar}).}
+\textit{SPEC.}
 Benchmarks with highly concentrated, predictable access streams benefit
 the most: \texttt{605.mcf\_s} (sparse graph traversal) gains
 $+16.6\%$, far above its SRRIP baseline of $+2.6\%$, because a small
@@ -433,7 +338,7 @@ where plain SRRIP outperforms \texttt{srrip\_live}: the mid-RRPV
 heuristic happens to match its access pattern without needing per-PC
 history.
 
-\textit{Server workloads (Figure~\ref{fig:optimal_thd_mazumdar}).}
+\textit{Server workloads.}
 A notable feature of both server suites is their low inter-trace variance:
 individual Google workloads span only $+0.3\%$ to $+8.5\%$ and Qualcomm
 workloads span $+2.8\%$ to $+5.2\%$, so a small representative sample
@@ -447,7 +352,7 @@ SRRIP is consistently near zero or slightly negative for Google and
 Qualcomm: its uniform mid-RRPV assignment cannot exploit the per-PC
 liveness skew that \texttt{srrip\_live} captures.
 
-\textit{New suites (Figure~\ref{fig:optimal_thd_new_suites}).}
+\textit{Graph suites.}
 GAP graph-traversal workloads gain strongly (geomean $+7.9\%$) because
 frontier access PCs are persistently dead and the history table classifies
 them quickly.
@@ -460,79 +365,68 @@ policy differentiation.
 AI/ML is a failure case for PC-indexed history on several traces
 (bark.cpp.5 $-69\%$, stable-diffusion $-60\%$): non-stationary
 PC-liveness patterns cause the history table to give misleading guidance.
-Address-indexed history resolves this (see Figure~\ref{fig:srrip_live_thd_addr_new}).
+Address-indexed history resolves this (see Figure~\ref{fig:srrip_live_thd_addr}).
 
 No single threshold is universally optimal across workloads (shading
 varies), confirming the need for per-suite threshold tuning.
 
 \begin{figure}[htbp]
   \centering
-  \includegraphics[width=\linewidth]{../../plots/new_suites/srrip_live_thd_pc_new_suites.png}
-  \caption{Geomean IPC speedup vs.\ LRU for \texttt{srrip\_live} at
-           mid\_thd $\in \{1,2,4,8,16\}$ with PC-indexed history, for
-           the four new benchmark suites.}
-  \label{fig:srrip_live_thd_new}
+  \includegraphics[width=\linewidth]{../../plots/optimal_thd_maz_addr.png}
+  \caption{Address-indexed history --- per-workload IPC speedup vs.\ LRU
+           for \texttt{srrip\_live} at each workload's individually optimal
+           mid\_thd, for SPEC, GAP, and Ligra.}
+  \label{fig:srrip_live_thd_addr}
 \end{figure}
-
-Figure~\ref{fig:srrip_live_thd_new} extends the threshold study to the
-four new suites.
-GAP graph-traversal workloads are clear beneficiaries, reaching $+7.9\%$
-geomean at mid\_thd\,$= 8$.
-Ligra graph-computing workloads also benefit, peaking at $+4.1\%$ at the
-highest threshold, though individual workload responses vary widely.
-GMS graph-mining workloads show only modest gains (under $+1\%$), consistent
-with the short, compute-intensive kernels that leave little room for
-replacement policy differentiation.
-
-AI/ML is a striking failure case for PC-indexed history: speedup is $-8\%$
-to $-9\%$ across all thresholds.
-Several traces show non-stationary PC-liveness patterns: the liveness class
-a PC establishes during warmup does not persist into simulation, so the
-history table provides misleading guidance.
-Address-indexed history repairs the damage (Figure~\ref{fig:srrip_live_thd_addr_new}):
-at mid\_thd\,$= 16$, the geomean falls only $-0.1\%$ from LRU.
 
 \begin{figure}[htbp]
   \centering
-  \includegraphics[width=\linewidth,height=0.45\textheight,keepaspectratio]{../../plots/new_suites/srrip_live_thd_addr_new_suites.png}
-  \caption{Geomean IPC speedup vs.\ LRU for \texttt{srrip\_live} with
-           \emph{address-indexed} history for the four new suites.
-           Address indexing eliminates the AI/ML regression seen with PC
-           indexing.}
+  \includegraphics[width=\linewidth]{../../plots/optimal_thd_new_addr.png}
+  \caption{As Figure~\ref{fig:srrip_live_thd_addr} for Qualcomm, Google,
+           GMS, and AI/ML.  The AI/ML regression seen with PC-indexed
+           history is eliminated: all AI/ML traces are near-neutral or
+           positive.}
   \label{fig:srrip_live_thd_addr_new}
-\end{figure}
-
-\subsection{ipv\_live: learned insertion and promotion vectors}
-
-\begin{figure}[htbp]
-  \centering
-  \includegraphics[width=\linewidth,height=0.38\textheight,keepaspectratio]{../../plots/ipv_live/ipv_live_all_suites.png}
-  \caption{Geomean IPC speedup vs.\ LRU for SRRIP, IPV,
-           \texttt{srrip\_live}, and \texttt{ipv\_live} across all three
-           suites, each at its per-suite optimal threshold.}
-  \label{fig:ipv_live}
 \end{figure}
 
 \texttt{ipv\_live} replaces the scalar RRPV with a pair of learned vectors
 --- one for insertion, one for promotion --- selected per fill based on the
 liveness class of the filling PC.
-Figure~\ref{fig:ipv_live} shows that \texttt{ipv\_live} matches or exceeds
-\texttt{srrip\_live} on SPEC and Qualcomm, but the margin is small.
-The learned vectors provide a finer-grained response to liveness history,
-but the additional flexibility appears to matter more at the tails of the
-liveness distribution than on average.
+Figure~\ref{fig:ipv_live} shows the suite-level comparison; per-workload
+breakdowns are in Figures~\ref{fig:ipv_live_thd} and~\ref{fig:ipv_live_thd_new}.
 
 \begin{figure}[htbp]
   \centering
-  \includegraphics[width=\linewidth,height=0.45\textheight,keepaspectratio]{../../plots/new_suites/ipv_live_thd_pc_new_suites.png}
-  \caption{Geomean IPC speedup vs.\ LRU for \texttt{ipv\_live} at
-           mid\_thd $\in \{1,2,4,8,16\}$ with PC-indexed history, for
-           the four new benchmark suites.}
+  \includegraphics[width=\linewidth,height=0.38\textheight,keepaspectratio]{../../plots/ipv_live/ipv_live_all_suites.png}
+  \caption{Geomean IPC speedup vs.\ LRU for SRRIP, IPV,
+           \texttt{srrip\_live}, and \texttt{ipv\_live} across SPEC,
+           Google, and Qualcomm, each at its per-suite optimal threshold.}
+  \label{fig:ipv_live}
+\end{figure}
+
+\begin{figure}[htbp]
+  \centering
+  \includegraphics[width=\linewidth]{../../plots/optimal_thd_maz_srrip_ipv_pc.png}
+  \caption{Per-workload IPC speedup vs.\ LRU for \texttt{srrip\_live}
+           and \texttt{ipv\_live} (PC-indexed history) for SPEC, GAP,
+           and Ligra.  \texttt{ipv\_live} bars shown where data is
+           available (GAP, Ligra).
+           Four workloads per suite plus suite geomean.}
+  \label{fig:ipv_live_thd}
+\end{figure}
+
+\begin{figure}[htbp]
+  \centering
+  \includegraphics[width=\linewidth]{../../plots/optimal_thd_new_srrip_ipv_pc.png}
+  \caption{As Figure~\ref{fig:ipv_live_thd} for Qualcomm, Google, GMS,
+           and AI/ML.  \texttt{ipv\_live} bars shown where data is
+           available (GMS, AI/ML).}
   \label{fig:ipv_live_thd_new}
 \end{figure}
 
-Figure~\ref{fig:ipv_live_thd_new} shows \texttt{ipv\_live} on the new
-suites. Two differences from \texttt{srrip\_live} stand out.
+\texttt{ipv\_live} matches or exceeds \texttt{srrip\_live} on SPEC and
+Qualcomm, but the margin is small.
+Two differences stand out.
 
 \textit{GAP benefits more with learned vectors.}
 \texttt{ipv\_live} reaches $+11.2\%$ geomean at mid\_thd\,$= 1$ vs.\ $+7.9\%$
@@ -549,8 +443,170 @@ The learned promotion vector appears more robust to non-stationary liveness
 patterns: even when insertion-history is misleading, the policy can recover
 partial benefit from the promotion signal.
 
+\subsection{STLB-only: threshold sensitivity}
+\label{sec:stlb_repl}
+
+\todo{Add STLB-only threshold sweep figures (\texttt{stlb\_srrip\_live}
+and \texttt{stlb\_ipv\_live}) for all seven suites.
+Data from the stlb\_thd runs is available; plots pending.}
+
+\subsection{Combined LLC+STLB replacement}
+\label{sec:combined_repl}
+
+The preceding experiments apply liveness-guided replacement to the LLC
+alone.
+A natural extension is to apply the same history-guided policy
+simultaneously at the STLB, targeting dead TLB fills in the same way as
+dead LLC fills.
+The \texttt{srrip\_live\_both} and \texttt{ipv\_live\_both} configurations
+do this: each level independently consults the shared \texttt{merged\_pc\_hist}
+table and sets its RRPV or IPV vector accordingly.
+The \texttt{stlb\_srrip\_live} and \texttt{stlb\_ipv\_live} variants apply
+the policy at the STLB only (LLC reverts to LRU), and the \texttt{ipv} /
+\texttt{ipv\_both} variants use the static IPV policy without per-PC
+liveness history.
+
+Figure~\ref{fig:combined_repl_all7} shows the geomean IPC speedup
+vs.\ \texttt{srrip\_live\_both} for all seven suites.
+The key observation is that applying liveness-guided replacement to both
+levels is never worse than LLC-only, and provides small additional gains
+on suites where the STLB dead-on-arrival correlation is high.
+On suites where LLC and STLB DoA are weakly correlated (Google, Qualcomm,
+GAP), the \texttt{\_both} variants match the LLC-only result closely,
+as expected: the STLB history table provides no additional useful signal
+beyond what the LLC already captures.
+
+\begin{figure}[htbp]
+  \centering
+  \includegraphics[width=\linewidth]{../../plots/combined_repl_all7.png}
+  \caption{Combined LLC+STLB replacement policy comparison across all seven
+           suites.  Geomean IPC speedup vs.\ \texttt{srrip\_live\_both}
+           for LLC-only, STLB-only, and joint (LLC+STLB) variants of
+           SRRIP, IPV, \texttt{srrip\_live}, and \texttt{ipv\_live}.}
+  \label{fig:combined_repl_all7}
+\end{figure}
+
 % ─────────────────────────────────────────────────────────────────────────────
-\section{Synthesis and Next Steps}
+\section{Bypass Predictor: Mechanism and Variants}
+\label{sec:bypass}
+% ─────────────────────────────────────────────────────────────────────────────
+
+\subsection{dpPred: STLB-level page bypass}
+
+At each STLB page fault, dpPred decides whether the faulting page is
+likely to be DoA.
+It maintains a PC-indexed page-history table (\texttt{phist}) that counts
+how often each faulting PC has produced pages whose STLB Accessed bit was
+clear at check time (i.e.\ the page was never re-accessed after its fault
+was handled).
+When the counter for a given PC exceeds a confidence threshold
+\texttt{pconf}, the faulting page frame number (PFN) is pushed into the
+Page Frame Queue (PFQ, capacity~8).
+The PFQ acts as a sliding window over the most recently predicted-DoA
+pages; when full, the oldest entry is displaced.
+
+\subsection{cbPred: LLC-level block bypass}
+
+cbPred acts at LLC fill time.
+It bypasses a fill if two conditions hold simultaneously: (1)~the block's
+PFN is currently in the PFQ, meaning dpPred already predicted its page DoA,
+and (2)~the block's own PC-indexed block-history counter (\texttt{bconf})
+exceeds a threshold.
+The double gate is conservative by design: requiring both a page-level and
+a block-level prediction reduces false bypasses but also limits reach ---
+a DoA LLC block whose page dpPred did not flag will never be bypassed.
+
+\subsection{Variants and hashing comparison}
+\label{sec:bypass_variants}
+
+\todo{Compare PC-indexed history against address-hashed history for both
+dpPred and cbPred.
+Show that replacing the PC-indexed table with a simple address hash degrades
+prediction quality, particularly for workloads with high inter-PC liveness
+variance (SPEC), where the per-PC structure is essential.
+Add per-suite speedup bars for hashing variants alongside the PC-indexed
+baseline from Section~\ref{sec:bypass_perf}.}
+
+\subsection{PFQ size study}
+\label{sec:pfq_size}
+
+\todo{Vary PFQ capacity across $\{4, 8, 16, 32, 64\}$ entries and measure
+the resulting PFQ hit rate and IPC speedup per suite.
+The central question is whether a larger PFQ can compensate for low
+LLC--STLB DoA correlation (Google, Qualcomm, GAP).
+The hypothesis is that it cannot: on low-correlation workloads the STLB
+signal is fundamentally decoupled from LLC DoA, so more PFQ entries do not
+increase the probability of a PFQ hit at fill time.
+On high-correlation workloads (Ligra, AI/ML) the PFQ saturates quickly and
+larger sizes provide diminishing returns.}
+
+\subsection{bconf-only bypass and EMA-based adaptive gating}
+\label{sec:bconf_only}
+
+\begin{figure}[htbp]
+  \centering
+  \includegraphics[width=\linewidth]{../../plots/pfq_gating/pfq_gating_all7_vs_pred.png}
+  \caption{IPC speedup vs.\ the standard gated cbPred (\texttt{lru+pred}) for two
+           relaxed gating strategies across all seven suites.
+           \texttt{lru+pred (no PFQ)}: cbPred bypasses on block-level
+           confidence alone, with no PFQ membership check.
+           \texttt{lru+pred (adaptive)}: PFQ gate is enabled or disabled at
+           runtime by an EMA of the PFQ hit rate
+           (window\,=\,10\,000 fills, threshold\,=\,30\%).}
+  \label{fig:pfq_gating}
+\end{figure}
+
+Figure~\ref{fig:pfq_gating} shows the effect of removing or adaptively
+relaxing the PFQ membership requirement.
+The two strategies have opposite effects on high- and low-correlation
+workloads, and neither dominates the standard gated cbPred across all
+seven suites.
+
+\emph{bconf-only (no PFQ gate).}
+Removing the PFQ requirement frees cbPred to bypass on block-level
+confidence alone.
+On GAP (${\sim}1\%$ correlation) this yields a small gain
+($+1.3\%$): the PFQ was rarely populated with the right PFN, so the gate
+was blocking bypasses that the block-level history correctly identified as
+DoA.
+SPEC and Qualcomm are negligibly affected ($+0.2\%$ and $-0.1\%$).
+On high-correlation workloads, however, removing the gate is harmful:
+Ligra regresses by $-10.8\%$, Google by $-4.7\%$, and AI/ML by $-3.1\%$.
+The interpretation is that the PFQ gate provides essential precision on
+those suites --- it acts as a filter that ensures cbPred only bypasses
+blocks whose page was already flagged DoA by dpPred.
+Without it, block-level \texttt{bconf} alone is too aggressive, bypassing
+blocks that would otherwise be hits, particularly on streaming workloads
+where a small number of live PCs intermix with predominantly dead ones.
+
+\emph{EMA-based adaptive gating.}
+The adaptive variant monitors the PFQ hit rate via an exponential moving
+average over the most recent 10\,000 LLC fills.
+When the hit rate falls below 30\%, the PFQ gate is disabled; when it
+rises above, PFQ membership is required.
+The EMA consistently reduces the regression vs.\ bconf-only: Ligra
+improves from $-10.8\%$ to $-5.4\%$, and AI/ML from $-3.1\%$ to
+$-2.7\%$.
+This confirms that the EMA correctly detects the high PFQ hit rate on
+high-correlation workloads and re-enables the gate.
+GAP's gain shrinks slightly ($+1.2\%$ vs.\ $+1.3\%$ for no-PFQ) because
+the EMA also occasionally re-enables the gate during phases when the PFQ
+hit rate is transiently elevated.
+
+Neither strategy matches the standard gated cbPred across all suites.
+The remaining regression on Ligra ($-5.4\%$) and AI/ML ($-2.7\%$)
+suggests that the EMA window and threshold parameters used here are not
+optimally tuned, or that a fundamentally different correlation proxy is
+needed at fill time.
+The standard gated cbPred, with its static PFQ window, outperforms both
+alternatives on the suites where it matters most (high-correlation), while
+the no-PFQ and adaptive variants offer only marginal improvement on
+low-correlation suites (GAP $+1.2$--$1.3\%$) at the cost of regressions
+elsewhere.
+The PFQ gate appears to be a net positive mechanism in the current design.
+
+% ─────────────────────────────────────────────────────────────────────────────
+\section{Synthesis}
 \label{sec:synthesis}
 % ─────────────────────────────────────────────────────────────────────────────
 
@@ -558,10 +614,9 @@ Table~\ref{tab:mechanism_fit} summarises the observed and anticipated
 effectiveness of each mechanism by workload class.
 LLC replacement policy results and LLC--STLB DoA correlation measurements
 are now complete for all seven suites.
-Bypass predictor (dpPred/cbPred) results remain pending for GAP, Ligra,
-and AI/ML, whose missing-policy runs are queued; GMS bypass predictor data
-is available and shows near-neutral gain consistent with its $\approx9\%$
-correlation.
+Bypass predictor results remain pending for GAP, Ligra, and AI/ML;
+GMS bypass predictor data is available and shows near-neutral gain
+consistent with its $\approx9\%$ correlation.
 
 \begin{table}[htbp]
   \centering
@@ -587,137 +642,15 @@ correlation.
   \end{tabular}
 \end{table}
 
-The open questions, in order of priority:
-
-\begin{enumerate}
-
-  \item \textbf{Indexing choice for AI/ML.}
-        The PC-indexed \texttt{srrip\_live} failure on AI/ML is resolved by
-        either address indexing (near-neutral) or \texttt{ipv\_live} (slight
-        positive gains).
-        Understanding \emph{why} certain AI/ML traces have non-stationary
-        PC-liveness patterns would clarify which fix generalises better.
-
-  \item \textbf{Bypass predictors on GAP, Ligra, and AI/ML.}
-        Missing-policy runs for GAP, Ligra, and ML are queued.
-        Once in, they will confirm whether dpPred and cbPred track the
-        measured DoA correlations: near-zero gains expected for GAP
-        (${\sim}1\%$ correlation), substantial gains expected for Ligra
-        and AI/ML (both ${\approx}100\%$).
-        GMS data (already in) shows near-neutral dpPred gain consistent with
-        its ${\sim}9\%$ correlation.
-
-  \item \textbf{Joint LLC+STLB threshold optimum.}
-        STLB threshold sweeps (stlb\_srrip\_live and stlb\_ipv\_live) are
-        running for all suites.
-        Once complete, the per-suite optimal LLC threshold and STLB threshold
-        can be combined to run the \texttt{srrip\_live\_both} and
-        \texttt{ipv\_live\_both} joint configurations.
-
-  \item \textbf{Co-design superadditivity.}
-        On workloads where the DoA correlation is high, does combining
-        bypass and liveness-guided replacement outperform either mechanism
-        alone by more than the sum of individual gains?
-        This requires running the full co-design configuration on Ligra,
-        AI/ML, and SPEC after the standalone bypass predictor results are in.
-
-\end{enumerate}
-
-% ─────────────────────────────────────────────────────────────────────────────
-\subsection{Adaptive gating and replacement co-design}
-\label{sec:adaptive_design}
-% ─────────────────────────────────────────────────────────────────────────────
-
-The results above suggest a structured programme of mechanism extensions.
-The steps are ordered by dependency: each one requires the preceding
-experiment to validate its premise before implementation is worthwhile.
-
-\paragraph{Step 1 --- bconf-only bypass.}
-The first experiment removes the PFQ membership requirement from cbPred and
-runs all seven suites with block-level confidence (\texttt{bconf}) as the sole
-gate on LLC bypass.
-On low-correlation workloads (server, GAP) the PFQ gate currently suppresses
-nearly all LLC bypasses, because the PFQ is rarely populated with the right
-PFN --- yet \texttt{srrip\_live} already demonstrates that block-level
-liveness signal is strong and exploitable on exactly those workloads.
-The bconf-only experiment directly tests whether releasing the suppressed
-bypasses translates to IPC gain.
-On high-correlation workloads (Ligra, AI/ML) the gate is already
-near-redundant, so bconf-only bypass should match or slightly exceed the
-current gated design by extending coverage to blocks whose page dpPred
-happened not to flag.
-The expected outcome is a clear IPC improvement on low-correlation suites and
-no regression on high-correlation ones --- establishing that the block-level
-signal is independently sufficient and that the PFQ gate is a bottleneck
-rather than a filter.
-
-\paragraph{Step 2 --- PFQ hit rate as a fill-time correlation proxy.}
-The LLC--STLB DoA correlation is measured at eviction time: we observe after
-the fact that $X\%$ of DoA LLC evictions were on DoA STLB pages.
-The PFQ hit rate is the same quantity measured at fill time: the fraction of
-LLC fills whose PFN is currently in the PFQ.
-The two numbers track each other closely because both reflect the underlying
-alignment between STLB and LLC liveness.
-Crucially, fill time is the more purposeful measurement point, because that
-is precisely when the insertion decision must be made --- whether to bypass
-the fill, insert with high RRPV, or insert normally.
-Measuring correlation at eviction time cannot help that decision; the PFQ
-hit rate provides the same information at the moment it is needed, using
-counters that are already computed by the existing hardware.
-
-\paragraph{Step 3 --- Adaptive PFQ gate.}
-Once bconf-only performance is characterised, the adaptive design follows:
-maintain a rolling PFQ hit rate counter (hits per $N$ LLC fills) and
-switch between gated and ungated bypass at a configurable threshold.
-Below threshold, bypass on bconf alone --- the page-level filter contributes
-noise rather than signal.
-Above threshold, require PFQ membership --- the filter adds precision by
-ensuring the block-level bypass is corroborated by a STLB-level DoA
-prediction.
-Sweeping the threshold across suites will reveal whether a single value
-generalises or whether per-suite tuning is required.
-
-\paragraph{Step 4 --- PFQ-guided replacement at high correlation.}
-When the PFQ hit rate exceeds the threshold, the STLB signal is reliable
-enough to inform the replacement policy as well as the bypass decision.
-The extension inserts any block whose PFN is currently in the PFQ with a
-high RRPV, even if \texttt{bconf} has not yet accumulated enough evidence to
-justify full bypass.
-This fills a coverage gap in the current design: DoA blocks from PCs that
-are early in their confidence-building phase currently receive the default
-RRPV, wasting the page-level signal that dpPred has already committed to.
-The same PFQ hit rate threshold that governs the bypass gate also governs
-the replacement guidance, keeping the two modes consistent: on
-low-correlation workloads neither mechanism uses the STLB signal; on
-high-correlation workloads both use it aggressively at fill time.
-
-\paragraph{Step 5 --- Prediction accuracy feedback (deferred).}
-A known failure mode for aggressive RRPV assignment is a self-sealing
-feedback loop: inserting a block with RRPV\_MAX causes it to be evicted
-before any hits can arrive, and the resulting hitless eviction then
-\emph{appears} to confirm the DoA classification, reinforcing it.
-A principled correction maintains a small \emph{post-removal buffer} of
-recently bypassed or high-RRPV-evicted block addresses.
-On every demand miss, the buffer is checked; a hit indicates the removal
-was premature, and the responsible PC's DoA confidence is reduced.
-The mechanism is symmetric for bypass (block never inserted) and aggressive
-replacement (block inserted but evicted early): in both cases the actionable
-signal is a demand miss on an address that the predictor recently removed.
-A simpler first approximation is to give borderline blocks slightly more
-residence time --- a modest RRPV reduction rather than a full confidence
-reset --- and rely on captured hits during that extended window to naturally
-correct the history.
-Either variant is left to a later experimental stage, after the adaptive
-gating experiments have established the baseline benefit.
-
-\paragraph{Step 6 --- Bypass accuracy tracking (later stage).}
-Tracking the number and accuracy of past bypasses per PC can further refine
-\texttt{bconf}: a PC whose bypasses are frequently followed by demand misses
-(false bypasses) should have its threshold raised, while a PC with
-consistently accurate bypasses can safely use a lower threshold.
-This closes the feedback loop at the predictor level and is the natural
-generalisation of the post-removal buffer described above.
-Implementation is deferred until the adaptive gating mechanism (Steps 1--4)
-is validated and its gains are well-understood.
+The LLC--STLB DoA correlation is the central explanatory variable: it
+predicts bypass predictor effectiveness precisely, separating workloads
+where the page-level signal is useful (SPEC, Ligra, AI/ML) from those
+where it is not (server suites, GAP).
+Block-level replacement policy (\texttt{srrip\_live}) recovers the signal
+lost at the page level, benefiting all workload classes including
+low-correlation ones.
+The key open question is whether relaxing the cbPred gate
+(Section~\ref{sec:bconf_only}) yields gains on low-correlation workloads
+comparable to those already achieved by \texttt{srrip\_live}.
 
 \end{document}

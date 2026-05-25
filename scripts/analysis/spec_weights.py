@@ -41,8 +41,27 @@ def _load_spec_weights(weights_dir: Path) -> "dict[str, float]":
 
 
 def _benchmark_name(wl: str) -> str:
+    # Standard: name-NNNunit (SPEC SimPoints, GAP, QMM, Google, ML)
     m = re.match(r'^(.+)-\d+[A-Z]+$', wl)
-    return m.group(1) if m else wl
+    if m:
+        return m.group(1)
+    # Ligra: ligra_Algorithm.com-lj.ungraph... → ligra_Algorithm
+    m = re.match(r'^(ligra_[^.]+)\.', wl)
+    if m:
+        return m.group(1)
+    # GMS triangle_count: gms.triangle_count...slice-NNN → tri_cnt.NNN
+    m = re.match(r'^gms\.triangle_count.*?slice-(\d+)', wl)
+    if m:
+        return f"tri_cnt.{m.group(1)}"
+    # GMS k_clique_star_list: gms.k_clique_star_list...slice-NNN → kclique_star.NNN
+    m = re.match(r'^gms\.k_clique_star_list.*?slice-(\d+)', wl)
+    if m:
+        return f"kclique_star.{m.group(1)}"
+    # GMS generic: gms.algorithm...slice-NNN → algorithm[:12].NNN
+    m = re.match(r'^gms\.([^.]+).*?slice-(\d+)', wl)
+    if m:
+        return f"{m.group(1)[:12]}.{m.group(2)}"
+    return wl
 
 
 _SPEC_WEIGHTS: "dict[str, float]" = _load_spec_weights(_DEFAULT_WEIGHTS_DIR)
