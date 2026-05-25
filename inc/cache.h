@@ -43,23 +43,6 @@ struct pc_liveness_entry {
   uint64_t total() const { return doa + mostly_dead + mostly_alive; }
 };
 
-// Merged per-PC liveness counts from both STLB (page-level) and LLC (block-level).
-// STLB columns are updated on every STLB eviction when dppred=1.
-// LLC columns are updated on every LLC eviction when cbpred=1, regardless of victim.dp.
-// Stored as an inline static so both STLB and LLC CACHE instances share it.
-struct merged_pc_entry {
-  uint64_t stlb_doa         = 0;
-  uint64_t stlb_mostly_dead  = 0;
-  uint64_t stlb_mostly_alive = 0;
-  uint64_t llc_doa          = 0;
-  uint64_t llc_mostly_dead   = 0;
-  uint64_t llc_mostly_alive  = 0;
-  uint64_t last_access      = 0;
-  uint64_t freq             = 0;
-  uint64_t stlb_total() const { return stlb_doa + stlb_mostly_dead + stlb_mostly_alive; }
-  uint64_t llc_total()  const { return llc_doa  + llc_mostly_dead  + llc_mostly_alive;  }
-};
-
 struct cache_stats {
   std::string name;
   // prefetch stats
@@ -73,35 +56,6 @@ struct cache_stats {
   std::array<std::array<uint64_t, NUM_CPUS>, NUM_TYPES> misses = {};
 
   uint64_t total_miss_latency = 0;
-
-  uint64_t llt_bypasses = 0;
-  uint64_t llc_bypasses = 0;
-  uint64_t pfq_probes    = 0;   // LLC fills checked against PFQ by PFN (CBPRED=1 only)
-  uint64_t pfq_hits      = 0;   // subset of pfq_probes whose PFN was in PFQ
-  uint64_t pc_pfq_probes = 0;   // LLC fills checked against PC-PFQ by PC (CBPRED=1 only)
-  uint64_t pc_pfq_hits   = 0;   // subset of pc_pfq_probes whose PC was in PC-PFQ
-
-  // ── Bypass regret (LLC and STLB only; only populated when bypass is active) ──
-  // bypass_incorrect – bypassed line demanded while it would still have been resident
-  // bypass_correct   – bypassed line aged out (≥ NUM_WAY set-accesses) without being demanded
-  // bypass_shadow_overflow – shadow was full; entry dropped unresolved
-  uint64_t bypass_incorrect          = 0;
-  uint64_t bypass_correct         = 0;
-  uint64_t bypass_shadow_overflow = 0;
-
-  // Weighted-bhist DoA eviction breakdown (CBPRED_WEIGHTED=1 only).
-  // normal_inserts:      class=mostly_alive at insert → bhist.doa += W_NORMAL
-  // pessimistic_inserts: class=doa/mostly_dead at insert → bhist.doa += W_LOW
-  uint64_t cbpred_doa_normal_inserts      = 0;
-  uint64_t cbpred_doa_pessimistic_inserts = 0;
-
-  uint64_t phist_lookups          = 0, phist_hits          = 0;  // dpPred vpn_pc-indexed queries (DPPRED=1 only)
-  uint64_t pc_phist_lookups       = 0, pc_phist_hits       = 0;  // dpPred PC-indexed queries    (DPPRED_IDX=pc)
-  uint64_t bhist_lookups          = 0, bhist_hits          = 0;  // cbPred addr-indexed queries (CBPRED=1 only)
-  uint64_t pc_bhist_lookups       = 0, pc_bhist_hits       = 0;  // cbPred PC-indexed queries   (CBPRED_IDX=pc)
-  uint64_t pc_addr_bhist_lookups  = 0, pc_addr_bhist_hits  = 0;  // cbPred combined queries     (CBPRED_IDX=pc_addr|pc_or_addr)
-  uint64_t merged_pc_hist_lookups = 0, merged_pc_hist_hits = 0;  // cbPred merged queries       (CBPRED_IDX=merged)
-  uint64_t st_lookups             = 0, st_hits             = 0;  // shadow-table lookups (DPPRED=1 only)
 
   // ── Block/page liveness stats (LLC and STLB only) ─────────────────────────
   // Recorded at every valid eviction during the ROI.
@@ -176,11 +130,6 @@ class CACHE : public champsim::operable, public MemoryRequestConsumer, public Me
     bool valid = false;
     bool prefetch = false;
     bool dirty = false;
-    bool accessed = false; // set on hit; read and cleared on eviction
-    bool dp = false;       // dead-page bit: set on LLC fill when the block's PFN is in the PFQ;
-                           // gates accessed tracking and bHIST updates (cbPred only)
-    uint8_t insert_liveness_class = 2; // liveness_class at insertion time (2 = mostly_alive default);
-                                       // used by cbpred_weighted to scale bhist evidence
 
     uint64_t address = 0;
     uint64_t v_address = 0;
@@ -200,154 +149,48 @@ class CACHE : public champsim::operable, public MemoryRequestConsumer, public Me
   std::pair<set_type::const_iterator, set_type::const_iterator> get_set_span(uint64_t address) const;
   std::size_t get_set_index(uint64_t address) const;
 
-  // ── dpPred-cbPred predictor ──────────────────────────────────────────────
-
   // Liveness classification produced by classify_liveness() and shared
   // between record_eviction_liveness() and update_eviction_counters().
   enum class liveness_class { doa, mostly_dead, mostly_alive };
 
-  // History-table entry.  The two counters have independent update rules:
-  //   doa          – incremented on DoA eviction; reset when the accessed bit
-  //                  is set at eviction (i.e. on mostly-dead or mostly-alive
-  //                  eviction, both of which imply at least one hit).
-  //                  Gates dppred_bypass / cbpred_bypass: bypass when doa
-  //                  exceeds pconf_thd / bconf_thd.
-  //   mostly_dead  – incremented on mostly-dead eviction, reset on mostly-alive
-  //                  eviction; unchanged on DoA.
-  // The two counters never both increment on the same eviction, but a DoA
-  // eviction leaves mostly_dead untouched (it neither confirms nor disproves
-  // that the block was mostly-dead on a prior eviction).
-  // needs_mid_insertion() returns true when either doa or mostly_dead is >= mid_thd.
+  // History-table entry used by the mid-insertion policy tables.
+  //   doa        – incremented on DoA eviction; reset on mostly-dead/alive (any hit).
+  //   mostly_dead – incremented on mostly-dead eviction; reset on mostly-alive.
+  // needs_mid_insertion() returns true when either counter >= mid_thd.
   struct hist_entry {
     uint64_t doa         = 0;
     uint64_t mostly_dead = 0;
-    uint64_t last_access = 0;  // recency timestamp for LRU eviction (full-key mode only)
-    uint64_t freq        = 0;  // access frequency for LFU eviction (full-key mode only)
-    uint64_t full_addr   = 0;  // original PC (phist) or block address (bhist) before set/tag split
+    uint64_t last_access = 0;  // recency timestamp for LRU eviction
+    uint64_t freq        = 0;  // access frequency for LFU eviction
+    uint64_t full_addr   = 0;
   };
 
-  // Inner key for phist_full.  pc_tag stores the high bits of the PC after
-  // stripping the set-index bits (addr_tag(pc, phist_sets)); vpn is unsplit.
-  struct phist_key_t {
-    uint64_t pc_tag, vpn;
-    bool operator<(const phist_key_t& o) const { if (pc_tag != o.pc_tag) return pc_tag < o.pc_tag; return vpn < o.vpn; }
-    bool operator==(const phist_key_t& o) const { return pc_tag == o.pc_tag && vpn == o.vpn; }
-  };
-
-
-  // Shared physical-frame queue: dpPred fills it; cbPred reads it.
-  // pfq     — PFN-only entries; cbPred matches by physical page (existing design).
-  // pc_pfq  — (PC, PFN) pairs; cbPred can match by PC, PFN, or both.
-  // Both queues are populated simultaneously on every dpPred bypass and share pfq_cap.
-  inline static std::deque<uint64_t>                       pfq{};
-  inline static std::deque<std::pair<uint64_t, uint64_t>>  pc_pfq{};  // (PC, PFN)
-  inline static uint64_t pfq_cap = 8;
-
-  // Shadow table entry: records the context of a bypassed fill so that
-  // a subsequent demand on the same VPN can be identified as a misprediction.
-  struct shadow_entry_t {
-    uint64_t vpn;          // virtual page number of the bypassed block
-    uint64_t pc;           // instruction PC that triggered the bypass
-    uint64_t translation;  // physical translation data (PFN + flags)
-  };
-
-  // Per-instance state
-  bool dppred = false;
-  bool cbpred = false;
-  bool     cbpred_weighted     = false; // weight bhist updates by insertion quality (CBPRED_WEIGHTED=1)
-  bool     cbpred_no_pfq       = false; // bypass on bhist confidence alone; skip PFQ membership check (CBPRED_NO_PFQ=1)
-  // Adaptive PFQ gate: exponential moving average of the PFQ hit rate.
-  // α = 1/pfq_adaptive_window; the gate requires PFQ membership when the
-  // EMA exceeds pfq_adaptive_thd (%).  0 = gate always on (no adaptation).
-  uint64_t pfq_adaptive_window = 10000; // EMA memory length in probes; 0 = gate always on
-  uint64_t pfq_adaptive_thd    = 30;    // hit-rate % threshold; gate on iff ema >= thd
-  double   pfq_hit_rate_ema    = 1.0;   // running EMA; starts at 1 (gate on) and adapts
-  bool     cbpred_trace        = false;        // log bypass threshold crossings to stderr (CBPRED_TRACE=1)
-  uint64_t cbpred_trace_addr   = UINT64_MAX;   // full per-block trace for one address (CBPRED_TRACE_ADDR=<hex>)
-  bool     tracing_cbpred()    const { return cbpred_trace || cbpred_trace_addr != UINT64_MAX; }
-  uint64_t cbpred_w_normal     = 2;     // bhist.doa increment for DoA eviction after normal insertion
-  uint64_t cbpred_w_low        = 1;     // bhist.doa increment for DoA eviction after pessimistic insertion
-  uint64_t cbpred_w_mispredict = 2;     // bhist.doa decrement per detected bypass misprediction
-  uint64_t pconf_thd = 6; // phist confidence threshold
-  uint64_t bconf_thd = 6; // bhist confidence threshold
-  // Bypass-debt adaptive gate: accumulated mispredict penalty raises the effective bypass threshold.
-  // Correct bypasses drain the debt; mispredictions grow it.  When BYPASS_DEBT_SCALE > 0:
-  //   effective_bconf = bconf_thd + bypass_debt / bypass_debt_scale
-  // This makes the predictor self-suppressing when its recent accuracy is poor.
-  uint64_t bypass_debt       = 0;  // running mispredict penalty (resets on warmup end)
-  uint64_t bypass_debt_cap   = 0;  // max debt = max threshold increase (0 = disabled)
-  uint64_t bypass_debt_scale = 0;  // 0 = feature disabled; 1+ = divisor for debt → threshold
-  uint64_t mid_thd        = 1;     // min DoA-or-mostly-dead evictions before mid-insertion triggers
+  uint64_t mid_thd           = 1;     // min DoA-or-mostly-dead evictions before mid-insertion triggers
   bool     mid_promote_on_hit = false; // promote mid-inserted blocks to MRU on hit (MID_PROMOTE=1)
-  uint64_t st_size    = 2;    // shadow table capacity
-  uint64_t phist_sets = 1;     // number of sets in phist_full (1 = fully associative)
-  uint64_t phist_ways = 1024;  // ways per set in phist_full; total capacity = sets × ways
-  uint64_t bhist_sets = 1;     // number of sets in bhist_full (1 = fully associative)
-  uint64_t bhist_ways = 4096;  // ways per set in bhist_full; total capacity = sets × ways
-  uint64_t lru_clock  = 0;    // monotonic counter for LRU timestamps
+  uint64_t lru_clock          = 0;    // monotonic counter for LRU timestamps in mid-hist tables
 
-  // Replacement policy for the full-key history tables (no effect in hashed mode).
+  // Replacement policy for the mid-history tables.
   // Controlled by the REPL_POL env var ("lru" (default) | "lfu").
   enum class repl_pol_t : uint8_t { lru, lfu };
   repl_pol_t repl_pol = repl_pol_t::lru;
 
-  // Set by cpu0_STLB at initialize(); used by LLC to scan for DoA page correlations.
+  // Set by cpu0_STLB at initialize(); used by LLC to cross-reference DoA page correlations.
   inline static const CACHE* stlb_ptr = nullptr;
 
   // PFN → was_doa: populated when an STLB entry is evicted; entries removed
   // when the page is re-inserted into the STLB.  Gives LLC the ability to
   // cross-reference against pages that have already left the STLB.
-  // Capped at stlb_evict_log_cap entries (FIFO); prevents unbounded growth on
-  // large-footprint workloads.
   inline static std::map<uint64_t, bool>  stlb_evict_log{};
   inline static std::deque<uint64_t>      stlb_evict_log_order{};
   inline static uint64_t                  stlb_evict_log_cap = 1024;
-
-  std::map<uint64_t, std::map<uint64_t,    hist_entry>> phist;      // [vpn_hash][pc_hash] → entry  (hashed)
-  std::map<uint64_t, std::map<phist_key_t, hist_entry>> phist_full; // [pc_set][{pc_tag,vpn}] → entry (full-key)
-  std::map<uint64_t, hist_entry> pc_phist;  // [PC] → entry  (PC-only dpPred history)
-
-  std::deque<shadow_entry_t> shadow_table;                          // recently bypassed {vpn, pc, translation}
-  std::map<uint64_t, hist_entry> bhist;                             // [block_hash] → entry           (hashed)
-  std::map<uint64_t, std::map<uint64_t, hist_entry>> bhist_full;   // [addr_set][addr_tag] → entry   (full-key)
-
-  std::map<uint64_t, hist_entry>                     pc_bhist;      // [PC] → entry  (PC-only cbPred history)
-  std::map<std::pair<uint64_t,uint64_t>, hist_entry> pc_addr_bhist; // [{PC, block_addr}] → entry
-
-  // (declared public below — needs to be read by the plain_printer)
-
-  // Selects the indexing key for dpPred's history table.
-  // Controlled by the DPPRED_IDX env var.
-  //   vpn_pc — existing: phist keyed by (VPN, PC)  (default)
-  //   pc     — new:      pc_phist keyed by PC only  (symmetric with CBPRED_IDX=pc)
-  enum class dppred_idx_t : uint8_t { vpn_pc, pc };
-  dppred_idx_t dppred_idx = dppred_idx_t::vpn_pc;
-
-  // Selects the indexing key for cbPred's history table and PFQ match.
-  // Controlled by the CBPRED_IDX env var.
-  //   addr        — existing: bhist keyed by block addr,  PFQ matched by PFN
-  //   pc          — new:      pc_bhist keyed by PC,       pc_pfq matched by PC
-  //   pc_addr     — combined: pc_addr_bhist keyed by (PC,addr),  strict AND: both PFN and PC must hit
-  //   pc_or_addr  — combined: pc_addr_bhist keyed by (PC,addr), permissive OR: PFN or PC suffices
-  //   merged      — new:      merged_pc_hist[PC].llc_doa, PFQ matched by PFN (same gate as addr)
-  enum class cbpred_idx_t : uint8_t { addr, pc, pc_addr, pc_or_addr, merged };
-  cbpred_idx_t cbpred_idx = cbpred_idx_t::addr;
 
   // Selects which history signal drives needs_mid_insertion() / predict_liveness().
   // Controlled by the MID_KEY env var (0 = addr, 1 = pc; default 0).
   enum class mid_key_t : uint8_t { addr = 0, pc = 1 };
   mid_key_t mid_key = mid_key_t::addr;
 
-  // When true, predict_liveness() / needs_mid_insertion() also require PFQ
-  // membership before returning a non-alive prediction.  The queue checked
-  // follows mid_key: addr → pfq (PFN-based), pc → pc_pfq (PC-based).
-  // Controlled by the MID_PFQ_GATE env var (0 = off (default), 1 = on).
-  bool mid_pfq_gate = false;
-
-  // Unbounded insertion-policy tables: always updated at eviction regardless
-  // of predictor state.  No hashing — no collisions.  Budget is intentionally
-  // LLC and STLB keep separate tables because they track different address
-  // granularities (cache lines vs pages) and have independent liveness behaviour.
+  // Insertion-policy history tables: updated at every eviction.
+  // LLC and STLB keep separate tables (different address granularities).
   //   llc_mid_hist_addr  : LLC, keyed by block address (full_addr >> OFFSET_BITS)
   //   llc_mid_hist_pc    : LLC, keyed by the PC that triggered the access
   //   stlb_mid_hist_addr : STLB, keyed by VPN (full_addr >> OFFSET_BITS)
@@ -361,43 +204,15 @@ class CACHE : public champsim::operable, public MemoryRequestConsumer, public Me
   std::map<uint64_t, hist_entry> stlb_mid_hist_pc;
   uint64_t                       mid_hist_cap = 65536; // set in load_predictor_settings
 
-  static constexpr unsigned VPN_BITS = 4;
-  static constexpr unsigned PC_BITS  = 6;
-  static constexpr unsigned BHT_BITS = 12;
-
-  bool phist_hash = true;   // PHIST_HASH=0 disables XOR-folding, uses full VPN+PC as key
-  bool bhist_hash = true;   // BHIST_HASH=0 disables XOR-folding, uses full block address as key
-
-  uint64_t fold_xor(uint64_t val, unsigned bits) const;
-  bool        phist_entry_exists(uint64_t pc, uint64_t vpn) const;
-  uint64_t    get_phist_doa(uint64_t pc, uint64_t vpn) const;  // read-only doa lookup; never inserts
-  hist_entry& get_phist_entry(uint64_t pc, uint64_t vpn);      // update path: inserts + updates LRU/LFU
-  void        phist_clear_vpn(uint64_t vpn);                   // invalidate all entries for a VPN
-  bool        bhist_entry_exists(uint64_t block_addr) const;
-  uint64_t    get_bhist_doa(uint64_t block_addr) const;        // read-only doa lookup; never inserts
-  hist_entry& get_bhist_entry(uint64_t block_addr);            // update path: inserts + updates LRU/LFU
-  void load_predictor_settings();                               // reads env vars to configure dpPred/cbPred at construction
-  bool dppred_shadow_lookup(const PACKET& handle_pkt);          // true → shadow hit: history reset, data served, entry re-inserted into STLB, PTW skipped
-  bool dppred_bypass(const PACKET& fill_mshr);                  // true → skip STLB fill
-  bool cbpred_bypass(const PACKET& fill_mshr);                  // true → skip LLC fill
-  liveness_class classify_liveness(const BLOCK& victim) const;  // compute liveness class + run invariant asserts
-  void update_eviction_counters(const BLOCK& victim, liveness_class lv); // update phist/bhist counters
-  void record_eviction_liveness(const BLOCK& victim, liveness_class lv); // record aggregate liveness stats
-  void record_pc_liveness(const BLOCK& victim, liveness_class lv);       // accumulate per-PC liveness event counts
-  bool needs_mid_insertion(uint64_t full_addr, uint64_t ip) const;        // true → insert/refresh at set midpoint
-  liveness_class predict_liveness(uint64_t full_addr, uint64_t ip) const; // 3-way insertion prediction for ipv_live
-  void trace_cbpred_event(std::string_view tag, uint64_t block_addr,
-                          uint64_t doa_before, uint64_t doa_after,
-                          uint8_t insert_class = 2) const;               // stderr trace (CBPRED_TRACE=1 only)
+  void load_predictor_settings();
+  liveness_class classify_liveness(const BLOCK& victim) const;
+  void update_eviction_counters(const BLOCK& victim, liveness_class lv);
+  void record_eviction_liveness(const BLOCK& victim, liveness_class lv);
+  void record_pc_liveness(const BLOCK& victim, liveness_class lv);
+  bool needs_mid_insertion(uint64_t full_addr, uint64_t ip) const;
+  liveness_class predict_liveness(uint64_t full_addr, uint64_t ip) const;
 
 public:
-  // Merged per-PC history shared across STLB and LLC instances.
-  // STLB writes stlb_* columns; LLC writes llc_* columns (neither dp-gated).
-  // Public so the plain_printer can read it without a friend declaration.
-  inline static std::map<uint64_t, merged_pc_entry> merged_pc_hist{};
-  inline static uint64_t                            merged_pc_hist_cap   = 5120;
-  inline static uint64_t                            merged_pc_hist_clock = 0;
-
   struct NonTranslatingQueues : public champsim::operable {
     std::deque<PACKET> RQ, PQ, WQ, PTWQ;
     const std::size_t RQ_SIZE, PQ_SIZE, WQ_SIZE, PTWQ_SIZE;
@@ -510,18 +325,6 @@ public:
 
 #include "cache_modules.inc"
 
-  // ── Bypass regret tracking (LLC and STLB only) ───────────────────────────────
-  // Per-set fill counter (incremented each time a valid line is evicted by a new
-  // fill).  Used to decide whether a bypassed line would still be resident:
-  // > NUM_WAY fills since bypass → line would have been evicted (correct bypass).
-  // Per-set shadow: FIFO of at most 2×NUM_WAY bypass records; front = oldest.
-  struct BypassShadowEntry {
-    uint64_t addr_tag;           // address >> OFFSET_BITS
-    uint64_t fills_at_bypass; // bypass_per_set_fills[set] at bypass time
-  };
-  std::vector<uint64_t>                      bypass_per_set_fills;
-  std::vector<std::deque<BypassShadowEntry>> bypass_shadow;  // per-set FIFO, oldest = front
-
   const std::bitset<NUM_REPLACEMENT_MODULES> repl_type;
   const std::bitset<NUM_PREFETCH_MODULES> pref_type;
 
@@ -534,7 +337,6 @@ public:
       : champsim::operable(freq_scale), MemoryRequestProducer(ll), NAME(v1), NUM_SET(v2), NUM_WAY(v3), MSHR_SIZE(v8), FILL_LATENCY(fill_lat),
         OFFSET_BITS(offset_bits), MAX_TAG(max_tag), MAX_FILL(max_fill), prefetch_as_load(pref_load), match_offset_bits(wq_full_addr), virtual_prefetch(va_pref),
         pref_activate_mask(pref_mask), queues(queue_set),
-        bypass_per_set_fills(v2, 0), bypass_shadow(v2),
         repl_type(repl), pref_type(pref)
   {
     load_predictor_settings();

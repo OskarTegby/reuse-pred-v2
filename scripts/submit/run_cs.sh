@@ -13,37 +13,11 @@ TRACE_DIR=${TRACE_DIR:-trace-files/MAZUMDAR}
 TRACE_EXT=${TRACE_EXT:-champsimtrace.xz}
 RUN_LABEL=${RUN_LABEL:-unlabelled}
 
-# Predictor parameters (read from env by ChampSim; defaults = baseline)
-export DPPRED=${DPPRED:-0}
-export CBPRED=${CBPRED:-0}
-export PCONF_THD=${PCONF_THD:-0}
-export BCONF_THD=${BCONF_THD:-0}
+# Replacement policy parameters (read from env by ChampSim; defaults = baseline)
 export MID_THD=${MID_THD:-1}
 export MID_KEY=${MID_KEY:-0}
 export MID_PROMOTE=${MID_PROMOTE:-0}
-export CBPRED_WEIGHTED=${CBPRED_WEIGHTED:-0}
-export CBPRED_NO_PFQ=${CBPRED_NO_PFQ:-0}
-export DPPRED_IDX=${DPPRED_IDX:-vpn_pc}
-export CBPRED_IDX=${CBPRED_IDX:-addr}
-export MID_PFQ_GATE=${MID_PFQ_GATE:-0}
-export PFQ_ADAPTIVE_WINDOW=${PFQ_ADAPTIVE_WINDOW:-0}
-export PFQ_ADAPTIVE_THD=${PFQ_ADAPTIVE_THD:-30}
-export CBPRED_W_NORMAL=${CBPRED_W_NORMAL:-2}
-export CBPRED_W_LOW=${CBPRED_W_LOW:-1}
-export CBPRED_W_MISPREDICT=${CBPRED_W_MISPREDICT:-2}
-export BYPASS_DEBT_SCALE=${BYPASS_DEBT_SCALE:-0}
-export BYPASS_DEBT_CAP=${BYPASS_DEBT_CAP:-0}
-
-# History-table and queue parameters (read from env by ChampSim)
-export PHIST_HASH=${PHIST_HASH:-1}
-export BHIST_HASH=${BHIST_HASH:-1}
-export PHIST_SETS=${PHIST_SETS:-1}
-export PHIST_WAYS=${PHIST_WAYS:-1024}
-export BHIST_SETS=${BHIST_SETS:-1}
-export BHIST_WAYS=${BHIST_WAYS:-4096}
 export REPL_POL=${REPL_POL:-lru}
-export PFQ_CAP=${PFQ_CAP:-8}
-export ST_SIZE=${ST_SIZE:-2}
 
 # Binary selection: BINARY env var selects the per-policy executable.
 BINARY=${BINARY:-champsim_lru}
@@ -91,34 +65,10 @@ cat > "${RUN_DIR}/run_info.txt" <<INFO
 run_label=${RUN_LABEL}
 trace=${TRACE_NAME}
 binary=${BINARY}
-dppred=${DPPRED}
-cbpred=${CBPRED}
-pconf_thd=${PCONF_THD}
-bconf_thd=${BCONF_THD}
 mid_thd=${MID_THD}
 mid_key=${MID_KEY}
 mid_promote=${MID_PROMOTE}
-phist_hash=${PHIST_HASH}
-bhist_hash=${BHIST_HASH}
-phist_sets=${PHIST_SETS}
-phist_ways=${PHIST_WAYS}
-bhist_sets=${BHIST_SETS}
-bhist_ways=${BHIST_WAYS}
 repl_pol=${REPL_POL}
-pfq_cap=${PFQ_CAP}
-st_size=${ST_SIZE}
-cbpred_no_pfq=${CBPRED_NO_PFQ}
-dppred_idx=${DPPRED_IDX}
-cbpred_idx=${CBPRED_IDX}
-mid_pfq_gate=${MID_PFQ_GATE}
-pfq_adaptive_window=${PFQ_ADAPTIVE_WINDOW}
-pfq_adaptive_thd=${PFQ_ADAPTIVE_THD}
-cbpred_weighted=${CBPRED_WEIGHTED}
-cbpred_w_normal=${CBPRED_W_NORMAL}
-cbpred_w_low=${CBPRED_W_LOW}
-cbpred_w_mispredict=${CBPRED_W_MISPREDICT}
-bypass_debt_scale=${BYPASS_DEBT_SCALE}
-bypass_debt_cap=${BYPASS_DEBT_CAP}
 warmup=${WARMUP}
 sim=${SIM}
 INFO

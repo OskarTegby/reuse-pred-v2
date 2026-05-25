@@ -86,62 +86,6 @@ void champsim::plain_printer::print(CACHE::stats_type stats)
 
     stream << stats.name << " AVERAGE MISS LATENCY: " << std::ceil(stats.total_miss_latency) / std::ceil(TOTAL_MISS) << " cycles" << std::endl;
 
-    if (stats.name == "cpu0_STLB") {
-      stream << stats.name << " BYPASSES: " << std::setw(10) << stats.llt_bypasses << std::endl;
-      if (stats.phist_lookups > 0)
-        stream << stats.name << " PHIST LOOKUPS: " << std::setw(10) << stats.phist_lookups
-               << "  HITS: " << std::setw(10) << stats.phist_hits << std::endl;
-      if (stats.pc_phist_lookups > 0)
-        stream << stats.name << " PC-PHIST LOOKUPS: " << std::setw(10) << stats.pc_phist_lookups
-               << "  HITS: " << std::setw(10) << stats.pc_phist_hits << std::endl;
-      if (stats.st_lookups > 0)
-        stream << stats.name << " SHADOW TABLE LOOKUPS: " << std::setw(10) << stats.st_lookups
-               << "  HITS: " << std::setw(10) << stats.st_hits << std::endl;
-    }
-    if (stats.name == "LLC") {
-      stream << stats.name << " BYPASSES: " << std::setw(10) << stats.llc_bypasses << std::endl;
-      if (stats.pfq_probes > 0)
-        stream << stats.name << " PFQ PROBES: " << std::setw(10) << stats.pfq_probes
-               << "  HITS: " << std::setw(10) << stats.pfq_hits << std::endl;
-      if (stats.pc_pfq_probes > 0)
-        stream << stats.name << " PC-PFQ PROBES: " << std::setw(10) << stats.pc_pfq_probes
-               << "  HITS: " << std::setw(10) << stats.pc_pfq_hits << std::endl;
-      if (stats.bhist_lookups > 0)
-        stream << stats.name << " BHIST LOOKUPS: " << std::setw(10) << stats.bhist_lookups
-               << "  HITS: " << std::setw(10) << stats.bhist_hits << std::endl;
-      if (stats.pc_bhist_lookups > 0)
-        stream << stats.name << " PC-BHIST LOOKUPS: " << std::setw(10) << stats.pc_bhist_lookups
-               << "  HITS: " << std::setw(10) << stats.pc_bhist_hits << std::endl;
-      if (stats.pc_addr_bhist_lookups > 0)
-        stream << stats.name << " PC-ADDR-BHIST LOOKUPS: " << std::setw(10) << stats.pc_addr_bhist_lookups
-               << "  HITS: " << std::setw(10) << stats.pc_addr_bhist_hits << std::endl;
-      if (stats.merged_pc_hist_lookups > 0)
-        stream << stats.name << " MERGED-PC-HIST LOOKUPS: " << std::setw(10) << stats.merged_pc_hist_lookups
-               << "  HITS: " << std::setw(10) << stats.merged_pc_hist_hits << std::endl;
-    }
-    if ((stats.name == "cpu0_STLB" || stats.name == "LLC") &&
-        (stats.bypass_incorrect + stats.bypass_correct + stats.bypass_shadow_overflow > 0)) {
-      const uint64_t resolved = stats.bypass_incorrect + stats.bypass_correct;
-      stream << stats.name << " BYPASS ACCURACY:"
-             << std::fixed << std::setprecision(1)
-             << "  incorrect=" << stats.bypass_incorrect;
-      if (resolved > 0)
-        stream << " (" << 100.0 * stats.bypass_incorrect / resolved << "%)";
-      stream << "  correct=" << stats.bypass_correct;
-      if (resolved > 0)
-        stream << " (" << 100.0 * stats.bypass_correct / resolved << "%)";
-      if (stats.bypass_shadow_overflow > 0)
-        stream << "  shadow_overflow=" << stats.bypass_shadow_overflow;
-      stream << std::endl;
-    }
-
-    if (stats.name == "LLC" &&
-        (stats.cbpred_doa_normal_inserts + stats.cbpred_doa_pessimistic_inserts > 0)) {
-      stream << stats.name << " CBPRED DOA INSERTS:"
-             << "  normal=" << stats.cbpred_doa_normal_inserts
-             << "  pessimistic=" << stats.cbpred_doa_pessimistic_inserts << std::endl;
-    }
-
     if (stats.name == "cpu0_STLB" || stats.name == "LLC") {
       const auto& s = stats;
       const double total = static_cast<double>(s.evict_total ? s.evict_total : 1);
@@ -224,30 +168,6 @@ void champsim::plain_printer::print(CACHE::stats_type stats)
         }
       }
 
-      // ── Merged per-PC STLB+LLC breakdown (LLC print only; separate section) ─
-      if (s.name == "LLC" && pc_stream != nullptr && !CACHE::merged_pc_hist.empty()) {
-        using entry_t = std::pair<uint64_t, merged_pc_entry>;
-        std::vector<entry_t> merged_sorted(CACHE::merged_pc_hist.begin(),
-                                           CACHE::merged_pc_hist.end());
-        std::sort(merged_sorted.begin(), merged_sorted.end(),
-                  [](const entry_t& a, const entry_t& b) {
-                    return a.second.llc_total() > b.second.llc_total();
-                  });
-
-        *pc_stream << "\n# merged_pc_hist\n"
-                   << "pc,"
-                   << "stlb_total,stlb_doa,stlb_mostly_dead,stlb_mostly_alive,"
-                   << "llc_total,llc_doa,llc_mostly_dead,llc_mostly_alive\n";
-        for (const auto& [ip, e] : merged_sorted) {
-          *pc_stream << "0x" << std::hex << std::setw(16) << std::setfill('0') << ip
-                     << std::dec << std::setfill(' ')
-                     << "," << e.stlb_total()
-                     << "," << e.stlb_doa << "," << e.stlb_mostly_dead << "," << e.stlb_mostly_alive
-                     << "," << e.llc_total()
-                     << "," << e.llc_doa  << "," << e.llc_mostly_dead  << "," << e.llc_mostly_alive
-                     << "\n";
-        }
-      }
     }
     // stream << " AVERAGE MISS LATENCY: " << (stats.total_miss_latency)/TOTAL_MISS << " cycles " << stats.total_miss_latency << "/" << TOTAL_MISS<< std::endl;
   }
