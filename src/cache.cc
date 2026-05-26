@@ -254,9 +254,9 @@ bool CACHE::handle_fill(const PACKET& fill_mshr)
           // LLC only: reverse-STLB lookup — find the STLB entry for this block's
           // virtual page and check whether it is also unaccessed (DoA).
           if (NAME == "LLC" && stlb_block_ptr != nullptr) {
-            const uint64_t vpn = way->v_address >> OFFSET_BITS;
+            const uint64_t vpn = way->v_address >> LOG2_PAGE_SIZE;
             for (const auto& sb : *stlb_block_ptr) {
-              if (sb.valid && (sb.address >> OFFSET_BITS) == vpn) {
+              if (sb.valid && (sb.v_address >> LOG2_PAGE_SIZE) == vpn) {
                 sim_stats.back().doa_stlb_found++;
                 if (!sb.accessed)
                   sim_stats.back().doa_stlb_also_doa++;
