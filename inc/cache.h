@@ -48,6 +48,17 @@ struct cache_stats {
 
   uint64_t llt_bypasses = 0;
   uint64_t llc_bypasses = 0;
+  uint64_t pfq_hits = 0; // LLC fills where PFN was in PFQ (dp=true)
+
+  // DoA liveness stats.
+  // For every cache: evictions = valid blocks displaced; doa = those never accessed.
+  // For LLC only: doa_stlb_found / doa_stlb_also_doa track the reverse-STLB lookup
+  // on each LLC DoA eviction — how often the corresponding STLB entry is still present
+  // and also unaccessed (i.e., the LLC and STLB DoA are correlated).
+  uint64_t evictions = 0;
+  uint64_t doa = 0;
+  uint64_t doa_stlb_found    = 0; // LLC DoA evictions where STLB entry was present
+  uint64_t doa_stlb_also_doa = 0; // of those, STLB entry also had accessed == false
 };
 
 struct cache_queue_stats {
@@ -107,6 +118,9 @@ class CACHE : public champsim::operable, public MemoryRequestConsumer, public Me
   // Shared physical-frame queue: dpPred fills it; cbPred reads it.
   inline static std::deque<uint64_t> pfq{};
   inline static uint64_t pfq_cap = 8;
+
+  // Set by cpu0_STLB during initialize(); read by LLC for reverse STLB DoA lookup.
+  inline static const set_type* stlb_block_ptr = nullptr;
 
   // Per-instance state
   bool dppred = false;

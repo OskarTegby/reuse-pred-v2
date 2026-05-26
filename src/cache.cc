@@ -194,7 +194,7 @@ bool CACHE::handle_fill(const PACKET& fill_mshr)
   if (way != set_end && way->valid) {
     const bool bypassed =
       (dppred && NAME == "cpu0_STLB" && dppred_bypass(fill_mshr)) ||
-      (cbpred && NAME == "LLC"       && cbpred_bypass(fill_mshr));
+      (cbpred && NAME == "LLC" && fill_mshr.type != TRANSLATION && cbpred_bypass(fill_mshr));
 
     if (bypassed) {
       predictor_bypassed = true;
@@ -247,11 +247,34 @@ bool CACHE::handle_fill(const PACKET& fill_mshr)
       if (fill_mshr.type == PREFETCH)
         sim_stats.back().pf_fill++;
 
+      if (way->valid) {
+        sim_stats.back().evictions++;
+        if (!way->accessed) {
+          sim_stats.back().doa++;
+          // LLC only: reverse-STLB lookup — find the STLB entry for this block's
+          // virtual page and check whether it is also unaccessed (DoA).
+          if (NAME == "LLC" && stlb_block_ptr != nullptr) {
+            const uint64_t vpn = way->v_address >> OFFSET_BITS;
+            for (const auto& sb : *stlb_block_ptr) {
+              if (sb.valid && (sb.address >> OFFSET_BITS) == vpn) {
+                sim_stats.back().doa_stlb_found++;
+                if (!sb.accessed)
+                  sim_stats.back().doa_stlb_also_doa++;
+                break;
+              }
+            }
+          }
+        }
+      }
+
       way->valid = true;
       way->prefetch = fill_mshr.prefetch_from_this;
       way->dirty = (fill_mshr.type == WRITE);
       way->accessed = false;
-      way->dp = cbpred && NAME == "LLC" && std::find(pfq.begin(), pfq.end(), fill_mshr.address >> LOG2_PAGE_SIZE) != pfq.end();
+      way->dp = cbpred && NAME == "LLC" && fill_mshr.type != TRANSLATION
+                && std::find(pfq.begin(), pfq.end(), fill_mshr.address >> LOG2_PAGE_SIZE) != pfq.end();
+      if (way->dp)
+        sim_stats.back().pfq_hits++;
       way->address = fill_mshr.address;
       way->v_address = fill_mshr.v_address;
       way->data = fill_mshr.data;
@@ -676,6 +699,8 @@ void CACHE::initialize()
 {
   impl_prefetcher_initialize();
   impl_initialize_replacement();
+  if (NAME == "cpu0_STLB")
+    stlb_block_ptr = &block;
 }
 
 void CACHE::begin_phase()
@@ -704,6 +729,12 @@ void CACHE::end_phase(unsigned finished_cpu)
 
   roi_stats.back().llt_bypasses = sim_stats.back().llt_bypasses;
   roi_stats.back().llc_bypasses = sim_stats.back().llc_bypasses;
+  roi_stats.back().pfq_hits     = sim_stats.back().pfq_hits;
+
+  roi_stats.back().evictions          = sim_stats.back().evictions;
+  roi_stats.back().doa                = sim_stats.back().doa;
+  roi_stats.back().doa_stlb_found    = sim_stats.back().doa_stlb_found;
+  roi_stats.back().doa_stlb_also_doa = sim_stats.back().doa_stlb_also_doa;
 }
 
 bool CACHE::should_activate_prefetcher(const PACKET& pkt) const { return ((1 << pkt.type) & pref_activate_mask) && !pkt.prefetch_from_this; }

@@ -85,7 +85,18 @@ void champsim::plain_printer::print(CACHE::stats_type stats)
     stream << "USELESS: " << std::setw(10) << stats.pf_useless << std::endl;
 
     stream << stats.name << " AVERAGE MISS LATENCY: " << std::ceil(stats.total_miss_latency) / std::ceil(TOTAL_MISS) << " cycles" << std::endl;
-    // stream << " AVERAGE MISS LATENCY: " << (stats.total_miss_latency)/TOTAL_MISS << " cycles " << stats.total_miss_latency << "/" << TOTAL_MISS<< std::endl;
+
+    if (stats.evictions > 0) {
+      stream << stats.name << " DOA: " << stats.doa << " / " << stats.evictions
+             << " (" << std::fixed << std::setprecision(2) << (100.0 * stats.doa / stats.evictions) << "%)" << std::endl;
+      if (stats.doa_stlb_found > 0)
+        stream << stats.name << " DOA_STLB_CORR: " << stats.doa_stlb_also_doa << " / " << stats.doa_stlb_found
+               << " (" << std::fixed << std::setprecision(2) << (100.0 * stats.doa_stlb_also_doa / stats.doa_stlb_found) << "%)" << std::endl;
+    }
+    if (stats.llt_bypasses > 0)
+      stream << stats.name << " LLT_BYPASSES: " << stats.llt_bypasses << std::endl;
+    if (stats.llc_bypasses > 0 || stats.pfq_hits > 0)
+      stream << stats.name << " LLC_BYPASSES: " << stats.llc_bypasses << "  PFQ_HITS: " << stats.pfq_hits << std::endl;
   }
 }
 
