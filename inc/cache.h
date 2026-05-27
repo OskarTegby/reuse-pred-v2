@@ -48,7 +48,8 @@ struct cache_stats {
 
   uint64_t llt_bypasses = 0;
   uint64_t llc_bypasses = 0;
-  uint64_t pfq_hits = 0; // LLC fills where PFN was in PFQ (dp=true)
+  uint64_t pfq_hits = 0;              // LLC fills where PFN was in PFQ (dp=true)
+  uint64_t cbpred_nogate_bypasses = 0; // LLC bypasses that fired without a PFQ hit
 
   // DoA liveness stats.
   // For every cache: evictions = valid blocks displaced; doa = those never accessed.
@@ -132,6 +133,14 @@ class CACHE : public champsim::operable, public MemoryRequestConsumer, public Me
   std::map<uint64_t, std::map<uint64_t, uint64_t>> phist; // [vpn_hash][pc_hash] → confidence
   std::deque<std::pair<uint64_t, uint64_t>> shadow_table; // recently bypassed (VPN, translation data)
   std::map<uint64_t, uint64_t> bhist;                      // [block_hash] → confidence
+
+  // PFQ gate control: when false, cbPred bypasses on bhist alone (no PFQ hit required).
+  // pfq_ema_mode tracks the hit rate with an EMA and dynamically flips pfq_gate.
+  bool pfq_gate = true;
+  bool pfq_ema_mode = false;
+  double pfq_ema_val = 1.0;           // starts at 100% → gate starts ON
+  double pfq_ema_alpha = 1.0 / 1024.0;
+  double pfq_ema_thd = 0.10;          // gate turns OFF when EMA drops below this
 
   static constexpr unsigned  VPN_BITS    = 4;
   static constexpr unsigned  PC_BITS     = 6;

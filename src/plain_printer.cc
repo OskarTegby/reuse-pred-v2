@@ -95,8 +95,12 @@ void champsim::plain_printer::print(CACHE::stats_type stats)
     }
     if (stats.llt_bypasses > 0)
       stream << stats.name << " LLT_BYPASSES: " << stats.llt_bypasses << std::endl;
-    if (stats.llc_bypasses > 0 || stats.pfq_hits > 0)
-      stream << stats.name << " LLC_BYPASSES: " << stats.llc_bypasses << "  PFQ_HITS: " << stats.pfq_hits << std::endl;
+    if (stats.llc_bypasses > 0 || stats.pfq_hits > 0) {
+      stream << stats.name << " LLC_BYPASSES: " << stats.llc_bypasses << "  PFQ_HITS: " << stats.pfq_hits;
+      if (stats.cbpred_nogate_bypasses > 0)
+        stream << "  NOGATE_BYPASSES: " << stats.cbpred_nogate_bypasses;
+      stream << std::endl;
+    }
   }
 }
 

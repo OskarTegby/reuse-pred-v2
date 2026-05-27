@@ -101,10 +101,19 @@ bool CACHE::cbpred_bypass(const PACKET& fill_mshr)
   const auto block_hash = fold_xor(fill_mshr.address >> OFFSET_BITS, BHT_BITS);
   const bool in_pfq     = std::find(pfq.begin(), pfq.end(), pfn) != pfq.end();
 
-  if (!in_pfq || bhist[block_hash] <= bconf_thd)
+  if (pfq_ema_mode) {
+    pfq_ema_val = pfq_ema_alpha * (in_pfq ? 1.0 : 0.0) + (1.0 - pfq_ema_alpha) * pfq_ema_val;
+    pfq_gate    = (pfq_ema_val >= pfq_ema_thd);
+  }
+
+  if (pfq_gate && !in_pfq)
+    return false;
+  if (bhist[block_hash] <= bconf_thd)
     return false;
 
   sim_stats.back().llc_bypasses++;
+  if (!in_pfq)
+    sim_stats.back().cbpred_nogate_bypasses++;
   return true;
 }
 
@@ -130,17 +139,25 @@ void CACHE::update_eviction_counters(const BLOCK& victim)
 // Reads environment variables to enable dpPred/cbPred and tune their
 // thresholds and table sizes. Called once from the CACHE constructor.
 // Variables (all optional; defaults match the header initializers):
-//   DPPRED=1           enable dead-page predictor on the STLB
-//   CBPRED=1           enable dead-block predictor on the LLC
-//   PCONF_THD=<n>      dpPred confidence threshold (default 6)
-//   BCONF_THD=<n>      cbPred confidence threshold (default 6)
-//   ST_SIZE=<n>        shadow-table capacity (default 2)
-//   PFQ_CAP=<n>        shared PFQ capacity (default 8)
+//   DPPRED=1             enable dead-page predictor on the STLB
+//   CBPRED=1             enable dead-block predictor on the LLC
+//   PCONF_THD=<n>        dpPred confidence threshold (default 6)
+//   BCONF_THD=<n>        cbPred confidence threshold (default 6)
+//   ST_SIZE=<n>          shadow-table capacity (default 2)
+//   PFQ_CAP=<n>          shared PFQ capacity (default 8)
+//   CBPRED_NO_PFQ=1      disable the PFQ gate: cbPred fires on bhist alone
+//   PFQ_EMA=1            dynamically adapt the PFQ gate via an EMA of hit rate
+//   PFQ_EMA_ALPHA=<f>    EMA decay factor (default 1/1024 ≈ 0.001)
+//   PFQ_EMA_THD=<pct>    gate turns OFF when EMA < pct/100 (default 10 → 10%)
 void CACHE::load_predictor_settings()
 {
   auto getenv_uint64 = [](const char* var, uint64_t fallback) -> uint64_t {
     const char* val = std::getenv(var);
     return val ? static_cast<uint64_t>(std::stoull(val)) : fallback;
+  };
+  auto getenv_double = [](const char* var, double fallback) -> double {
+    const char* val = std::getenv(var);
+    return val ? std::stod(val) : fallback;
   };
 
   if (const char* v = std::getenv("DPPRED"); v && std::stoull(v))
@@ -152,6 +169,14 @@ void CACHE::load_predictor_settings()
   bconf_thd = getenv_uint64("BCONF_THD", bconf_thd);
   st_size   = getenv_uint64("ST_SIZE",   st_size);
   pfq_cap   = getenv_uint64("PFQ_CAP",   pfq_cap);
+
+  if (const char* v = std::getenv("CBPRED_NO_PFQ"); v && std::stoull(v))
+    pfq_gate = false;
+  if (const char* v = std::getenv("PFQ_EMA"); v && std::stoull(v))
+    pfq_ema_mode = true;
+
+  pfq_ema_alpha = getenv_double("PFQ_EMA_ALPHA", pfq_ema_alpha);
+  pfq_ema_thd   = getenv_double("PFQ_EMA_THD", 10.0) / 100.0;
 }
 
 bool CACHE::handle_fill(const PACKET& fill_mshr)
@@ -702,9 +727,10 @@ void CACHE::end_phase(unsigned finished_cpu)
 
   roi_stats.back().total_miss_latency = sim_stats.back().total_miss_latency;
 
-  roi_stats.back().llt_bypasses = sim_stats.back().llt_bypasses;
-  roi_stats.back().llc_bypasses = sim_stats.back().llc_bypasses;
-  roi_stats.back().pfq_hits     = sim_stats.back().pfq_hits;
+  roi_stats.back().llt_bypasses            = sim_stats.back().llt_bypasses;
+  roi_stats.back().llc_bypasses            = sim_stats.back().llc_bypasses;
+  roi_stats.back().pfq_hits                = sim_stats.back().pfq_hits;
+  roi_stats.back().cbpred_nogate_bypasses  = sim_stats.back().cbpred_nogate_bypasses;
 
   roi_stats.back().evictions          = sim_stats.back().evictions;
   roi_stats.back().doa                = sim_stats.back().doa;
