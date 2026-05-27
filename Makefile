@@ -25,7 +25,7 @@ include _configuration.mk
 
 all_execs: $(filter-out $(test_main_name), $(executable_name))
 
-static: LDFLAGS += -static-libstdc++ -static-libgcc
+static: LDFLAGS += -static
 static: all_execs
 
 # Remove all intermediate files

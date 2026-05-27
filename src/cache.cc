@@ -76,22 +76,13 @@ bool CACHE::dppred_shadow_lookup(const PACKET& handle_pkt)
 bool CACHE::dppred_bypass(const PACKET& fill_mshr)
 {
   const auto vpn_hash = fold_xor(fill_mshr.address >> OFFSET_BITS, VPN_BITS);
-  // Sniper approximation: use last_ip (most recent instruction fetch PC) instead
-  // of the fill packet's exact IP. In Sniper, lastPC is a global updated only by
-  // L1 ITLB accesses — it tracks the current instruction stream, not the load PC
-  // that caused this specific data miss. The PC dimension of pHIST is therefore
-  // indexed by whichever instruction page was last fetched, not the load itself.
-  const auto pc_hash  = fold_xor(last_ip,                          PC_BITS);
+  const auto pc_hash  = fold_xor(fill_mshr.ip,                     PC_BITS);
   if (phist[vpn_hash][pc_hash] <= pconf_thd)
     return false;
 
-  // Sniper approximation: push a coarsened virtual page cluster (VPN >> 5)
-  // instead of the exact physical frame number. This mirrors Sniper's
-  // addRecentPFN(address >> 17) and intentionally preserves the virtual/
-  // physical mismatch that makes the cbPred check inherently approximate.
   if (pfq.size() >= pfq_cap)
     pfq.pop_front();
-  pfq.push_back((fill_mshr.address >> OFFSET_BITS) >> 5);
+  pfq.push_back(fill_mshr.data >> LOG2_PAGE_SIZE);
 
   // Remember the bypassed (VPN, translation) for re-insertion on re-access (FIFO)
   if (shadow_table.size() >= st_size)
@@ -106,10 +97,7 @@ bool CACHE::dppred_bypass(const PACKET& fill_mshr)
 // (its page was previously bypassed by dpPred and its block counter is high).
 bool CACHE::cbpred_bypass(const PACKET& fill_mshr)
 {
-  // Sniper approximation: match against coarsened physical PFN (>> 5).
-  // The PFQ was populated with virtual VPN >> 5 clusters; this physical
-  // coarsening preserves Sniper's inherent virtual/physical mismatch.
-  const auto pfn        = fill_mshr.address >> (LOG2_PAGE_SIZE + 5);
+  const auto pfn        = fill_mshr.address >> LOG2_PAGE_SIZE;
   const auto block_hash = fold_xor(fill_mshr.address >> OFFSET_BITS, BHT_BITS);
   const bool in_pfq     = std::find(pfq.begin(), pfq.end(), pfn) != pfq.end();
 
@@ -132,13 +120,7 @@ void CACHE::update_eviction_counters(const BLOCK& victim)
 
   if (dppred && NAME == "cpu0_STLB") {
     const auto vpn_hash = fold_xor(victim.address >> OFFSET_BITS, VPN_BITS);
-    // Sniper approximation: use last_ip rather than the per-entry victim.ip.
-    // Sniper's insert_pc[evict_addr] stored lastPC at allocation time, which
-    // was already the last instruction fetch PC — not the load PC. So both the
-    // bypass decision and the eviction counter update are indexed by the same
-    // approximate signal: the instruction stream context at the time, not the
-    // exact data access PC.
-    const auto pc_hash  = fold_xor(last_ip,                       PC_BITS);
+    const auto pc_hash  = fold_xor(victim.ip,                     PC_BITS);
     increment_or_reset(phist[vpn_hash][pc_hash]);
   } else if (cbpred && NAME == "LLC" && victim.dp) {
     increment_or_reset(bhist[fold_xor(victim.address >> OFFSET_BITS, BHT_BITS)]);
@@ -334,13 +316,6 @@ bool CACHE::try_hit(const PACKET& handle_pkt)
     metadata_thru = impl_prefetcher_cache_operate(pf_base_addr, handle_pkt.ip, hit, handle_pkt.type, metadata_thru);
   }
 
-  // Sniper approximation: mirrors Sniper's global lastPC, updated on every L1
-  // ITLB access (both hit and miss). The ITLB only receives instruction fetch
-  // packets, so no further filtering is needed. last_ip is static (shared across
-  // all CACHE instances) so the STLB reads the value written here by the ITLB,
-  // exactly as in Sniper where lastPC is a file-scope global.
-  if (dppred && NAME == "cpu0_ITLB")
-    last_ip = handle_pkt.ip;
 
   if (hit) {
     sim_stats.back().hits[handle_pkt.type][handle_pkt.cpu]++;

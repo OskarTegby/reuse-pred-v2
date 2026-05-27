@@ -1,13 +1,17 @@
 #!/usr/bin/env bash
-# sweep_default_cfg.sh — submit baseline, default_bypass, and dppred_only for one suite.
+# sweep_default_cfg.sh — submit baseline, default_bypass, optimal_bypass, and dppred_only.
 #
-# Uses champsim_verify (1MB LLC, 40-cycle, Mazumdar-aligned config).
-# Submits three configurations:
-#   baseline     : DPPRED=0, CBPRED=0
-#   default_bypass: DPPRED=1, CBPRED=1, PCONF_THD=6, BCONF_THD=6
-#   dppred_only  : DPPRED=1, CBPRED=0, PCONF_THD=6
+# Supports two LLC configs:
+#   --llc 1mb   champsim_verify     (1MB LLC, 40-cycle)
+#   --llc 2mb   champsim_verify_2mb (2MB LLC, 20-cycle, Mazumdar original)
 #
-# Usage: ./sweep_default_cfg.sh {gap|gms|ligra|ml|qmm|dpc3|google} [--debug]
+# Submits four configurations:
+#   baseline       : DPPRED=0, CBPRED=0
+#   default_bypass : DPPRED=1, CBPRED=1, PCONF_THD=6, BCONF_THD=6
+#   optimal_bypass : DPPRED=1, CBPRED=1, PCONF_THD=0, BCONF_THD=0
+#   dppred_only    : DPPRED=1, CBPRED=0, PCONF_THD=6
+#
+# Usage: ./sweep_default_cfg.sh {gap|gms|ligra|ml|qmm|dpc3|google} --llc {1mb|2mb} [--debug]
 
 set -euo pipefail
 
@@ -17,21 +21,28 @@ PROJECT_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 SHARED_TRACES=/home/users/shared/traces
 
 token=""
+llc_size=""
 DEBUG=0
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
     gap|gms|ligra|ml|qmm|dpc3|google) token="${1,,}"; shift ;;
+    --llc) llc_size="${2,,}"; shift 2 ;;
     --debug) DEBUG=1; shift ;;
     *)
       echo "Unknown argument: $1" >&2
-      echo "Usage: $0 {gap|gms|ligra|ml|qmm|dpc3|google} [--debug]" >&2
+      echo "Usage: $0 {gap|gms|ligra|ml|qmm|dpc3|google} --llc {1mb|2mb} [--debug]" >&2
       exit 2 ;;
   esac
 done
 
 if [ -z "$token" ]; then
-  echo "Usage: $0 {gap|gms|ligra|ml|qmm|dpc3|google} [--debug]" >&2
+  echo "Usage: $0 {gap|gms|ligra|ml|qmm|dpc3|google} --llc {1mb|2mb} [--debug]" >&2
+  exit 2
+fi
+
+if [ -z "$llc_size" ]; then
+  echo "ERROR: --llc {1mb|2mb} is required" >&2
   exit 2
 fi
 
@@ -83,23 +94,31 @@ if [ "$DEBUG" -eq 1 ]; then
   DEBUG_TAG="_debug"
 fi
 
-SWEEP_BINARY="champsim_verify"
+case "$llc_size" in
+  1mb) SWEEP_BINARY="champsim_verify" ;;
+  2mb) SWEEP_BINARY="champsim_verify_2mb" ;;
+  *)
+    echo "ERROR: --llc must be 1mb or 2mb, got: ${llc_size}" >&2
+    exit 2 ;;
+esac
+
 DATE=$(date +%Y%m%d_%H%M)
-BASE_LABEL="${token}_default_cfg_${DATE}${DEBUG_TAG}"
+BASE_LABEL="${token}_${llc_size}_${DATE}${DEBUG_TAG}"
 
 LOG_DIR="${PROJECT_ROOT}/logs/${BASE_LABEL}"
 mkdir -p "$LOG_DIR"
 
 # name  DPPRED CBPRED PCONF_THD BCONF_THD
 configs=(
-  "baseline      0 0 0 0"
-  "default_bypass 1 1 6 6"
-  "dppred_only    1 0 6 0"
+  "baseline        0 0 0 0"
+  "default_bypass  1 1 6 6"
+  "optimal_bypass  1 1 0 0"
+  "dppred_only     1 0 6 0"
 )
 
 echo "Suite         : ${token}"
 echo "Traces        : ${N}  (tasks ${TASK_RANGE})"
-echo "Configs       : ${#configs[@]}  (baseline, default_bypass, dppred_only)"
+echo "Configs       : ${#configs[@]}  (baseline, default_bypass, optimal_bypass, dppred_only)"
 echo "Binary        : ${SWEEP_BINARY}"
 echo "Warmup / Sim  : ${WARMUP} / ${SIM}"
 echo "Results base  : results/${BASE_LABEL}/"
