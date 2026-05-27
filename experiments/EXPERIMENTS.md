@@ -18,4 +18,4 @@ and binary name in each README are sufficient to reproduce them.
 | # | Date | Commit | Description | 1MB (6,6) | 1MB (0,0) | 2MB (6,6) | 2MB (0,0) |
 |---|------|--------|-------------|-----------|-----------|-----------|-----------|
 | [001](001_clean_baseline/README.md) | 2026-05-28 | f4d7a30024ba | Clean baseline: remove all Sniper approximations | +0.95% | +7.56% | −0.17% | −1.58% |
-| [002](002_pfq_gating/README.md) | 2026-05-28 | — | PFQ gate variants: NO_PFQ=−1.49%, EMA≈+6.09% (srv_128) | N/A | N/A | N/A | N/A |
+| [002](002_pfq_gating/README.md) | 2026-05-28 | 8b00276690fb | PFQ gate variants: NO_PFQ=−1.49%, EMA≈+6.09% (srv_128) | N/A | N/A | N/A | N/A |
