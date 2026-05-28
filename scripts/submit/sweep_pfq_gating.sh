@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
 # sweep_pfq_gating.sh — study PFQ-gate variants of cbPred.
 #
-# Four configs (1MB LLC, LRU); baseline and optimal_bypass come from exp 001:
+# Six configs (1MB LLC, LRU); baseline and optimal_bypass come from exp 001:
+#   dppred_only_opt      — DPPRED=1, CBPRED=0, THD=(0,0)                  (dpPred alone reference)
+#   dppred_only_default  — DPPRED=1, CBPRED=0, THD=(6,6)
 #   cbpred_nopfq_opt     — DPPRED=1, CBPRED=1, THD=(0,0), CBPRED_NO_PFQ=1 (bhist alone)
 #   cbpred_nopfq_default — DPPRED=1, CBPRED=1, THD=(6,6), CBPRED_NO_PFQ=1
 #   cbpred_ema_opt       — DPPRED=1, CBPRED=1, THD=(0,0), PFQ_EMA=1       (EMA-adaptive)
@@ -100,6 +102,8 @@ mkdir -p "$LOG_DIR"
 
 # Config format: exp_name  dppred cbpred no_pfq pfq_ema pconf bconf
 configs=(
+  "dppred_only_opt      1 0 0 0 0 0"
+  "dppred_only_default  1 0 0 0 6 6"
   "cbpred_nopfq_opt     1 1 1 0 0 0"
   "cbpred_nopfq_default 1 1 1 0 6 6"
   "cbpred_ema_opt       1 1 0 1 0 0"
@@ -108,7 +112,7 @@ configs=(
 
 echo "Suite         : ${token}"
 echo "Traces        : ${N}  (tasks ${TASK_RANGE})"
-echo "Configs       : ${#configs[@]}  (cbpred_nopfq_opt, cbpred_nopfq_default, cbpred_ema_opt, cbpred_ema_default)"
+echo "Configs       : ${#configs[@]}  (dppred_only_{opt,default}, cbpred_nopfq_{opt,default}, cbpred_ema_{opt,default})"
 echo "Binary        : ${BINARY}"
 echo "Warmup / Sim  : ${WARMUP} / ${SIM}"
 echo "Results base  : results/${BASE_LABEL}/"
