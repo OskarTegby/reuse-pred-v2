@@ -16,6 +16,7 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "${SCRIPT_DIR}/_lib.sh"
 PROJECT_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 
 SHARED_TRACES=/home/users/shared/traces
@@ -148,6 +149,4 @@ PCONF_THD="$pconf_thd",BCONF_THD="$bconf_thd" \
   echo "  [jid=${jid}] ${exp_name}"
 done
 
-echo ""
-echo "All configs submitted. Monitor with: qstat -u \$USER"
-echo "Results will appear under: results/${BASE_LABEL}/"
+finish_submission $(( ${#configs[@]} * N )) "${BASE_LABEL}"

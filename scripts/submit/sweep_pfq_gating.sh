@@ -19,6 +19,7 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "${SCRIPT_DIR}/_lib.sh"
 PROJECT_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 
 SHARED_TRACES=/home/users/shared/traces
@@ -149,12 +150,4 @@ PCONF_THD="$pconf",BCONF_THD="$bconf" \
   echo "  [jid=${jid}] ${exp_name}  (NO_PFQ=${no_pfq}, EMA=${pfq_ema}, IDX=${cbpred_idx})"
 done
 
-echo ""
-echo "All configs submitted. Monitor with: qstat -u \$USER"
-echo "Results will appear under: results/${BASE_LABEL}/"
-
-TOTAL_JOBS=$(( ${#configs[@]} * N ))
-RECENT_REF=$(find "${PROJECT_ROOT}/results" -mindepth 2 -maxdepth 2 \
-               -name "champsim.out" -printf "%T@ %h\n" 2>/dev/null \
-             | sort -n | tail -1 | awk '{print $2}' | xargs dirname 2>/dev/null || true)
-bash "${SCRIPT_DIR}/../estimate_batch.sh" "$TOTAL_JOBS" "${RECENT_REF:-}"
+finish_submission $(( ${#configs[@]} * N )) "${BASE_LABEL}"
