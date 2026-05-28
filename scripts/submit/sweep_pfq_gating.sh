@@ -152,3 +152,9 @@ done
 echo ""
 echo "All configs submitted. Monitor with: qstat -u \$USER"
 echo "Results will appear under: results/${BASE_LABEL}/"
+
+TOTAL_JOBS=$(( ${#configs[@]} * N ))
+RECENT_REF=$(find "${PROJECT_ROOT}/results" -mindepth 2 -maxdepth 2 \
+               -name "champsim.out" -printf "%T@ %h\n" 2>/dev/null \
+             | sort -n | tail -1 | awk '{print $2}' | xargs dirname 2>/dev/null || true)
+bash "${SCRIPT_DIR}/../estimate_batch.sh" "$TOTAL_JOBS" "${RECENT_REF:-}"
