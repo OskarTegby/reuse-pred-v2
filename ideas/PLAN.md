@@ -2,12 +2,21 @@
 
 ## Step 1 — Replacement policy and promotion buffer (idea 001)
 
-Evaluate LRU, LFU, and SRRIP as replacement policies for the bounded bHIST
-and pHIST tables currently running on QMM. If the replacement policy alone
-shows improvement, add the two-stage promotion buffer: new entries stage in a
-small buffer and only graduate to the main table once they have been observed
-dead at least K times. This filters the one-time dead blocks that dominate the
-address-indexed bHIST and dilute the confidence counters.
+**Status: in progress (experiment 004 running)**
+
+Replacement policy sweep completed (experiment 003, confounded — see README).
+Indicative conclusion: **LFU >> SRRIP > LRU**. LFU at the default threshold
+(6,6) achieved +6.12% vs +0.95% with the old fold-XOR maps.
+
+Currently running (experiment 004):
+- Ablation to isolate LFU benefit per table (dpPred-only LFU vs hashed,
+  full LFU vs dpPred-only LFU).
+- pHIST size sweep: 1024 → 512 → 256 → 128 (bHIST fixed at 4096).
+- bHIST size sweep: 4096 → 2048 → 1024 → 512 → 256 → 128 (pHIST fixed at 1024).
+- All with HIST_REPL=lfu, THD=(0,0), QMM 45 traces.
+
+Promotion buffer not yet implemented. Will proceed to it after the size
+sweep informs the right capacity for each table.
 
 Proceed to step 2 regardless of outcome — the two directions are orthogonal.
 
