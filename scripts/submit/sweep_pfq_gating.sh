@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
 # sweep_pfq_gating.sh — study PFQ-gate variants of cbPred.
 #
-# Five configs (1MB LLC, LRU):
-#   baseline         — DPPRED=0, CBPRED=0
-#   optimal_bypass   — DPPRED=1, CBPRED=1, THD=(0,0), PFQ gate ON  (001 reference)
-#   cbpred_nopfq_opt — DPPRED=1, CBPRED=1, THD=(0,0), CBPRED_NO_PFQ=1 (bhist alone)
-#   cbpred_ema_opt   — DPPRED=1, CBPRED=1, THD=(0,0), PFQ_EMA=1       (EMA-adaptive gate)
+# Four configs (1MB LLC, LRU); baseline and optimal_bypass come from exp 001:
+#   cbpred_nopfq_opt     — DPPRED=1, CBPRED=1, THD=(0,0), CBPRED_NO_PFQ=1 (bhist alone)
+#   cbpred_nopfq_default — DPPRED=1, CBPRED=1, THD=(6,6), CBPRED_NO_PFQ=1
+#   cbpred_ema_opt       — DPPRED=1, CBPRED=1, THD=(0,0), PFQ_EMA=1       (EMA-adaptive)
+#   cbpred_ema_default   — DPPRED=1, CBPRED=1, THD=(6,6), PFQ_EMA=1
 #
 # EMA defaults: alpha=1/1024 (~0.001), gate turns OFF when hit rate < 10%.
 # Override via PFQ_EMA_ALPHA=<f> and PFQ_EMA_THD=<pct> (percent, 0-100).
@@ -100,15 +100,15 @@ mkdir -p "$LOG_DIR"
 
 # Config format: exp_name  dppred cbpred no_pfq pfq_ema pconf bconf
 configs=(
-  "baseline           0 0 0 0 0 0"
-  "optimal_bypass     1 1 0 0 0 0"
-  "cbpred_nopfq_opt   1 1 1 0 0 0"
-  "cbpred_ema_opt     1 1 0 1 0 0"
+  "cbpred_nopfq_opt     1 1 1 0 0 0"
+  "cbpred_nopfq_default 1 1 1 0 6 6"
+  "cbpred_ema_opt       1 1 0 1 0 0"
+  "cbpred_ema_default   1 1 0 1 6 6"
 )
 
 echo "Suite         : ${token}"
 echo "Traces        : ${N}  (tasks ${TASK_RANGE})"
-echo "Configs       : ${#configs[@]}  (baseline, optimal_bypass, cbpred_nopfq_opt, cbpred_ema_opt)"
+echo "Configs       : ${#configs[@]}  (cbpred_nopfq_opt, cbpred_nopfq_default, cbpred_ema_opt, cbpred_ema_default)"
 echo "Binary        : ${BINARY}"
 echo "Warmup / Sim  : ${WARMUP} / ${SIM}"
 echo "Results base  : results/${BASE_LABEL}/"
