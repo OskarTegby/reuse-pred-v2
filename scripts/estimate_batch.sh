@@ -49,17 +49,16 @@ times = [t for f in glob.glob(f"{sys.argv[1]}/*/champsim.out")
          if (t := sim_minutes(f)) is not None]
 if not times:
     sys.exit(1)
-med = statistics.median(times)
-print(f"{med:.2f}")
+print(f"{statistics.mean(times):.2f}")
 PYEOF
 }
 
 # ── 3. Query free cluster slots ──────────────────────────────────────────────
 
-free_slots() {
+max_slots() {
   ssh -A otegby@abdet.inf.um.es -o BatchMode=yes -o ConnectTimeout=10 \
     "ssh otegby@castillo.inf.um.es 'qstat -g c 2>/dev/null'" \
-    | awk '/all\.q/{print $5}' | head -1
+    | awk '/all\.q/{print $6}' | head -1
 }
 
 # ── 4. Compute and print estimate ────────────────────────────────────────────
@@ -68,9 +67,9 @@ echo ""
 echo "Batch estimate:"
 echo "  Jobs submitted : ${N_JOBS}"
 
-SLOTS=$(free_slots 2>/dev/null || true)
+SLOTS=$(max_slots 2>/dev/null || true)
 SLOTS=${SLOTS:-"?"}
-echo "  Free slots     : ${SLOTS}"
+echo "  Max parallel   : ${SLOTS}"
 
 if ! MED=$(median_minutes "$REF_DIR" 2>/dev/null); then
   echo "  Per-job time   : unknown (no reference results in ${REF_DIR:-results/})"
@@ -83,16 +82,16 @@ MED_INT=$(printf '%.0f' "$MED")
 REF_LABEL=$(basename "${REF_DIR%/}" 2>/dev/null || echo "unknown")
 
 if [ "$SLOTS" = "?" ] || [ "$SLOTS" -eq 0 ] 2>/dev/null; then
-  echo "  Per-job time   : ~${MED_INT} min  (median from ${REF_LABEL})"
+  echo "  Per-job time   : ~${MED_INT} min  (mean from ${REF_LABEL})"
   echo "  Estimated total: unknown (slot count unavailable)"
 else
   python3 - "$N_JOBS" "$SLOTS" "$MED" "$REF_LABEL" <<'PYEOF'
 import sys, math
-n, slots, med, ref = int(sys.argv[1]), int(sys.argv[2]), float(sys.argv[3]), sys.argv[4]
+n, slots, avg, ref = int(sys.argv[1]), int(sys.argv[2]), float(sys.argv[3]), sys.argv[4]
 waves = math.ceil(n / slots)
-total_min = round(waves * med)
+total_min = round(waves * avg)
 hrs, mins = divmod(total_min, 60)
-print(f"  Per-job time   : ~{round(med)} min  (median from {ref})")
+print(f"  Per-job time   : ~{round(avg)} min  (mean from {ref})")
 print(f"  Waves          : {waves}  ({n} jobs ÷ {slots} slots)")
 if hrs:
     print(f"  Estimated total: ~{hrs}h {mins}m")
