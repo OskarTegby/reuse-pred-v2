@@ -32,6 +32,99 @@
 #include "memory_class.h"
 #include "operable.h"
 
+// Bounded history table with pluggable replacement policy.
+// Used for both pHIST (PC-indexed) and bHIST (address-indexed).
+class HistTable {
+public:
+  enum class Policy { LRU, LFU, SRRIP };
+
+  HistTable() = default;
+  HistTable(uint64_t cap, Policy pol) : cap_(cap), pol_(pol), entries_(cap) {}
+
+  uint64_t get(uint64_t key) const {
+    for (const auto& e : entries_)
+      if (e.valid && e.key == key) return e.value;
+    return 0;
+  }
+
+  // Increment counter on dead eviction (accessed=false), reset on live eviction.
+  // Inserts the entry if not present, evicting a victim if at capacity.
+  void update(uint64_t key, bool accessed) {
+    for (auto& e : entries_) {
+      if (e.valid && e.key == key) {
+        e.value = accessed ? 0 : std::min(e.value + 1, MAX_COUNTER);
+        on_hit(e);
+        return;
+      }
+    }
+    auto& slot  = victim_slot();
+    slot.key    = key;
+    slot.value  = accessed ? 0 : 1;
+    slot.valid  = true;
+    on_insert(slot);
+  }
+
+  // Zero the confidence for key without removing it.
+  void reset(uint64_t key) {
+    for (auto& e : entries_)
+      if (e.valid && e.key == key) { e.value = 0; return; }
+  }
+
+private:
+  static constexpr uint64_t MAX_COUNTER = 16;
+  static constexpr uint32_t SRRIP_INS  = 2;
+  static constexpr uint32_t SRRIP_MAX  = 3;
+
+  struct Entry {
+    uint64_t key   = 0;
+    uint64_t value = 0;
+    uint64_t freq  = 0;  // LFU: access count
+    uint64_t ts    = 0;  // LRU / LFU tiebreak: insertion/access timestamp
+    uint32_t rrpv  = 0;  // SRRIP: re-reference prediction value
+    bool     valid = false;
+  };
+
+  uint64_t cap_   = 0;
+  Policy   pol_   = Policy::LRU;
+  std::vector<Entry> entries_;
+  uint64_t clock_ = 0;
+
+  void on_hit(Entry& e) {
+    switch (pol_) {
+    case Policy::LRU:   e.ts = ++clock_;       break;
+    case Policy::LFU:   ++e.freq; e.ts = ++clock_; break;
+    case Policy::SRRIP: e.rrpv = 0;            break;
+    }
+  }
+
+  void on_insert(Entry& e) {
+    switch (pol_) {
+    case Policy::LRU:   e.ts = ++clock_; e.freq = 0; e.rrpv = 0;      break;
+    case Policy::LFU:   e.freq = 1; e.ts = ++clock_; e.rrpv = 0;      break;
+    case Policy::SRRIP: e.rrpv = SRRIP_INS; e.freq = 0; e.ts = 0;     break;
+    }
+  }
+
+  Entry& victim_slot() {
+    for (auto& e : entries_) if (!e.valid) return e;
+    switch (pol_) {
+    case Policy::LRU:
+      return *std::min_element(entries_.begin(), entries_.end(),
+        [](const Entry& a, const Entry& b){ return a.ts < b.ts; });
+    case Policy::LFU:
+      return *std::min_element(entries_.begin(), entries_.end(),
+        [](const Entry& a, const Entry& b){
+          return a.freq < b.freq || (a.freq == b.freq && a.ts < b.ts); });
+    case Policy::SRRIP:
+      for (;;) {
+        for (auto& e : entries_) if (e.rrpv == SRRIP_MAX) return e;
+        for (auto& e : entries_) e.rrpv = std::min(e.rrpv + 1, SRRIP_MAX);
+      }
+    }
+    return entries_[0];
+  }
+};
+
 struct cache_stats {
   std::string name;
   // prefetch stats
@@ -130,11 +223,9 @@ class CACHE : public champsim::operable, public MemoryRequestConsumer, public Me
   uint64_t bconf_thd = 6; // bhist confidence threshold
   uint64_t st_size = 2;   // shadow table capacity
 
-  std::map<uint64_t, std::map<uint64_t, uint64_t>> phist; // [vpn_hash][pc_hash] → confidence
-  std::deque<std::pair<uint64_t, uint64_t>> shadow_table; // recently bypassed (VPN, translation data)
-  std::map<uint64_t, uint64_t> bhist;                      // [block_hash] → confidence
-
-  bool cbpred_pc_idx = false; // when true, bHIST is keyed on PC rather than block address
+  HistTable phist;  // PC → confidence (dpPred: how often this PC's STLB fills are dead)
+  HistTable bhist;  // block address → confidence (cbPred: how often this line is dead on fill)
+  std::deque<std::tuple<uint64_t, uint64_t, uint64_t>> shadow_table; // (VPN, data, PC)
 
   // PFQ gate control: when false, cbPred bypasses on bhist alone (no PFQ hit required).
   // pfq_ema_mode tracks the hit rate with an EMA and dynamically flips pfq_gate.

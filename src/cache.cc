@@ -47,12 +47,13 @@ uint64_t CACHE::fold_xor(uint64_t val, unsigned bits) const
 bool CACHE::dppred_shadow_lookup(const PACKET& handle_pkt)
 {
   const auto vpn = handle_pkt.address >> OFFSET_BITS;
-  auto it = std::find_if(shadow_table.begin(), shadow_table.end(), [vpn](const auto& e) { return e.first == vpn; });
+  auto it = std::find_if(shadow_table.begin(), shadow_table.end(),
+                         [vpn](const auto& e) { return std::get<0>(e) == vpn; });
   if (it == shadow_table.end())
     return false;
 
-  phist[fold_xor(vpn, VPN_BITS)].clear();
-  const auto stored_data = it->second;
+  phist.reset(std::get<2>(*it));   // clear confidence for the PC that caused this bypass
+  const auto stored_data = std::get<1>(*it);
   shadow_table.erase(it);
 
   // Serve the translation to all waiting requesters.
@@ -75,19 +76,17 @@ bool CACHE::dppred_shadow_lookup(const PACKET& handle_pkt)
 // Only called when the set is full (otherwise there is nothing to bypass).
 bool CACHE::dppred_bypass(const PACKET& fill_mshr)
 {
-  const auto vpn_hash = fold_xor(fill_mshr.address >> OFFSET_BITS, VPN_BITS);
-  const auto pc_hash  = fold_xor(fill_mshr.ip,                     PC_BITS);
-  if (phist[vpn_hash][pc_hash] <= pconf_thd)
+  if (phist.get(fill_mshr.ip) <= pconf_thd)
     return false;
 
   if (pfq.size() >= pfq_cap)
     pfq.pop_front();
   pfq.push_back(fill_mshr.data >> LOG2_PAGE_SIZE);
 
-  // Remember the bypassed (VPN, translation) for re-insertion on re-access (FIFO)
+  // Remember the bypassed (VPN, data, PC) for re-insertion on re-access (FIFO)
   if (shadow_table.size() >= st_size)
     shadow_table.pop_front();
-  shadow_table.push_back({fill_mshr.address >> OFFSET_BITS, fill_mshr.data});
+  shadow_table.push_back({fill_mshr.address >> OFFSET_BITS, fill_mshr.data, fill_mshr.ip});
 
   sim_stats.back().llt_bypasses++;
   return true;
@@ -98,9 +97,7 @@ bool CACHE::dppred_bypass(const PACKET& fill_mshr)
 bool CACHE::cbpred_bypass(const PACKET& fill_mshr)
 {
   const auto pfn        = fill_mshr.address >> LOG2_PAGE_SIZE;
-  const auto block_hash = cbpred_pc_idx
-      ? fold_xor(fill_mshr.ip,                     BHT_BITS)
-      : fold_xor(fill_mshr.address >> OFFSET_BITS, BHT_BITS);
+  const auto block_addr = fill_mshr.address >> OFFSET_BITS;
   const bool in_pfq     = std::find(pfq.begin(), pfq.end(), pfn) != pfq.end();
 
   if (pfq_ema_mode) {
@@ -110,7 +107,7 @@ bool CACHE::cbpred_bypass(const PACKET& fill_mshr)
 
   if (pfq_gate && !in_pfq)
     return false;
-  if (bhist[block_hash] <= bconf_thd)
+  if (bhist.get(block_addr) <= bconf_thd)
     return false;
 
   sim_stats.back().llc_bypasses++;
@@ -125,20 +122,10 @@ bool CACHE::cbpred_bypass(const PACKET& fill_mshr)
 // accessed since insertion; resets it to zero otherwise.
 void CACHE::update_eviction_counters(const BLOCK& victim)
 {
-  auto increment_or_reset = [&victim](uint64_t& counter) {
-    counter = victim.accessed ? 0 : std::min(counter + 1, MAX_COUNTER);
-  };
-
-  if (dppred && NAME == "cpu0_STLB") {
-    const auto vpn_hash = fold_xor(victim.address >> OFFSET_BITS, VPN_BITS);
-    const auto pc_hash  = fold_xor(victim.ip,                     PC_BITS);
-    increment_or_reset(phist[vpn_hash][pc_hash]);
-  } else if (cbpred && NAME == "LLC" && victim.dp) {
-    const auto bkey = cbpred_pc_idx
-        ? fold_xor(victim.ip,                     BHT_BITS)
-        : fold_xor(victim.address >> OFFSET_BITS, BHT_BITS);
-    increment_or_reset(bhist[bkey]);
-  }
+  if (dppred && NAME == "cpu0_STLB")
+    phist.update(victim.ip, victim.accessed);
+  else if (cbpred && NAME == "LLC" && victim.dp)
+    bhist.update(victim.address >> OFFSET_BITS, victim.accessed);
 }
 
 // Reads environment variables to enable dpPred/cbPred and tune their
@@ -150,7 +137,7 @@ void CACHE::update_eviction_counters(const BLOCK& victim)
 //   BCONF_THD=<n>        cbPred confidence threshold (default 6)
 //   ST_SIZE=<n>          shadow-table capacity (default 2)
 //   PFQ_CAP=<n>          shared PFQ capacity (default 8)
-//   CBPRED_IDX=pc        index bHIST by PC instead of block address (default: addr)
+//   HIST_REPL=lru|lfu|srrip  replacement policy for phist and bhist (default: lru)
 //   CBPRED_NO_PFQ=1      disable the PFQ gate: cbPred fires on bhist alone
 //   PFQ_EMA=1            dynamically adapt the PFQ gate via an EMA of hit rate
 //   PFQ_EMA_ALPHA=<f>    EMA decay factor (default 1/1024 ≈ 0.001)
@@ -176,8 +163,18 @@ void CACHE::load_predictor_settings()
   st_size   = getenv_uint64("ST_SIZE",   st_size);
   pfq_cap   = getenv_uint64("PFQ_CAP",   pfq_cap);
 
-  if (const char* v = std::getenv("CBPRED_IDX"); v && std::string_view(v) == "pc")
-    cbpred_pc_idx = true;
+  {
+    const uint64_t pw = getenv_uint64("PHIST_WAYS", 1024);
+    const uint64_t bw = getenv_uint64("BHIST_WAYS", 4096);
+    HistTable::Policy pol = HistTable::Policy::LRU;
+    if (const char* v = std::getenv("HIST_REPL"); v) {
+      if (std::string_view(v) == "lfu")   pol = HistTable::Policy::LFU;
+      if (std::string_view(v) == "srrip") pol = HistTable::Policy::SRRIP;
+    }
+    phist = HistTable(pw, pol);
+    bhist = HistTable(bw, pol);
+  }
+
   if (const char* v = std::getenv("CBPRED_NO_PFQ"); v && std::stoull(v))
     pfq_gate = false;
   if (const char* v = std::getenv("PFQ_EMA"); v && std::stoull(v))
