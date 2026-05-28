@@ -134,6 +134,8 @@ class CACHE : public champsim::operable, public MemoryRequestConsumer, public Me
   std::deque<std::pair<uint64_t, uint64_t>> shadow_table; // recently bypassed (VPN, translation data)
   std::map<uint64_t, uint64_t> bhist;                      // [block_hash] → confidence
 
+  bool cbpred_pc_idx = false; // when true, bHIST is keyed on PC rather than block address
+
   // PFQ gate control: when false, cbPred bypasses on bhist alone (no PFQ hit required).
   // pfq_ema_mode tracks the hit rate with an EMA and dynamically flips pfq_gate.
   bool pfq_gate = true;

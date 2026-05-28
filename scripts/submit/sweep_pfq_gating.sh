@@ -1,13 +1,15 @@
 #!/usr/bin/env bash
 # sweep_pfq_gating.sh — study PFQ-gate variants of cbPred.
 #
-# Six configs (1MB LLC, LRU); baseline and optimal_bypass come from exp 001:
+# Eight configs (1MB LLC, LRU); baseline and optimal_bypass come from exp 001:
 #   dppred_only_opt      — DPPRED=1, CBPRED=0, THD=(0,0)                  (dpPred alone reference)
 #   dppred_only_default  — DPPRED=1, CBPRED=0, THD=(6,6)
 #   cbpred_nopfq_opt     — DPPRED=1, CBPRED=1, THD=(0,0), CBPRED_NO_PFQ=1 (bhist alone)
 #   cbpred_nopfq_default — DPPRED=1, CBPRED=1, THD=(6,6), CBPRED_NO_PFQ=1
-#   cbpred_ema_opt       — DPPRED=1, CBPRED=1, THD=(0,0), PFQ_EMA=1       (EMA-adaptive)
+#   cbpred_ema_opt       — DPPRED=1, CBPRED=1, THD=(0,0), PFQ_EMA=1       (EMA-adaptive, addr-indexed)
 #   cbpred_ema_default   — DPPRED=1, CBPRED=1, THD=(6,6), PFQ_EMA=1
+#   cbpred_pc_opt        — DPPRED=1, CBPRED=1, THD=(0,0), CBPRED_IDX=pc   (PC-indexed bHIST)
+#   cbpred_pc_default    — DPPRED=1, CBPRED=1, THD=(6,6), CBPRED_IDX=pc
 #
 # EMA defaults: alpha=1/1024 (~0.001), gate turns OFF when hit rate < 10%.
 # Override via PFQ_EMA_ALPHA=<f> and PFQ_EMA_THD=<pct> (percent, 0-100).
@@ -100,7 +102,7 @@ BASE_LABEL="${token}_pfq_gating_${DATE}${DEBUG_TAG}"
 LOG_DIR="${PROJECT_ROOT}/logs/${BASE_LABEL}"
 mkdir -p "$LOG_DIR"
 
-# Config format: exp_name  dppred cbpred no_pfq pfq_ema pconf bconf
+# Config format: exp_name  dppred cbpred no_pfq pfq_ema pconf bconf [cbpred_idx]
 configs=(
   "dppred_only_opt      1 0 0 0 0 0"
   "dppred_only_default  1 0 0 0 6 6"
@@ -108,6 +110,8 @@ configs=(
   "cbpred_nopfq_default 1 1 1 0 6 6"
   "cbpred_ema_opt       1 1 0 1 0 0"
   "cbpred_ema_default   1 1 0 1 6 6"
+  "cbpred_pc_opt        1 1 0 0 0 0 pc"
+  "cbpred_pc_default    1 1 0 0 6 6 pc"
 )
 
 echo "Suite         : ${token}"
@@ -120,7 +124,8 @@ echo "Logs          : logs/${BASE_LABEL}/"
 echo ""
 
 for config in "${configs[@]}"; do
-  read -r exp_name dppred cbpred no_pfq pfq_ema pconf bconf <<< "$config"
+  read -r exp_name dppred cbpred no_pfq pfq_ema pconf bconf cbpred_idx <<< "$config"
+  cbpred_idx="${cbpred_idx:-addr}"
 
   RUN_LABEL="${BASE_LABEL}/${exp_name}"
   mkdir -p "${PROJECT_ROOT}/results/${RUN_LABEL}"
@@ -137,10 +142,11 @@ TRACE_DIR="$TRACE_DIR",TRACE_EXT="$TRACE_EXT",\
 RUN_LABEL="$RUN_LABEL",BINARY="$BINARY",\
 DPPRED="$dppred",CBPRED="$cbpred",\
 CBPRED_NO_PFQ="$no_pfq",PFQ_EMA="$pfq_ema",\
+CBPRED_IDX="$cbpred_idx",\
 PCONF_THD="$pconf",BCONF_THD="$bconf" \
              "${PROJECT_ROOT}/scripts/submit/run_cs.sh")
   jid=$(echo "$raw" | awk '/Your job/ {print $3}' | cut -d. -f1)
-  echo "  [jid=${jid}] ${exp_name}  (NO_PFQ=${no_pfq}, EMA=${pfq_ema})"
+  echo "  [jid=${jid}] ${exp_name}  (NO_PFQ=${no_pfq}, EMA=${pfq_ema}, IDX=${cbpred_idx})"
 done
 
 echo ""
