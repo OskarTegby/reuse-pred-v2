@@ -33,5 +33,7 @@ finish_submission() {
               | xargs dirname 2>/dev/null || true)
   fi
 
-  bash "${SCRIPT_DIR}/../estimate_batch.sh" "$n_jobs" "${ref_dir:-}"
+  local save_dir=""
+  [ -n "$base_label" ] && save_dir="${PROJECT_ROOT}/results/${base_label}"
+  bash "${SCRIPT_DIR}/../estimate_batch.sh" "$n_jobs" "${ref_dir:-}" "${save_dir}"
 }
