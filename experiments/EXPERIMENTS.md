@@ -19,3 +19,4 @@ and binary name in each README are sufficient to reproduce them.
 |---|------|--------|-------------|-----------|-----------|-----------|-----------|
 | [001](001_clean_baseline/README.md) | 2026-05-28 | f4d7a30024ba | Clean baseline: remove all Sniper approximations | +0.95% | +7.56% | −0.17% | −1.58% |
 | [002](002_pfq_gating/README.md) | 2026-05-28 | 8b00276690fb | PFQ gate variants: NO_PFQ=−1.49%, EMA≈+6.09% (srv_128) | N/A | N/A | N/A | N/A |
+| [003](003_hist_repl/README.md) | 2026-05-28 | a081781be794 | Bounded HistTable (LFU/LRU/SRRIP) — confounded, indicative only | LFU +6.12% | LFU +7.27% | N/A | N/A |

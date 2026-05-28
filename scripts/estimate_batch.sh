@@ -67,7 +67,7 @@ REF_LABEL=$(basename "${REF_DIR%/}" 2>/dev/null || echo "unknown")
 AVG=0
 EST_MIN=0
 WAVES=0
-if AVG=$(mean_minutes "$REF_DIR" 2>/dev/null) && [ "$SLOTS" -gt 0 ]; then
+if AVG=$(mean_minutes "$REF_DIR" 2>/dev/null) && [ "${SLOTS:-0}" -gt 0 ]; then
   read -r WAVES EST_MIN < <(python3 - "$N_JOBS" "$SLOTS" "$AVG" <<'PYEOF'
 import sys, math
 n, slots, avg = int(sys.argv[1]), int(sys.argv[2]), float(sys.argv[3])
