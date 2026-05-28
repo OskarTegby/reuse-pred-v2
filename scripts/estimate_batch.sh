@@ -58,7 +58,7 @@ PYEOF
 max_slots() {
   ssh -A otegby@abdet.inf.um.es -o BatchMode=yes -o ConnectTimeout=10 \
     "ssh otegby@castillo.inf.um.es 'qstat -g c 2>/dev/null'" \
-    | awk '/all\.q/{print $6}' | head -1
+    | awk '/all\.q/{print $3 + $5}' | head -1  # USED + AVAIL = working capacity
 }
 
 # ── 4. Compute and print estimate ────────────────────────────────────────────
