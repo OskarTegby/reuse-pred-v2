@@ -24,6 +24,7 @@
 #include <functional>
 #include <list>
 #include <map>
+#include <set>
 #include <string>
 #include <vector>
 
@@ -542,6 +543,13 @@ class CACHE : public champsim::operable, public MemoryRequestConsumer, public Me
   // Query bHIST for guidance score (dead_count) of a block for replacement.
   // Returns the dead_count from bHIST, or 0 if not found or guidance disabled.
   uint64_t get_repl_guidance_score(uint64_t block_address, uint64_t dp_pc) const;
+
+  // Unbounded characterization: track all (PC, address) pairs to measure actual demand.
+  // Enables data-driven sizing decisions: how many PCs and addresses per PC do we actually see?
+  bool characterization_enable = false;
+  std::map<uint64_t, std::set<uint64_t>> pc_to_addrs;  // PC → set of unique addresses
+  void record_characterization(uint64_t dp_pc, uint64_t block_address);
+  void print_characterization_stats() const;
 
   // PFQ gate control: when false, cbPred bypasses on bhist alone (no PFQ hit required).
   // pfq_ema_mode tracks the hit rate with an EMA and dynamically flips pfq_gate.

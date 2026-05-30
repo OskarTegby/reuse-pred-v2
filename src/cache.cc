@@ -17,8 +17,10 @@
 #include "cache.h"
 
 #include <algorithm>
+#include <cmath>
 #include <cstdlib>
 #include <iomanip>
+#include <iostream>
 #include <iterator>
 #include <numeric>
 
@@ -108,13 +110,17 @@ bool CACHE::cbpred_bypass(const PACKET& fill_mshr)
 
   const uint64_t block_addr = fill_mshr.address >> OFFSET_BITS;
   uint64_t confidence;
+  uint64_t dp_pc = 0;
   if (use_pc_bhist) {
     // PC-indexed mode requires a PFQ hit to obtain the dpPred PC.
     if (!in_pfq) return false;
-    confidence = bhist_pc.get(pfq_it->second, block_addr);
+    dp_pc = pfq_it->second;
+    confidence = bhist_pc.get(dp_pc, block_addr);
+    record_characterization(dp_pc, block_addr);
   } else {
     if (pfq_gate && !in_pfq) return false;
     confidence = bhist_flat.get(block_addr);
+    record_characterization(0, block_addr);
   }
 
   if (confidence <= bconf_thd)
@@ -230,6 +236,10 @@ void CACHE::load_predictor_settings()
   if (const char* v = std::getenv("REPL_GUIDANCE"); v && std::stoull(v))
     repl_guidance_enable = true;
   repl_guidance_thd = getenv_uint64("REPL_GUIDANCE_THD", 0);
+
+  // Unbounded characterization: track all (PC, address) pairs to measure actual demand.
+  if (const char* v = std::getenv("CHARACTERIZATION"); v && std::stoull(v))
+    characterization_enable = true;
 }
 
 uint64_t CACHE::get_repl_guidance_score(uint64_t block_address, uint64_t dp_pc) const
@@ -245,6 +255,42 @@ uint64_t CACHE::get_repl_guidance_score(uint64_t block_address, uint64_t dp_pc) 
   }
 
   return dead_count;
+}
+
+void CACHE::record_characterization(uint64_t dp_pc, uint64_t block_address)
+{
+  if (!characterization_enable)
+    return;
+  pc_to_addrs[dp_pc].insert(block_address);
+}
+
+void CACHE::print_characterization_stats() const
+{
+  if (!characterization_enable || pc_to_addrs.empty())
+    return;
+
+  uint64_t total_pcs = pc_to_addrs.size();
+  uint64_t total_pairs = 0;
+  uint64_t min_addrs = UINT64_MAX;
+  uint64_t max_addrs = 0;
+  double sum_addrs = 0.0;
+
+  for (const auto& [pc, addrs] : pc_to_addrs) {
+    uint64_t addr_count = addrs.size();
+    total_pairs += addr_count;
+    min_addrs = std::min(min_addrs, addr_count);
+    max_addrs = std::max(max_addrs, addr_count);
+    sum_addrs += addr_count;
+  }
+
+  double avg_addrs = sum_addrs / total_pcs;
+  std::cout << "\n[CHARACTERIZATION] Unbounded (PC, address) demand:\n"
+            << "  Unique PCs: " << total_pcs << "\n"
+            << "  Total (PC, address) pairs: " << total_pairs << "\n"
+            << "  Avg addresses per PC: " << avg_addrs << "\n"
+            << "  Min/Max addresses per PC: " << min_addrs << " / " << max_addrs << "\n"
+            << "  Recommended fixed budget: " << total_pairs << " entries or ~" << (uint64_t)std::ceil(avg_addrs)
+            << " per-PC with " << total_pcs << " PCs\n";
 }
 
 bool CACHE::handle_fill(const PACKET& fill_mshr)
@@ -847,6 +893,8 @@ void CACHE::end_phase(unsigned finished_cpu)
     roi_stats.back().bhist_promotions    = bs.promotions;
     roi_stats.back().bhist_promoted_hits = bs.promoted_hits;
   }
+
+  print_characterization_stats();
 }
 
 bool CACHE::should_activate_prefetcher(const PACKET& pkt) const { return ((1 << pkt.type) & pref_activate_mask) && !pkt.prefetch_from_this; }
