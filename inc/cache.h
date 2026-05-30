@@ -533,6 +533,16 @@ class CACHE : public champsim::operable, public MemoryRequestConsumer, public Me
   PCPartitionedTable bhist_pc;    // used when use_pc_bhist=true
   std::deque<std::tuple<uint64_t, uint64_t, uint64_t>> shadow_table; // (VPN, data, PC)
 
+  // Replacement guidance: use bHIST dead_count signals to guide cache replacement.
+  // High dead_count → entry is often dead → better eviction target (prioritize eviction).
+  // Used to integrate bypass predictor signals into replacement decisions.
+  bool repl_guidance_enable = false;  // enable replacement guidance from bHIST
+  uint64_t repl_guidance_thd = 0;     // threshold: dead_count >= thd → good victim
+
+  // Query bHIST for guidance score (dead_count) of a block for replacement.
+  // Returns the dead_count from bHIST, or 0 if not found or guidance disabled.
+  uint64_t get_repl_guidance_score(uint64_t block_address, uint64_t dp_pc) const;
+
   // PFQ gate control: when false, cbPred bypasses on bhist alone (no PFQ hit required).
   // pfq_ema_mode tracks the hit rate with an EMA and dynamically flips pfq_gate.
   bool pfq_gate = true;

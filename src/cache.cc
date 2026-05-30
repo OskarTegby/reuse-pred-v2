@@ -225,6 +225,26 @@ void CACHE::load_predictor_settings()
 
   pfq_ema_alpha = getenv_double("PFQ_EMA_ALPHA", pfq_ema_alpha);
   pfq_ema_thd   = getenv_double("PFQ_EMA_THD", 10.0) / 100.0;
+
+  // Replacement guidance: use bHIST signals to guide cache replacement decisions.
+  if (const char* v = std::getenv("REPL_GUIDANCE"); v && std::stoull(v))
+    repl_guidance_enable = true;
+  repl_guidance_thd = getenv_uint64("REPL_GUIDANCE_THD", 0);
+}
+
+uint64_t CACHE::get_repl_guidance_score(uint64_t block_address, uint64_t dp_pc) const
+{
+  if (!repl_guidance_enable)
+    return 0;
+
+  uint64_t dead_count = 0;
+  if (use_pc_bhist) {
+    dead_count = bhist_pc.get(dp_pc, block_address);
+  } else {
+    dead_count = bhist_flat.get(block_address);
+  }
+
+  return dead_count;
 }
 
 bool CACHE::handle_fill(const PACKET& fill_mshr)
@@ -234,9 +254,29 @@ bool CACHE::handle_fill(const PACKET& fill_mshr)
   // find victim
   auto [set_begin, set_end] = get_set_span(fill_mshr.address);
   auto way = std::find_if_not(set_begin, set_end, [](auto x) { return x.valid; });
-  if (way == set_end)
+  if (way == set_end) {
     way = std::next(set_begin, impl_find_victim(fill_mshr.cpu, fill_mshr.instr_id, get_set_index(fill_mshr.address), &*set_begin, fill_mshr.ip,
                                                 fill_mshr.address, fill_mshr.type));
+
+    // Replacement guidance: re-evaluate victim using bHIST dead_count signals.
+    // Prefer evicting entries with high dead_count (entries that are often dead).
+    if (repl_guidance_enable) {
+      auto best_victim = way;
+      uint64_t best_score = get_repl_guidance_score(best_victim->address, best_victim->dp_pc);
+
+      for (auto it = set_begin; it != set_end; ++it) {
+        if (!it->valid)
+          continue;
+        uint64_t score = get_repl_guidance_score(it->address, it->dp_pc);
+        if (score > best_score) {
+          best_victim = it;
+          best_score = score;
+        }
+      }
+
+      way = best_victim;
+    }
+  }
 
   // Predictor bypass: only fires when a valid entry would be displaced
   // (way->valid distinguishes eviction from filling a free slot).
