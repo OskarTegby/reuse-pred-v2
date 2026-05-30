@@ -20,4 +20,5 @@ and binary name in each README are sufficient to reproduce them.
 | [001](001_clean_baseline/README.md) | 2026-05-28 | f4d7a30024ba | Clean baseline: remove all Sniper approximations | +0.95% | +7.56% | −0.17% | −1.58% |
 | [002](002_pfq_gating/README.md) | 2026-05-28 | 8b00276690fb | PFQ gate variants: NO_PFQ=−1.49%, EMA≈+6.09% (srv_128) | N/A | N/A | N/A | N/A |
 | [003](003_hist_repl/README.md) | 2026-05-28 | a081781be794 | Bounded HistTable (LFU/LRU/SRRIP) — confounded, indicative only | LFU +6.12% | LFU +7.27% | N/A | N/A |
-| [004](004_lfu_ablation_and_sizes/README.md) | 2026-05-28 | ce965b5b8310 | LFU ablation + pHIST/bHIST size sweep — running | — | — | N/A | N/A |
+| [004](004_lfu_ablation_and_sizes/README.md) | 2026-05-28 | ce965b5b8310 | LFU ablation + pHIST/bHIST size sweep: (6,6)=+6.12%, (0,0)=+7.27% | +6.12% | +7.27% | N/A | N/A |
+| [005a](005_doa_lfu_and_buffer/README.md) | 2026-05-29 | bf82dec848b8 | Per-table isolation: DoA-LFU and buffer in pHIST/bHIST separately — running | — | — | N/A | N/A |

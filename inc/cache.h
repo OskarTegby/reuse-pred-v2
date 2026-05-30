@@ -36,35 +36,84 @@
 // Used for both pHIST (PC-indexed) and bHIST (address-indexed).
 class HistTable {
 public:
-  enum class Policy { LRU, LFU, SRRIP };
+  // LFU_DOA: freq increments only on dead (DoA) evictions — a live eviction
+  // doesn't confirm bypass utility and shouldn't raise eviction priority.
+  // SRRIP: dead eviction → rrpv=0 (protect); live eviction → rrpv=SRRIP_MAX
+  // (demote immediately; entry becomes next eviction target and re-enters buffer).
+  enum class Policy { LRU, LFU, LFU_DOA, SRRIP };
+
+  struct Stats {
+    uint64_t queries       = 0;  // total get() calls
+    uint64_t table_hits    = 0;  // get() found the key (value > 0)
+    uint64_t promotions    = 0;  // buffer → main table promotions
+    uint64_t promoted_hits = 0;  // later get() hits on promoted entries
+  };
 
   HistTable() = default;
-  HistTable(uint64_t cap, Policy pol) : cap_(cap), pol_(pol), entries_(cap) {}
+  HistTable(uint64_t cap, Policy pol, uint64_t buf_cap = 0)
+    : cap_(cap), pol_(pol), entries_(cap), buf_cap_(buf_cap), buffer_(buf_cap) {}
 
   uint64_t get(uint64_t key) const {
-    for (const auto& e : entries_)
-      if (e.valid && e.key == key) return e.value;
+    stats_.queries++;
+    for (const auto& e : entries_) {
+      if (e.valid && e.key == key) {
+        if (e.value > 0) {
+          stats_.table_hits++;
+          if (e.promoted) { stats_.promoted_hits++; e.promoted = false; }
+        }
+        return e.value;
+      }
+    }
     return 0;
   }
 
-  // Increment counter on dead eviction (accessed=false), reset on live eviction.
-  // Inserts the entry if not present, evicting a victim if at capacity.
+  const Stats& get_stats() const { return stats_; }
+  void reset_stats() {
+    stats_ = Stats{};
+    for (auto& e : entries_) e.promoted = false;
+  }
+
   void update(uint64_t key, bool accessed) {
+    // 1. Main table hit.
     for (auto& e : entries_) {
       if (e.valid && e.key == key) {
         e.value = accessed ? 0 : std::min(e.value + 1, MAX_COUNTER);
-        on_hit(e);
+        on_hit(e, accessed);
         return;
       }
     }
+    // 2. Promotion buffer.
+    if (buf_cap_ > 0) {
+      for (auto& b : buffer_) {
+        if (b.valid && b.key == key) {
+          if (accessed) {
+            b.dead_count = 0;
+          } else {
+            b.dead_count++;
+            try_promote();
+          }
+          return;
+        }
+      }
+      // Not in main table or buffer: stage in buffer (dead evictions only).
+      if (!accessed) {
+        auto& bslot      = buf_victim();
+        bslot.key        = key;
+        bslot.dead_count = 1;
+        bslot.ts         = ++buf_clock_;
+        bslot.valid      = true;
+        try_promote();
+      }
+      return;
+    }
+    // 3. No buffer: insert directly.
     auto& slot  = victim_slot();
     slot.key    = key;
     slot.value  = accessed ? 0 : 1;
     slot.valid  = true;
-    on_insert(slot);
+    on_insert(slot, accessed);
   }
 
-  // Zero the confidence for key without removing it.
   void reset(uint64_t key) {
     for (auto& e : entries_)
       if (e.valid && e.key == key) { e.value = 0; return; }
@@ -76,33 +125,111 @@ private:
   static constexpr uint32_t SRRIP_MAX  = 3;
 
   struct Entry {
-    uint64_t key   = 0;
-    uint64_t value = 0;
-    uint64_t freq  = 0;  // LFU: access count
-    uint64_t ts    = 0;  // LRU / LFU tiebreak: insertion/access timestamp
-    uint32_t rrpv  = 0;  // SRRIP: re-reference prediction value
-    bool     valid = false;
+    uint64_t key      = 0;
+    uint64_t value    = 0;
+    uint64_t freq     = 0;
+    uint64_t ts       = 0;
+    uint32_t rrpv     = 0;
+    bool          valid    = false;
+    mutable bool  promoted = false;  // set on buffer promotion; cleared on first hit
   };
 
-  uint64_t cap_   = 0;
-  Policy   pol_   = Policy::LRU;
-  std::vector<Entry> entries_;
-  uint64_t clock_ = 0;
+  struct BufEntry {
+    uint64_t key        = 0;
+    uint64_t dead_count = 0;
+    uint64_t ts         = 0;
+    bool     valid      = false;
+  };
 
-  void on_hit(Entry& e) {
+  uint64_t cap_         = 0;
+  Policy   pol_         = Policy::LRU;
+  std::vector<Entry> entries_;
+  uint64_t clock_       = 0;
+  uint64_t buf_cap_   = 0;
+  uint64_t buf_clock_ = 0;
+  std::vector<BufEntry> buffer_;
+  mutable Stats stats_;
+
+  void on_hit(Entry& e, bool accessed) {
     switch (pol_) {
-    case Policy::LRU:   e.ts = ++clock_;       break;
-    case Policy::LFU:   ++e.freq; e.ts = ++clock_; break;
-    case Policy::SRRIP: e.rrpv = 0;            break;
+    case Policy::LRU:     e.ts = ++clock_;                                break;
+    case Policy::LFU:     ++e.freq; e.ts = ++clock_;                      break;
+    case Policy::LFU_DOA: if (!accessed) ++e.freq; e.ts = ++clock_;       break;
+    // Dead → protect (rrpv=0). Live → demote to eviction target (rrpv=SRRIP_MAX);
+    // victim_slot() will then evict it and re-enter it into the buffer.
+    case Policy::SRRIP:   e.rrpv = accessed ? SRRIP_MAX : 0;              break;
     }
   }
 
-  void on_insert(Entry& e) {
+  void on_insert(Entry& e, bool accessed) {
+    e.promoted = false;
     switch (pol_) {
-    case Policy::LRU:   e.ts = ++clock_; e.freq = 0; e.rrpv = 0;      break;
-    case Policy::LFU:   e.freq = 1; e.ts = ++clock_; e.rrpv = 0;      break;
-    case Policy::SRRIP: e.rrpv = SRRIP_INS; e.freq = 0; e.ts = 0;     break;
+    case Policy::LRU:     e.ts = ++clock_; e.freq = 0; e.rrpv = 0;               break;
+    case Policy::LFU:     e.freq = 1; e.ts = ++clock_; e.rrpv = 0;               break;
+    case Policy::LFU_DOA: e.freq = accessed ? 0 : 1; e.ts = ++clock_; e.rrpv = 0; break;
+    case Policy::SRRIP:   e.rrpv = SRRIP_INS; e.freq = 0; e.ts = 0;              break;
     }
+  }
+
+  // Promoted entries enter with higher priority than cold insertions.
+  void on_promote(Entry& e, uint64_t dead_count) {
+    e.promoted = true;
+    switch (pol_) {
+    case Policy::LRU:     e.ts = ++clock_; e.freq = 0; e.rrpv = 0;        break;
+    case Policy::LFU:
+    case Policy::LFU_DOA: e.freq = dead_count; e.ts = ++clock_; e.rrpv = 0; break;
+    case Policy::SRRIP:   e.rrpv = 0; e.freq = 0; e.ts = 0;               break;
+    }
+  }
+
+  // Promote the best buffer entry into the main table when it beats the worst
+  // main table entry. The displaced main table entry re-enters the buffer with
+  // dead_count=0 so it must re-prove relevance before being re-admitted.
+  void try_promote() {
+    // Find best buffer candidate: max dead_count, newest ts as tiebreak.
+    BufEntry* best = nullptr;
+    for (auto& b : buffer_) {
+      if (!b.valid || b.dead_count == 0) continue;
+      if (!best || b.dead_count > best->dead_count ||
+          (b.dead_count == best->dead_count && b.ts > best->ts))
+        best = &b;
+    }
+    if (!best) return;
+
+    // Check whether best buffer entry beats worst main table entry.
+    bool promote = false;
+    for (const auto& e : entries_) if (!e.valid) { promote = true; break; }
+    if (!promote) {
+      switch (pol_) {
+      case Policy::LRU:
+      case Policy::LFU:
+      case Policy::LFU_DOA: {
+        uint64_t min_freq = UINT64_MAX;
+        for (const auto& e : entries_) min_freq = std::min(min_freq, e.freq);
+        promote = best->dead_count > min_freq;
+        break;
+      }
+      case Policy::SRRIP:
+        for (const auto& e : entries_)
+          if (e.rrpv == SRRIP_MAX) { promote = true; break; }
+        break;
+      }
+    }
+    if (!promote) return;
+
+    // Evict worst main table entry → re-enter into best's buffer slot.
+    stats_.promotions++;
+    auto& slot = victim_slot();
+    const bool has_victim = slot.valid;
+    const uint64_t victim_key = has_victim ? slot.key : 0;
+    slot.key   = best->key;
+    slot.value = best->dead_count;
+    slot.valid = true;
+    on_promote(slot, best->dead_count);
+    best->key        = has_victim ? victim_key : 0;
+    best->dead_count = 0;
+    best->ts         = has_victim ? ++buf_clock_ : 0;
+    best->valid      = has_victim;
   }
 
   Entry& victim_slot() {
@@ -112,6 +239,7 @@ private:
       return *std::min_element(entries_.begin(), entries_.end(),
         [](const Entry& a, const Entry& b){ return a.ts < b.ts; });
     case Policy::LFU:
+    case Policy::LFU_DOA:
       return *std::min_element(entries_.begin(), entries_.end(),
         [](const Entry& a, const Entry& b){
           return a.freq < b.freq || (a.freq == b.freq && a.ts < b.ts); });
@@ -122,6 +250,167 @@ private:
       }
     }
     return entries_[0];
+  }
+
+  // DoA-LFU eviction: evict the buffer entry with the fewest dead confirmations.
+  // ts (insertion time) breaks ties — evict the older entry among equals.
+  BufEntry& buf_victim() {
+    for (auto& b : buffer_) if (!b.valid) return b;
+    return *std::min_element(buffer_.begin(), buffer_.end(),
+      [](const BufEntry& a, const BufEntry& b){
+        return a.dead_count < b.dead_count ||
+               (a.dead_count == b.dead_count && a.ts < b.ts); });
+  }
+};
+
+// Two-level history table: PC → { block address → dead-confirmation counter }.
+// Outer level: up to pc_ways distinct dpPred PCs, DoA-LFU eviction.
+// Inner level: up to addr_ways block addresses per PC, DoA-LFU eviction.
+// Both freq counters increment only on dead evictions (DoA-LFU).
+// Optional per-PC addr promotion buffer: new addr entries stage here and are
+// promoted to the inner table only when their dead count exceeds the weakest
+// current addr entry's freq.
+class PCPartitionedTable {
+public:
+  PCPartitionedTable() = default;
+  PCPartitionedTable(uint64_t pc_ways, uint64_t addr_ways, uint64_t addr_buf_cap = 0)
+    : addr_ways_(addr_ways), addr_buf_cap_(addr_buf_cap), entries_(pc_ways)
+  {
+    for (auto& e : entries_) {
+      e.addrs.resize(addr_ways);
+      e.buf.resize(addr_buf_cap);
+    }
+  }
+
+  uint64_t get(uint64_t pc, uint64_t addr) const {
+    for (const auto& e : entries_) {
+      if (!e.valid || e.pc != pc) continue;
+      for (const auto& a : e.addrs)
+        if (a.valid && a.addr == addr) return a.count;
+      return 0;
+    }
+    return 0;
+  }
+
+  // Increment counter on dead eviction (!accessed); reset to 0 on live eviction.
+  void update(uint64_t pc, uint64_t addr, bool accessed) {
+    // --- PC level: find or insert ---
+    PCEntry* pe = nullptr;
+    for (auto& e : entries_)
+      if (e.valid && e.pc == pc) { pe = &e; break; }
+    if (!pe) {
+      pe = &evict_pc();
+      pe->pc    = pc;
+      pe->valid = true;
+      pe->freq  = 0;
+      for (auto& a : pe->addrs) a = AddrEntry{};
+      for (auto& b : pe->buf)   b = BufEntry{};
+    }
+    if (!accessed) pe->freq++;  // DoA-LFU at PC level
+
+    // --- Addr level: check main slots ---
+    for (auto& a : pe->addrs) {
+      if (a.valid && a.addr == addr) {
+        a.count = accessed ? 0 : std::min(a.count + 1, MAX_COUNTER);
+        if (!accessed) a.freq++;
+        return;
+      }
+    }
+
+    // --- Addr level: check promotion buffer ---
+    if (addr_buf_cap_ > 0) {
+      for (auto& b : pe->buf) {
+        if (b.valid && b.addr == addr) {
+          if (accessed) {
+            b.dead_count = 0;
+          } else {
+            b.dead_count++;
+            if (b.dead_count > addr_lfu_victim_freq(*pe)) {
+              auto& slot  = evict_addr(*pe);
+              slot.addr   = b.addr;
+              slot.count  = b.dead_count;
+              slot.freq   = b.dead_count;
+              slot.valid  = true;
+              b = BufEntry{};
+            }
+          }
+          return;
+        }
+      }
+      // New addr: add to buffer (dead evictions only).
+      if (!accessed) {
+        auto& bslot      = buf_victim(*pe);
+        bslot.addr       = addr;
+        bslot.dead_count = 1;
+        bslot.ts         = ++buf_clock_;
+        bslot.valid      = true;
+      }
+      return;
+    }
+
+    // --- No buffer: insert directly ---
+    if (!accessed) {
+      auto& slot  = evict_addr(*pe);
+      slot.addr   = addr;
+      slot.count  = 1;
+      slot.freq   = 1;
+      slot.valid  = true;
+    }
+  }
+
+private:
+  static constexpr uint64_t MAX_COUNTER = 16;
+
+  struct AddrEntry {
+    uint64_t addr  = 0;
+    uint64_t count = 0;
+    uint64_t freq  = 0;  // DoA-LFU: dead confirmation count
+    bool     valid = false;
+  };
+  struct BufEntry {
+    uint64_t addr       = 0;
+    uint64_t dead_count = 0;
+    uint64_t ts         = 0;
+    bool     valid      = false;
+  };
+  struct PCEntry {
+    uint64_t pc    = 0;
+    uint64_t freq  = 0;  // DoA-LFU: total dead confirmations across all addrs
+    bool     valid = false;
+    std::vector<AddrEntry> addrs;
+    std::vector<BufEntry>  buf;
+  };
+
+  uint64_t addr_ways_    = 0;
+  uint64_t addr_buf_cap_ = 0;
+  uint64_t buf_clock_    = 0;
+  std::vector<PCEntry> entries_;
+
+  PCEntry& evict_pc() {
+    for (auto& e : entries_) if (!e.valid) return e;
+    return *std::min_element(entries_.begin(), entries_.end(),
+      [](const PCEntry& a, const PCEntry& b){ return a.freq < b.freq; });
+  }
+
+  uint64_t addr_lfu_victim_freq(const PCEntry& pe) const {
+    uint64_t min_f = UINT64_MAX;
+    for (const auto& a : pe.addrs) {
+      if (!a.valid) return 0;
+      min_f = std::min(min_f, a.freq);
+    }
+    return min_f;
+  }
+
+  AddrEntry& evict_addr(PCEntry& pe) {
+    for (auto& a : pe.addrs) if (!a.valid) return a;
+    return *std::min_element(pe.addrs.begin(), pe.addrs.end(),
+      [](const AddrEntry& a, const AddrEntry& b){ return a.freq < b.freq; });
+  }
+
+  BufEntry& buf_victim(PCEntry& pe) {
+    for (auto& b : pe.buf) if (!b.valid) return b;
+    return *std::min_element(pe.buf.begin(), pe.buf.end(),
+      [](const BufEntry& a, const BufEntry& b){ return a.ts < b.ts; });
   }
 };
 
@@ -153,6 +442,16 @@ struct cache_stats {
   uint64_t doa = 0;
   uint64_t doa_stlb_found    = 0; // LLC DoA evictions where STLB entry was present
   uint64_t doa_stlb_also_doa = 0; // of those, STLB entry also had accessed == false
+
+  // History table utilisation (ROI only, reset at warmup boundary).
+  uint64_t phist_queries       = 0;
+  uint64_t phist_table_hits    = 0;
+  uint64_t phist_promotions    = 0;
+  uint64_t phist_promoted_hits = 0;
+  uint64_t bhist_queries       = 0;
+  uint64_t bhist_table_hits    = 0;
+  uint64_t bhist_promotions    = 0;
+  uint64_t bhist_promoted_hits = 0;
 };
 
 struct cache_queue_stats {
@@ -193,6 +492,7 @@ class CACHE : public champsim::operable, public MemoryRequestConsumer, public Me
     bool accessed = false; // set on hit; read and cleared on eviction
     bool dp = false;       // dead-page bit: set on LLC fill when the block's PFN is in the PFQ;
                            // gates accessed tracking and bHIST updates (cbPred only)
+    uint64_t dp_pc = 0;   // dpPred PC stored at fill time (valid when dp=true)
 
     uint64_t address = 0;
     uint64_t v_address = 0;
@@ -210,7 +510,8 @@ class CACHE : public champsim::operable, public MemoryRequestConsumer, public Me
   // ── dpPred-cbPred predictor ──────────────────────────────────────────────
 
   // Shared physical-frame queue: dpPred fills it; cbPred reads it.
-  inline static std::deque<uint64_t> pfq{};
+  // Each entry is (PFN, dpPred PC) so cbPred can use the PC as the bHIST key.
+  inline static std::deque<std::pair<uint64_t, uint64_t>> pfq{};
   inline static uint64_t pfq_cap = 8;
 
   // Set by cpu0_STLB during initialize(); read by LLC for reverse STLB DoA lookup.
@@ -223,8 +524,13 @@ class CACHE : public champsim::operable, public MemoryRequestConsumer, public Me
   uint64_t bconf_thd = 6; // bhist confidence threshold
   uint64_t st_size = 2;   // shadow table capacity
 
-  HistTable phist;  // PC → confidence (dpPred: how often this PC's STLB fills are dead)
-  HistTable bhist;  // block address → confidence (cbPred: how often this line is dead on fill)
+  HistTable phist;           // PC → confidence (dpPred)
+  // cbPred bHIST: two modes selected by BHIST_MODE env var.
+  //   "flat" (default): HistTable keyed by block address (addr-indexed, exp004 style)
+  //   "pc":  PCPartitionedTable keyed by (dpPred PC, block address) — requires PFQ hit
+  bool use_pc_bhist = false;
+  HistTable          bhist_flat;  // used when use_pc_bhist=false
+  PCPartitionedTable bhist_pc;    // used when use_pc_bhist=true
   std::deque<std::tuple<uint64_t, uint64_t, uint64_t>> shadow_table; // (VPN, data, PC)
 
   // PFQ gate control: when false, cbPred bypasses on bhist alone (no PFQ hit required).

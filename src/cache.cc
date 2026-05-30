@@ -81,7 +81,7 @@ bool CACHE::dppred_bypass(const PACKET& fill_mshr)
 
   if (pfq.size() >= pfq_cap)
     pfq.pop_front();
-  pfq.push_back(fill_mshr.data >> LOG2_PAGE_SIZE);
+  pfq.push_back({fill_mshr.data >> LOG2_PAGE_SIZE, fill_mshr.ip});
 
   // Remember the bypassed (VPN, data, PC) for re-insertion on re-access (FIFO)
   if (shadow_table.size() >= st_size)
@@ -96,22 +96,32 @@ bool CACHE::dppred_bypass(const PACKET& fill_mshr)
 // (its page was previously bypassed by dpPred and its block counter is high).
 bool CACHE::cbpred_bypass(const PACKET& fill_mshr)
 {
-  const auto pfn        = fill_mshr.address >> LOG2_PAGE_SIZE;
-  const auto block_addr = fill_mshr.address >> OFFSET_BITS;
-  const bool in_pfq     = std::find(pfq.begin(), pfq.end(), pfn) != pfq.end();
+  const auto pfn    = fill_mshr.address >> LOG2_PAGE_SIZE;
+  const auto pfq_it = std::find_if(pfq.begin(), pfq.end(),
+                                   [pfn](const auto& e){ return e.first == pfn; });
+  const bool in_pfq = pfq_it != pfq.end();
 
   if (pfq_ema_mode) {
     pfq_ema_val = pfq_ema_alpha * (in_pfq ? 1.0 : 0.0) + (1.0 - pfq_ema_alpha) * pfq_ema_val;
     pfq_gate    = (pfq_ema_val >= pfq_ema_thd);
   }
 
-  if (pfq_gate && !in_pfq)
-    return false;
-  if (bhist.get(block_addr) <= bconf_thd)
+  const uint64_t block_addr = fill_mshr.address >> OFFSET_BITS;
+  uint64_t confidence;
+  if (use_pc_bhist) {
+    // PC-indexed mode requires a PFQ hit to obtain the dpPred PC.
+    if (!in_pfq) return false;
+    confidence = bhist_pc.get(pfq_it->second, block_addr);
+  } else {
+    if (pfq_gate && !in_pfq) return false;
+    confidence = bhist_flat.get(block_addr);
+  }
+
+  if (confidence <= bconf_thd)
     return false;
 
   sim_stats.back().llc_bypasses++;
-  if (!in_pfq)
+  if (!use_pc_bhist && !in_pfq)
     sim_stats.back().cbpred_nogate_bypasses++;
   return true;
 }
@@ -124,8 +134,12 @@ void CACHE::update_eviction_counters(const BLOCK& victim)
 {
   if (dppred && NAME == "cpu0_STLB")
     phist.update(victim.ip, victim.accessed);
-  else if (cbpred && NAME == "LLC" && victim.dp)
-    bhist.update(victim.address >> OFFSET_BITS, victim.accessed);
+  else if (cbpred && NAME == "LLC" && victim.dp) {
+    if (use_pc_bhist)
+      bhist_pc.update(victim.dp_pc, victim.address >> OFFSET_BITS, victim.accessed);
+    else
+      bhist_flat.update(victim.address >> OFFSET_BITS, victim.accessed);
+  }
 }
 
 // Reads environment variables to enable dpPred/cbPred and tune their
@@ -137,8 +151,18 @@ void CACHE::update_eviction_counters(const BLOCK& victim)
 //   BCONF_THD=<n>        cbPred confidence threshold (default 6)
 //   ST_SIZE=<n>          shadow-table capacity (default 2)
 //   PFQ_CAP=<n>          shared PFQ capacity (default 8)
-//   HIST_REPL=lru|lfu|srrip  replacement policy for phist and bhist (default: lru)
-//   CBPRED_NO_PFQ=1      disable the PFQ gate: cbPred fires on bhist alone
+//   HIST_REPL=lru|lfu|lfu_doa|srrip  replacement for both phist and flat bhist (default: lru)
+//   PHIST_REPL=...       override HIST_REPL for pHIST only
+//   BHIST_REPL=...       override HIST_REPL for flat bHIST only
+//   PHIST_BUF_CAP=<n>    promotion buffer size for pHIST (default 0 = off)
+//   BHIST_MODE=flat|pc   bHIST indexing: flat=addr-indexed HistTable (default),
+//                        pc=PC-partitioned PCPartitionedTable (requires PFQ hit)
+//   BHIST_WAYS=<n>       flat bHIST capacity (default 4096)
+//   BHIST_BUF_CAP=<n>    promotion buffer size for flat bHIST (default 0 = off)
+//   BHIST_PC_WAYS=<n>    PC slots for pc-mode bHIST (default 256)
+//   BHIST_ADDR_WAYS=<n>  addr slots per PC (default 16)
+//   BHIST_ADDR_BUF=<n>   per-PC addr promotion buffer size (default 0 = off)
+//   CBPRED_NO_PFQ=1      disable the PFQ gate: cbPred fires on flat bhist alone
 //   PFQ_EMA=1            dynamically adapt the PFQ gate via an EMA of hit rate
 //   PFQ_EMA_ALPHA=<f>    EMA decay factor (default 1/1024 ≈ 0.001)
 //   PFQ_EMA_THD=<pct>    gate turns OFF when EMA < pct/100 (default 10 → 10%)
@@ -164,15 +188,34 @@ void CACHE::load_predictor_settings()
   pfq_cap   = getenv_uint64("PFQ_CAP",   pfq_cap);
 
   {
-    const uint64_t pw = getenv_uint64("PHIST_WAYS", 1024);
-    const uint64_t bw = getenv_uint64("BHIST_WAYS", 4096);
-    HistTable::Policy pol = HistTable::Policy::LRU;
-    if (const char* v = std::getenv("HIST_REPL"); v) {
-      if (std::string_view(v) == "lfu")   pol = HistTable::Policy::LFU;
-      if (std::string_view(v) == "srrip") pol = HistTable::Policy::SRRIP;
+    auto parse_policy = [](const char* v) -> HistTable::Policy {
+      if (!v) return HistTable::Policy::LRU;
+      if (std::string_view(v) == "lfu")     return HistTable::Policy::LFU;
+      if (std::string_view(v) == "lfu_doa") return HistTable::Policy::LFU_DOA;
+      if (std::string_view(v) == "srrip")   return HistTable::Policy::SRRIP;
+      return HistTable::Policy::LRU;
+    };
+    // PHIST_REPL and BHIST_REPL override HIST_REPL for their respective table.
+    const char* hist_repl  = std::getenv("HIST_REPL");
+    const char* phist_repl = std::getenv("PHIST_REPL") ? std::getenv("PHIST_REPL") : hist_repl;
+    const char* bhist_repl = std::getenv("BHIST_REPL") ? std::getenv("BHIST_REPL") : hist_repl;
+
+    const uint64_t pw        = getenv_uint64("PHIST_WAYS",    1024);
+    const uint64_t phist_buf = getenv_uint64("PHIST_BUF_CAP",    0);
+    phist = HistTable(pw, parse_policy(phist_repl), phist_buf);
+
+    if (const char* v = std::getenv("BHIST_MODE"); v && std::string_view(v) == "pc") {
+      use_pc_bhist = true;
+      const uint64_t bpc_ways   = getenv_uint64("BHIST_PC_WAYS",   256);
+      const uint64_t baddr_ways = getenv_uint64("BHIST_ADDR_WAYS",  16);
+      const uint64_t baddr_buf  = getenv_uint64("BHIST_ADDR_BUF",    0);
+      bhist_pc = PCPartitionedTable(bpc_ways, baddr_ways, baddr_buf);
+    } else {
+      use_pc_bhist = false;
+      const uint64_t bw      = getenv_uint64("BHIST_WAYS",    4096);
+      const uint64_t buf_cap = getenv_uint64("BHIST_BUF_CAP",    0);
+      bhist_flat = HistTable(bw, parse_policy(bhist_repl), buf_cap);
     }
-    phist = HistTable(pw, pol);
-    bhist = HistTable(bw, pol);
   }
 
   if (const char* v = std::getenv("CBPRED_NO_PFQ"); v && std::stoull(v))
@@ -283,10 +326,15 @@ bool CACHE::handle_fill(const PACKET& fill_mshr)
       way->prefetch = fill_mshr.prefetch_from_this;
       way->dirty = (fill_mshr.type == WRITE);
       way->accessed = false;
-      way->dp = cbpred && NAME == "LLC" && fill_mshr.type != TRANSLATION
-                && std::find(pfq.begin(), pfq.end(), fill_mshr.address >> LOG2_PAGE_SIZE) != pfq.end();
-      if (way->dp)
-        sim_stats.back().pfq_hits++;
+      {
+        const auto pfn_fill = fill_mshr.address >> LOG2_PAGE_SIZE;
+        const auto pit = std::find_if(pfq.begin(), pfq.end(),
+                                      [pfn_fill](const auto& e){ return e.first == pfn_fill; });
+        way->dp    = cbpred && NAME == "LLC" && fill_mshr.type != TRANSLATION && pit != pfq.end();
+        way->dp_pc = way->dp ? pit->second : 0;
+        if (way->dp)
+          sim_stats.back().pfq_hits++;
+      }
       way->address = fill_mshr.address;
       way->v_address = fill_mshr.v_address;
       way->data = fill_mshr.data;
@@ -715,6 +763,10 @@ void CACHE::begin_phase()
 
   roi_stats.back().name = NAME;
   sim_stats.back().name = NAME;
+
+  // Reset history table stats so ROI counts are clean (exclude warmup).
+  phist.reset_stats();
+  bhist_flat.reset_stats();
 }
 
 void CACHE::end_phase(unsigned finished_cpu)
@@ -741,6 +793,20 @@ void CACHE::end_phase(unsigned finished_cpu)
   roi_stats.back().doa                = sim_stats.back().doa;
   roi_stats.back().doa_stlb_found    = sim_stats.back().doa_stlb_found;
   roi_stats.back().doa_stlb_also_doa = sim_stats.back().doa_stlb_also_doa;
+
+  // History table utilisation stats (accumulated since begin_phase reset).
+  {
+    const auto& ps = phist.get_stats();
+    roi_stats.back().phist_queries       = ps.queries;
+    roi_stats.back().phist_table_hits    = ps.table_hits;
+    roi_stats.back().phist_promotions    = ps.promotions;
+    roi_stats.back().phist_promoted_hits = ps.promoted_hits;
+    const auto& bs = bhist_flat.get_stats();
+    roi_stats.back().bhist_queries       = bs.queries;
+    roi_stats.back().bhist_table_hits    = bs.table_hits;
+    roi_stats.back().bhist_promotions    = bs.promotions;
+    roi_stats.back().bhist_promoted_hits = bs.promoted_hits;
+  }
 }
 
 bool CACHE::should_activate_prefetcher(const PACKET& pkt) const { return ((1 << pkt.type) & pref_activate_mask) && !pkt.prefetch_from_this; }

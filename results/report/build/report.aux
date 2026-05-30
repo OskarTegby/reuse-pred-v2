@@ -1,0 +1,69 @@
+\relax 
+\providecommand\hyper@newdestlabel[2]{}
+\providecommand\HyField@AuxAddToFields[1]{}
+\providecommand\HyField@AuxAddToCoFields[2]{}
+\@writefile{toc}{\contentsline {section}{\numberline {1}Definitions}{2}{section.1}\protected@file@percent }
+\newlabel{sec:defs}{{1}{2}{Definitions}{section.1}{}}
+\@writefile{toc}{\contentsline {section}{\numberline {2}Liveness Characterisation}{2}{section.2}\protected@file@percent }
+\newlabel{sec:liveness}{{2}{2}{Liveness Characterisation}{section.2}{}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {2.1}How much dead traffic is there?}{2}{subsection.2.1}\protected@file@percent }
+\@writefile{lot}{\contentsline {table}{\numberline {1}{\ignorespaces Selected workloads per suite (top-4 by combined LLC+STLB dead fraction). Dead\% = DoA + mostly-dead evictions at LLC or STLB eviction; dashes indicate fewer than one eviction recorded.}}{3}{table.caption.2}\protected@file@percent }
+\providecommand*\caption@xref[2]{\@setref\relax\@undefined{#1}}
+\newlabel{tab:selected_workloads}{{1}{3}{Selected workloads per suite (top-4 by combined LLC+STLB dead fraction). Dead\% = DoA + mostly-dead evictions at LLC or STLB eviction; dashes indicate fewer than one eviction recorded}{table.caption.2}{}}
+\@writefile{lof}{\contentsline {figure}{\numberline {1}{\ignorespaces Per-workload liveness breakdown (STLB top, LLC bottom) for the Mazumdar-comparable domain: SPEC (DPC3), GAP, and Ligra. Each bar shows one workload (top-4 per suite by dead fraction); rightmost bar per suite is the geomean over all suite workloads.}}{4}{figure.caption.3}\protected@file@percent }
+\newlabel{fig:liveness_bar_mazumdar}{{1}{4}{Per-workload liveness breakdown (STLB top, LLC bottom) for the Mazumdar-comparable domain: SPEC (DPC3), GAP, and Ligra. Each bar shows one workload (top-4 per suite by dead fraction); rightmost bar per suite is the geomean over all suite workloads}{figure.caption.3}{}}
+\@writefile{lof}{\contentsline {figure}{\numberline {2}{\ignorespaces Per-workload liveness breakdown (STLB top, LLC bottom) for the new domains: Qualcomm, Google, GMS, and AI/ML. Each bar shows one workload (top-4 per suite by dead fraction); rightmost bar per suite is the geomean over all suite workloads.}}{5}{figure.caption.4}\protected@file@percent }
+\newlabel{fig:liveness_bar_new}{{2}{5}{Per-workload liveness breakdown (STLB top, LLC bottom) for the new domains: Qualcomm, Google, GMS, and AI/ML. Each bar shows one workload (top-4 per suite by dead fraction); rightmost bar per suite is the geomean over all suite workloads}{figure.caption.4}{}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {2.2}LLC--STLB DoA Correlation}{5}{subsection.2.2}\protected@file@percent }
+\newlabel{sec:correlation}{{2.2}{5}{LLC--STLB DoA Correlation}{subsection.2.2}{}}
+\@writefile{lof}{\contentsline {figure}{\numberline {3}{\ignorespaces LLC DoA rate, STLB DoA rate, and LLC--STLB DoA correlation for SPEC, GAP, and Ligra.}}{6}{figure.caption.5}\protected@file@percent }
+\newlabel{fig:liveness_corr_mazumdar}{{3}{6}{LLC DoA rate, STLB DoA rate, and LLC--STLB DoA correlation for SPEC, GAP, and Ligra}{figure.caption.5}{}}
+\@writefile{lof}{\contentsline {figure}{\numberline {4}{\ignorespaces LLC DoA rate, STLB DoA rate, and LLC--STLB DoA correlation for Google, Qualcomm, GMS, and AI/ML.}}{6}{figure.caption.6}\protected@file@percent }
+\newlabel{fig:liveness_corr_new}{{4}{6}{LLC DoA rate, STLB DoA rate, and LLC--STLB DoA correlation for Google, Qualcomm, GMS, and AI/ML}{figure.caption.6}{}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {2.3}Bypass Predictor Performance}{7}{subsection.2.3}\protected@file@percent }
+\newlabel{sec:bypass_perf}{{2.3}{7}{Bypass Predictor Performance}{subsection.2.3}{}}
+\@writefile{lof}{\contentsline {figure}{\numberline {5}{\ignorespaces Predictor study for SPEC, GAP, and Ligra. Top left: LLC DoA-on-DoA-STLB-page rate. Top right: PFQ hit rate. Bottom: IPC speedup vs.\ LRU for dpPred only and dpPred+cbPred at pconf\,=\,bconf\,=\,6. Dots: individual traces; diamonds: geomeans.}}{8}{figure.caption.7}\protected@file@percent }
+\newlabel{fig:bypass_pred_mazumdar}{{5}{8}{Predictor study for SPEC, GAP, and Ligra. Top left: LLC DoA-on-DoA-STLB-page rate. Top right: PFQ hit rate. Bottom: IPC speedup vs.\ LRU for dpPred only and dpPred+cbPred at pconf\,=\,bconf\,=\,6. Dots: individual traces; diamonds: geomeans}{figure.caption.7}{}}
+\@writefile{lof}{\contentsline {figure}{\numberline {6}{\ignorespaces Predictor study for Google, Qualcomm, GMS, and AI/ML. Same layout as Figure~\ref {fig:bypass_pred_mazumdar}.}}{9}{figure.caption.8}\protected@file@percent }
+\newlabel{fig:bypass_pred_new}{{6}{9}{Predictor study for Google, Qualcomm, GMS, and AI/ML. Same layout as Figure~\ref {fig:bypass_pred_mazumdar}}{figure.caption.8}{}}
+\@writefile{toc}{\contentsline {section}{\numberline {3}Liveness-Guided Replacement Policy}{9}{section.3}\protected@file@percent }
+\newlabel{sec:replacement}{{3}{9}{Liveness-Guided Replacement Policy}{section.3}{}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {3.1}srrip\_live: block-level liveness at insertion}{9}{subsection.3.1}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {3.2}LLC-only: threshold sensitivity and indexing}{9}{subsection.3.2}\protected@file@percent }
+\@writefile{lof}{\contentsline {figure}{\numberline {7}{\ignorespaces Per-workload IPC speedup vs.\ LRU for \texttt  {srrip\_live} at each workload's individually optimal mid\_thd (PC-indexed history) for SPEC, GAP, and Ligra. Four workloads per suite (top-4 by dead fraction) plus suite geomean. Bar shading (light~$\to $~dark) = threshold $1 \to 16$. SRRIP bars shown for reference.}}{10}{figure.caption.9}\protected@file@percent }
+\newlabel{fig:srrip_live_thd}{{7}{10}{Per-workload IPC speedup vs.\ LRU for \texttt {srrip\_live} at each workload's individually optimal mid\_thd (PC-indexed history) for SPEC, GAP, and Ligra. Four workloads per suite (top-4 by dead fraction) plus suite geomean. Bar shading (light~$\to $~dark) = threshold $1 \to 16$. SRRIP bars shown for reference}{figure.caption.9}{}}
+\@writefile{lof}{\contentsline {figure}{\numberline {8}{\ignorespaces As Figure~\ref {fig:srrip_live_thd} for Qualcomm, Google, GMS, and AI/ML.}}{11}{figure.caption.10}\protected@file@percent }
+\newlabel{fig:srrip_live_thd_new}{{8}{11}{As Figure~\ref {fig:srrip_live_thd} for Qualcomm, Google, GMS, and AI/ML}{figure.caption.10}{}}
+\@writefile{lof}{\contentsline {figure}{\numberline {9}{\ignorespaces Address-indexed history --- per-workload IPC speedup vs.\ LRU for \texttt  {srrip\_live} at each workload's individually optimal mid\_thd, for SPEC, GAP, and Ligra.}}{13}{figure.caption.11}\protected@file@percent }
+\newlabel{fig:srrip_live_thd_addr}{{9}{13}{Address-indexed history --- per-workload IPC speedup vs.\ LRU for \texttt {srrip\_live} at each workload's individually optimal mid\_thd, for SPEC, GAP, and Ligra}{figure.caption.11}{}}
+\@writefile{lof}{\contentsline {figure}{\numberline {10}{\ignorespaces As Figure~\ref {fig:srrip_live_thd_addr} for Qualcomm, Google, GMS, and AI/ML. The AI/ML regression seen with PC-indexed history is eliminated: all AI/ML traces are near-neutral or positive.}}{14}{figure.caption.12}\protected@file@percent }
+\newlabel{fig:srrip_live_thd_addr_new}{{10}{14}{As Figure~\ref {fig:srrip_live_thd_addr} for Qualcomm, Google, GMS, and AI/ML. The AI/ML regression seen with PC-indexed history is eliminated: all AI/ML traces are near-neutral or positive}{figure.caption.12}{}}
+\@writefile{lof}{\contentsline {figure}{\numberline {11}{\ignorespaces Geomean IPC speedup vs.\ LRU for SRRIP, IPV, \texttt  {srrip\_live}, and \texttt  {ipv\_live} across SPEC, Google, and Qualcomm, each at its per-suite optimal threshold.}}{15}{figure.caption.13}\protected@file@percent }
+\newlabel{fig:ipv_live}{{11}{15}{Geomean IPC speedup vs.\ LRU for SRRIP, IPV, \texttt {srrip\_live}, and \texttt {ipv\_live} across SPEC, Google, and Qualcomm, each at its per-suite optimal threshold}{figure.caption.13}{}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {3.3}STLB-only: threshold sensitivity}{15}{subsection.3.3}\protected@file@percent }
+\newlabel{sec:stlb_repl}{{3.3}{15}{STLB-only: threshold sensitivity}{subsection.3.3}{}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {3.4}Combined LLC+STLB replacement}{15}{subsection.3.4}\protected@file@percent }
+\newlabel{sec:combined_repl}{{3.4}{15}{Combined LLC+STLB replacement}{subsection.3.4}{}}
+\@writefile{lof}{\contentsline {figure}{\numberline {12}{\ignorespaces Per-workload IPC speedup vs.\ LRU for \texttt  {srrip\_live} and \texttt  {ipv\_live} (PC-indexed history) for SPEC, GAP, and Ligra. \texttt  {ipv\_live} bars shown where data is available (GAP, Ligra). Four workloads per suite plus suite geomean.}}{16}{figure.caption.14}\protected@file@percent }
+\newlabel{fig:ipv_live_thd}{{12}{16}{Per-workload IPC speedup vs.\ LRU for \texttt {srrip\_live} and \texttt {ipv\_live} (PC-indexed history) for SPEC, GAP, and Ligra. \texttt {ipv\_live} bars shown where data is available (GAP, Ligra). Four workloads per suite plus suite geomean}{figure.caption.14}{}}
+\@writefile{lof}{\contentsline {figure}{\numberline {13}{\ignorespaces As Figure~\ref {fig:ipv_live_thd} for Qualcomm, Google, GMS, and AI/ML. \texttt  {ipv\_live} bars shown where data is available (GMS, AI/ML).}}{17}{figure.caption.15}\protected@file@percent }
+\newlabel{fig:ipv_live_thd_new}{{13}{17}{As Figure~\ref {fig:ipv_live_thd} for Qualcomm, Google, GMS, and AI/ML. \texttt {ipv\_live} bars shown where data is available (GMS, AI/ML)}{figure.caption.15}{}}
+\@writefile{lof}{\contentsline {figure}{\numberline {14}{\ignorespaces Combined LLC+STLB replacement policy comparison across all seven suites. Geomean IPC speedup vs.\ \texttt  {srrip\_live\_both} for LLC-only, STLB-only, and joint (LLC+STLB) variants of SRRIP, IPV, \texttt  {srrip\_live}, and \texttt  {ipv\_live}.}}{18}{figure.caption.16}\protected@file@percent }
+\newlabel{fig:combined_repl_all7}{{14}{18}{Combined LLC+STLB replacement policy comparison across all seven suites. Geomean IPC speedup vs.\ \texttt {srrip\_live\_both} for LLC-only, STLB-only, and joint (LLC+STLB) variants of SRRIP, IPV, \texttt {srrip\_live}, and \texttt {ipv\_live}}{figure.caption.16}{}}
+\@writefile{toc}{\contentsline {section}{\numberline {4}Bypass Predictor: Mechanism and Variants}{18}{section.4}\protected@file@percent }
+\newlabel{sec:bypass}{{4}{18}{Bypass Predictor: Mechanism and Variants}{section.4}{}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {4.1}dpPred: STLB-level page bypass}{18}{subsection.4.1}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {4.2}cbPred: LLC-level block bypass}{18}{subsection.4.2}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {4.3}Variants and hashing comparison}{19}{subsection.4.3}\protected@file@percent }
+\newlabel{sec:bypass_variants}{{4.3}{19}{Variants and hashing comparison}{subsection.4.3}{}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {4.4}PFQ size study}{19}{subsection.4.4}\protected@file@percent }
+\newlabel{sec:pfq_size}{{4.4}{19}{PFQ size study}{subsection.4.4}{}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {4.5}bconf-only bypass and EMA-based adaptive gating}{19}{subsection.4.5}\protected@file@percent }
+\newlabel{sec:bconf_only}{{4.5}{19}{bconf-only bypass and EMA-based adaptive gating}{subsection.4.5}{}}
+\@writefile{lof}{\contentsline {figure}{\numberline {15}{\ignorespaces IPC speedup vs.\ the standard gated cbPred (\texttt  {lru+pred}) for two relaxed gating strategies across all seven suites. \texttt  {lru+pred (no PFQ)}: cbPred bypasses on block-level confidence alone, with no PFQ membership check. \texttt  {lru+pred (adaptive)}: PFQ gate is enabled or disabled at runtime by an EMA of the PFQ hit rate (window\,=\,10\,000 fills, threshold\,=\,30\%).}}{20}{figure.caption.17}\protected@file@percent }
+\newlabel{fig:pfq_gating}{{15}{20}{IPC speedup vs.\ the standard gated cbPred (\texttt {lru+pred}) for two relaxed gating strategies across all seven suites. \texttt {lru+pred (no PFQ)}: cbPred bypasses on block-level confidence alone, with no PFQ membership check. \texttt {lru+pred (adaptive)}: PFQ gate is enabled or disabled at runtime by an EMA of the PFQ hit rate (window\,=\,10\,000 fills, threshold\,=\,30\%)}{figure.caption.17}{}}
+\@writefile{toc}{\contentsline {section}{\numberline {5}Synthesis}{20}{section.5}\protected@file@percent }
+\newlabel{sec:synthesis}{{5}{20}{Synthesis}{section.5}{}}
+\@writefile{lot}{\contentsline {table}{\numberline {2}{\ignorespaces Mechanism effectiveness by workload class. $+$ helpful; $\circ $ neutral; $-$ harmful; \textbf  {!} sensitive to indexing/threshold. \textbf  {?} awaiting data. $^\dagger $ Graph DoA correlation varies widely: GAP $\approx 1\%$, GMS $\approx 9\%$, Ligra $\approx 100\%$.}}{21}{table.caption.18}\protected@file@percent }
+\newlabel{tab:mechanism_fit}{{2}{21}{Mechanism effectiveness by workload class. $+$ helpful; $\circ $ neutral; $-$ harmful; \textbf {!} sensitive to indexing/threshold. \textbf {?} awaiting data. $^\dagger $ Graph DoA correlation varies widely: GAP $\approx 1\%$, GMS $\approx 9\%$, Ligra $\approx 100\%$}{table.caption.18}{}}
+\gdef \@abspage@last{21}

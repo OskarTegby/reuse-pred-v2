@@ -2,23 +2,23 @@
 
 ## Step 1 — Replacement policy and promotion buffer (idea 001)
 
-**Status: in progress (experiment 004 running)**
+**Status: in progress (experiment 005 submitted)**
 
-Replacement policy sweep completed (experiment 003, confounded — see README).
-Indicative conclusion: **LFU >> SRRIP > LRU**. LFU at the default threshold
-(6,6) achieved +6.12% vs +0.95% with the old fold-XOR maps.
+Replacement policy sweep (exp003, confounded) → LFU selected.
+Exp004 confirmed: LFU full predictor (0,0)=+7.27%, (6,6)=+6.12% on QMM geomean.
+pHIST: 1024 entries is not overprovisioned (sharp cliff at 512).
+bHIST: graceful degradation; floor near +4% at 128 entries.
 
-Currently running (experiment 004):
-- Ablation to isolate LFU benefit per table (dpPred-only LFU vs hashed,
-  full LFU vs dpPred-only LFU).
-- pHIST size sweep: 1024 → 512 → 256 → 128 (bHIST fixed at 4096).
-- bHIST size sweep: 4096 → 2048 → 1024 → 512 → 256 → 128 (pHIST fixed at 1024).
-- All with HIST_REPL=lfu, THD=(0,0), QMM 45 traces.
+Exp005 now running:
+- DoA-LFU vs standard LFU for flat bHIST (freq increments only on dead evictions).
+- Promotion buffer for flat bHIST (new entries stage; promote when dead_count >
+  LFU victim freq).
+- PC-partitioned bHIST (PCPartitionedTable, 256 PC × 16 addr, DoA-LFU at both
+  levels, optional per-PC addr buffer).
+- Size sweeps for flat DoA-LFU (with/without buffer) and PC-partitioned
+  (vary addr_ways).
 
-Promotion buffer not yet implemented. Will proceed to it after the size
-sweep informs the right capacity for each table.
-
-Proceed to step 2 regardless of outcome — the two directions are orthogonal.
+Proceed to step 2 regardless of outcome.
 
 ## Step 2 — Pass dpPred PC through the PFQ (idea 002)
 

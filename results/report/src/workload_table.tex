@@ -1,0 +1,47 @@
+\begin{table}[tbp]
+\caption{Selected workloads per suite (top-4 by combined LLC+STLB dead fraction).  Dead\% = DoA + mostly-dead evictions at LLC or STLB eviction;
+           dashes indicate fewer than one eviction recorded.}
+\label{tab:selected_workloads}
+\centering\small
+\begin{tabular}{llrr}
+\toprule
+Suite & Workload & LLC dead\% & STLB dead\% \\
+\midrule
+  SPEC (DPC3) & \texttt{bwaves} & 100 & 100 \\
+  SPEC (DPC3) & \texttt{lbm} & 100 & 100 \\
+  SPEC (DPC3) & \texttt{imagick} & 100 & --- \\
+  SPEC (DPC3) & \texttt{fotonik3d} & 100 & 100 \\
+\addlinespace
+  GAP & \texttt{bfs-14} & 100 & 100 \\
+  GAP & \texttt{bfs-10} & 99 & 99 \\
+  GAP & \texttt{sssp-10} & 86 & 63 \\
+  GAP & \texttt{sssp-14} & 86 & 65 \\
+\addlinespace
+  Ligra & \texttt{CF} & 100 & 100 \\
+  Ligra & \texttt{PageRankDelta} & 100 & 100 \\
+  Ligra & \texttt{BFSCC} & 100 & 100 \\
+  Ligra & \texttt{BellmanFord} & 100 & 100 \\
+\addlinespace
+  Qualcomm (QMM) & \texttt{srv\_s7} & 92 & 81 \\
+  Qualcomm (QMM) & \texttt{srv\_743} & 92 & 81 \\
+  Qualcomm (QMM) & \texttt{srv\_526} & 91 & 79 \\
+  Qualcomm (QMM) & \texttt{srv\_s10} & 90 & 82 \\
+\addlinespace
+  Google & \texttt{arizona.0} & 98 & 87 \\
+  Google & \texttt{tahoe.2} & 98 & 95 \\
+  Google & \texttt{charlie.1} & 98 & 89 \\
+  Google & \texttt{charlie.2} & 97 & 90 \\
+\addlinespace
+  GMS & \texttt{tri\_cnt.137} & 100 & 99 \\
+  GMS & \texttt{tri\_cnt.117} & 100 & 99 \\
+  GMS & \texttt{tri\_cnt.360} & 100 & 98 \\
+  GMS & \texttt{kclique\_star.1291} & 100 & 98 \\
+\addlinespace
+  AI/ML & \texttt{bark.1} & 100 & 100 \\
+  AI/ML & \texttt{clip.1} & 100 & 100 \\
+  AI/ML & \texttt{whisper.1} & 100 & 100 \\
+  AI/ML & \texttt{whisper.3} & 100 & 100 \\
+\addlinespace
+\bottomrule
+\end{tabular}
+\end{table}

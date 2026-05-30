@@ -86,10 +86,101 @@ Both tables use LFU throughout.
 
 ## Results
 
-*(to be filled in when jobs complete)*
+All 45 QMM traces, 1MB LLC, vs `qmm_1mb_20260527_1543/baseline` (no predictor).
+
+### Group 1 — Ablation
+
+| Config | Geomean speedup | Delta vs prior |
+|---|---|---|
+| exp001 dppred_only (fold-XOR, (6,6)) | +0.60% | — |
+| exp001 optimal_bypass (fold-XOR, (0,0)) | +7.56% | — |
+| exp001 default_bypass (fold-XOR, (6,6)) | +0.95% | — |
+| lfu_dppred_opt (LFU, (0,0)) | +3.51% | +2.91pp vs exp001 dppred_only |
+| lfu_dppred_default (LFU, (6,6)) | +4.26% | +3.66pp vs exp001 dppred_only |
+| lfu_full_opt (LFU, (0,0)) | +7.27% | +3.76pp vs lfu_dppred_opt |
+| lfu_full_default (LFU, (6,6)) | +6.12% | +1.86pp vs lfu_dppred_default |
+
+### Group 2 — pHIST size sweep (bHIST fixed at 4096 LFU, both DPPRED+CBPRED on, THD=(0,0))
+
+| pHIST ways | Geomean speedup | Delta vs 1024 |
+|---|---|---|
+| 1024 (reference) | +7.27% | — |
+| 512 | +4.54% | −2.73pp |
+| 256 | +3.74% | −3.53pp |
+| 128 | +2.73% | −4.54pp |
+
+### Group 3 — bHIST size sweep (pHIST fixed at 1024 LFU, both DPPRED+CBPRED on, THD=(0,0))
+
+| bHIST ways | Geomean speedup | Delta vs 4096 |
+|---|---|---|
+| 4096 (reference) | +7.27% | — |
+| 2048 | +6.53% | −0.74pp |
+| 1024 | +5.49% | −1.78pp |
+| 512 | +4.64% | −2.63pp |
+| 256 | +4.25% | −3.02pp |
+| 128 | +4.09% | −3.18pp |
 
 ---
 
 ## Observations
 
-*(to be filled in when jobs complete)*
+### Q1 — LFU pHIST vs fold-XOR pHIST for dpPred alone
+
+LFU dpPred at (0,0) gives +3.51% vs fold-XOR dpPred at (6,6) giving +0.60% —
+a +2.91pp lift. More strikingly, **LFU dpPred at (6,6) outperforms (0,0)**
+(+4.26% vs +3.51%). With fold-XOR, (0,0) was required to extract meaningful
+dpPred speedup because aliasing blurred confidence across many PCs, so
+thresholding was counter-productive. With LFU, the confidence counters
+accumulate on clean PC-indexed entries, and the (6,6) threshold acts as a noise
+filter that improves precision: entries with count ≤ 6 are genuinely uncertain
+and suppressing them helps.
+
+### Q2 — cbPred increment on top of LFU dpPred
+
+Adding cbPred (bHIST, 4096 LFU entries) on top of LFU dpPred adds **+3.76pp at
+(0,0)** and +1.86pp at (6,6). The asymmetry is expected: at (0,0) cbPred fires
+aggressively on any positive bHIST entry; at (6,6) both pHIST and bHIST must
+accumulate 6 confirmations before firing, so cbPred is limited to its most
+confident bypasses only.
+
+### Q3 — LFU full predictor vs fold-XOR full predictor
+
+At (0,0): LFU +7.27% vs fold-XOR +7.56% — essentially a tie (−0.28pp). The
+bounded LFU tables (1024 pHIST + 4096 bHIST) match the performance of the
+unbounded fold-XOR maps at the optimal threshold.
+
+At (6,6): LFU +6.12% vs fold-XOR +0.95% — **+5.17pp improvement**. This is the
+headline result of the experiment. Aliasing in the fold-XOR maps caused counter
+interference that prevented most entries from reaching the (6,6) threshold. The
+LFU tables, with unique per-PC and per-address entries and frequency-based
+eviction, accumulate clean confidence and make the default threshold practical
+for the first time.
+
+### Q4–Q5 — pHIST size sensitivity
+
+pHIST is highly capacity-sensitive. Going from 1024→512 entries costs −2.73pp,
+and −4.54pp at 128. The degradation is steep because pHIST controls not only
+dpPred bypass rate but also the PFQ fill rate — a smaller pHIST means fewer PFQ
+pushes, which starves cbPred's PFQ gate as well. **1024 entries is not
+overprovisioned**: the table is actively used across QMM workloads, and
+increasing it further may yield additional benefit.
+
+### Q6–Q7 — bHIST size sensitivity and minimum viable capacity
+
+bHIST degrades more gracefully than pHIST. At 128 entries (32× smaller than
+the 4096 default) the geomean is +4.09%, compared to +3.51% from dpPred alone —
+so **even 128 bHIST entries provide +0.58pp of cbPred benefit**. The degradation
+curve flattens sharply below 256 entries (~+4.25%), suggesting a floor near the
+dpPred-only level. LFU preferentially retains the most frequently dead block
+addresses (from the highest-traffic pages), which dominate bypass decisions and
+fit in even a small table.
+
+### Q8 — Promotion buffer implications
+
+pHIST shows a sharp cliff: 1024 is not overprovisioned, so a promotion buffer
+cannot recover performance by allowing a smaller main table. For bHIST, however,
+the long tail of diminishing returns below 1024 entries is precisely the regime
+where a promotion buffer could help: entries that survive warmup in a small
+staging buffer before entering the main LFU table would reduce the rate at which
+fresh (uncertain) entries displace confirmed dead addresses. **The promotion
+buffer is worth implementing for bHIST specifically.**

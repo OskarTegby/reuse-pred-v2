@@ -101,6 +101,22 @@ void champsim::plain_printer::print(CACHE::stats_type stats)
         stream << "  NOGATE_BYPASSES: " << stats.cbpred_nogate_bypasses;
       stream << std::endl;
     }
+    // History table utilisation (ROI only).
+    auto print_hist = [&](const char* tag, uint64_t q, uint64_t h, uint64_t p, uint64_t ph) {
+      if (q == 0) return;
+      stream << stats.name << " " << tag << "_HIT_RATE: "
+             << std::fixed << std::setprecision(2) << (100.0 * h / q) << "%"
+             << "  QUERIES: " << q << "  HITS: " << h;
+      if (p > 0)
+        stream << "  PROMOTIONS: " << p
+               << "  PROMOTED_HIT_RATE: "
+               << std::setprecision(2) << (100.0 * ph / p) << "%";
+      stream << std::endl;
+    };
+    print_hist("PHIST", stats.phist_queries, stats.phist_table_hits,
+               stats.phist_promotions, stats.phist_promoted_hits);
+    print_hist("BHIST", stats.bhist_queries, stats.bhist_table_hits,
+               stats.bhist_promotions, stats.bhist_promoted_hits);
   }
 }
 
