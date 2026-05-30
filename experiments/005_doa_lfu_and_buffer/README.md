@@ -13,7 +13,7 @@
 **007 — Default threshold validation** (running): 1403512–1403517, 270 tasks, `qmm_srrip_default_20260530_1406`
 - Re-runs 005b configs at (6,6) threshold to validate +14.94% holds in practice
 
-**008 — Size sensitivity at (6,6)** (running): 1403518–1403531, 630 tasks, `qmm_sizes_default_20260530_1406`
+**008 — Size sensitivity at (0,0)** (running): 1403532–1403545, 630 tasks, `qmm_sizes_optimal_20260530_1409`
 - pHIST buffer sweep: 0, 32, 64, 128, 256, 512 entries
 - pHIST table size: 256, 512, 1024, 2048 ways
 - bHIST table size: 1024, 2048, 4096, 8192 ways

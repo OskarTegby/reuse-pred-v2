@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
-# sweep_sizes_default.sh — Experiment 008: Size sensitivity at (6,6) threshold.
+# sweep_sizes_optimal.sh — Experiment 008: Size sensitivity at (0,0) threshold.
 #
 # Sweeps pHIST buffer sizes, pHIST table sizes, and bHIST table sizes
 # to characterize how sensitive the SRRIP+buffer design is to capacity.
-# All at the default (6,6) threshold.
+# All at the optimal (0,0) threshold.
 #
 # 14 configs × 45 traces = 630 tasks.
 
@@ -73,7 +73,7 @@ for config in "${configs[@]}"; do
              -v WARMUP="$WARMUP",SIM="$SIM",\
 TRACE_DIR="$TRACE_DIR",TRACE_EXT="$TRACE_EXT",\
 RUN_LABEL="$RUN_LABEL",BINARY="$BINARY",\
-DPPRED=1,CBPRED=1,PCONF_THD=6,BCONF_THD=6,\
+DPPRED=1,CBPRED=1,PCONF_THD=0,BCONF_THD=0,\
 BHIST_MODE=flat,\
 PHIST_WAYS="$phist_ways",PHIST_REPL=srrip,PHIST_BUF_CAP="$phist_buf",\
 BHIST_WAYS="$bhist_ways",BHIST_REPL=srrip,BHIST_BUF_CAP="$bhist_buf" \
