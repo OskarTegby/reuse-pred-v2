@@ -18,6 +18,16 @@
 - pHIST table size: 256, 512, 1024, 2048 ways
 - bHIST table size: 1024, 2048, 4096, 8192 ways
 
+**011 — Shrunk tables with larger buffers** (running): 1403546–1403547, 90 tasks, `qmm_exp011_shrunk_20260530_1923`
+- Test mechanism value of buffers (shrink main, enlarge buffer, total constant)
+
+**012 — PC-indexed bHIST for bypass only** (running): 1403548–1403549, 90 tasks, `qmm_exp012_pcbhist_bypass_20260530_1923`
+- Isolate pure bypass prediction value (256×16=4096 entries, same budget as flat)
+
+**013–014 — Pending Phase 2 implementation** (replacement policy guidance):
+- exp013: PC-indexed bHIST for replacement guidance only
+- exp014: PC-indexed bHIST for both bypass + replacement (full integration)
+
 **005c — deferred** (pending 005a/005b results):
 - `lfu_doa_buf_opt`: flat bHIST, DoA-LFU, buffer=256 — does buffer compound DoA-LFU?
 - `pc_opt`: PCPartitionedTable 256×16, no addr buffer
