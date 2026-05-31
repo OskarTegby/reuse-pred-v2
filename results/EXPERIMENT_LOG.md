@@ -8,39 +8,67 @@
 
 **Thresholds**: 1, 2, 4, 8, 16
 
+**Date Submitted**: 2026-06-01 (CANCELLED — design changed)
+
+**Status**: CANCELLED (superseded by Exp-002)
+
+---
+
+## Exp-002: Three-Policy LLC Replacement Comparison
+
+**Purpose**: Compare three LLC replacement policies to isolate the impact of liveness-guided replacement:
+1. **LRU Baseline** (champsim_lru): Standard LRU replacement
+2. **Standard SRRIP** (champsim_srrip): SRRIP without liveness guidance
+3. **Modified SRRIP-Live** (champsim_srrip_live): SRRIP with liveness guidance in LLC ONLY
+
+**Branch**: liveness-guided-replacement
+
+**Key Change**: SRRIP-Live now applies liveness-guided insertion/promotion to LLC only; STLB uses standard SRRIP behavior.
+
 **Date Submitted**: 2026-06-01
 
-### Results Directories
+### Results Directories (Exp-002)
 
-| Suite | Output Directory | Job IDs (thd1-thd16) | Status |
-|-------|------------------|----------------------|--------|
-| DPC3 | dpc3_srrip_live_thd_pc_20260601_0003 | 1403595–1403599 | RUNNING |
-| Google | google_srrip_live_thd_pc_20260601_0003 | 1403600–1403604 | RUNNING |
-| QMM | qmm_srrip_live_thd_pc_20260601_0003 | 1403605–1403609 | RUNNING |
-| GAP | gap_srrip_live_thd_pc_20260601_0003 | 1403610–1403614 | RUNNING |
-| GMS | gms_srrip_live_thd_pc_20260601_0003 | 1403615–1403619 | RUNNING |
-| Ligra | ligra_srrip_live_thd_pc_20260601_0003 | 1403620–1403624 | RUNNING |
-| ML | ml_srrip_live_thd_pc_20260601_0003 | 1403625–1403629 | RUNNING |
+| Suite | Output Directory | Job IDs (LRU, SRRIP, SRRIP-Live) | Status |
+|-------|------------------|-----------------------------------|--------|
+| DPC3 | dpc3_policy_sweep_pc_20260601_0011 | 1403630, 1403631, 1403632 | RUNNING |
+| Google | google_policy_sweep_pc_20260601_0011 | 1403633, 1403634, 1403635 | RUNNING |
+| QMM | qmm_policy_sweep_pc_20260601_0011 | 1403636, 1403637, 1403638 | RUNNING |
+| GAP | gap_policy_sweep_pc_20260601_0011 | 1403639, 1403640, 1403641 | RUNNING |
+| GMS | gms_policy_sweep_pc_20260601_0011 | 1403642, 1403643, 1403644 | RUNNING |
+| Ligra | ligra_policy_sweep_pc_20260601_0011 | 1403645, 1403646, 1403647 | RUNNING |
+| ML | ml_policy_sweep_pc_20260601_0011 | 1403648, 1403649, 1403650 | RUNNING |
 
-### Configuration
+### Configuration (Exp-002)
 
-- Binary: champsim_srrip_live (2-class liveness)
-- Cache: 8MB LLC, 16-way associative
-- STLB: 512 entries
-- Liveness indexing: PC-indexed (--mid-key pc)
-- PC-indexed bHIST: 512 entries, 8-way
+- **LLC**: 1MB (1024 sets × 16 ways × 64 bytes), 40-cycle latency
+- **STLB**: 512 entries (128 sets × 8 ways), 8-cycle latency
+- **Binaries**:
+  - champsim_lru: Standard LRU replacement everywhere
+  - champsim_srrip: Standard SRRIP everywhere (no liveness guidance)
+  - champsim_srrip_live: SRRIP with liveness guidance in LLC ONLY (STLB uses standard SRRIP)
+- **Liveness Data**: PC-indexed bHIST (512 entries, 8-way)
+- **MID_THD**: Default = 1 (threshold for DoA classification)
 
-### Submission Details (2026-06-01)
+### Submission Details (Exp-002, 2026-06-01)
 
-- Total jobs: 35 (7 suites × 5 thresholds)
-- Total traces: ~500+ across all suites
+- Total jobs: 21 (7 suites × 3 policies)
+- Total traces: ~375 across all suites
 - Warmup: 50M cycles
 - Simulation: 100M cycles
-- Submission time: Immediate sequential launch, completed within same hour
+- Submission time: Sequential per suite, completed ~15 minutes
 - Monitor: `qstat -u $USER` on castillo cluster
 
-### Notes
+### Design Changes from Exp-001
 
-- Validated 2-class design (DoA vs mostly_alive) matches original 3-class (0.00% IPC difference)
-- These results serve as the official baseline for the liveness-guided replacement policy
-- Once complete, will extract optimal threshold per suite for next phase (assisted replacement)
+1. **SRRIP-Live modification**: Now applies liveness guidance to LLC ONLY
+   - LLC: DoA blocks inserted at maxRRPV (immediate eviction candidate)
+   - STLB: Standard SRRIP insertion/promotion (no liveness guidance)
+   - Rationale: Isolate impact of liveness-guided replacement in LLC
+
+2. **Three-policy comparison**:
+   - Establishes LRU baseline performance per suite
+   - Standard SRRIP control (no liveness benefit)
+   - Modified SRRIP-Live test case (liveness benefit in LLC only)
+
+3. **Clear hypothesis**: Liveness-guided replacement improves performance in LLC; STLB does not need it
