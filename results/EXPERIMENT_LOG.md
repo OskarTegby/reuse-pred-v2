@@ -27,17 +27,17 @@
 
 **Date Submitted**: 2026-06-01
 
-### Results Directories (Exp-002)
+### Results Directories (Exp-002, corrected with thresholds)
 
-| Suite | Output Directory | Job IDs (LRU, SRRIP, SRRIP-Live) | Status |
-|-------|------------------|-----------------------------------|--------|
-| DPC3 | dpc3_policy_sweep_pc_20260601_0011 | 1403630, 1403631, 1403632 | RUNNING |
-| Google | google_policy_sweep_pc_20260601_0011 | 1403633, 1403634, 1403635 | RUNNING |
-| QMM | qmm_policy_sweep_pc_20260601_0011 | 1403636, 1403637, 1403638 | RUNNING |
-| GAP | gap_policy_sweep_pc_20260601_0011 | 1403639, 1403640, 1403641 | RUNNING |
-| GMS | gms_policy_sweep_pc_20260601_0011 | 1403642, 1403643, 1403644 | RUNNING |
-| Ligra | ligra_policy_sweep_pc_20260601_0011 | 1403645, 1403646, 1403647 | RUNNING |
-| ML | ml_policy_sweep_pc_20260601_0011 | 1403648, 1403649, 1403650 | RUNNING |
+| Suite | Output Directory | Job IDs (LRU, SRRIP, SRRIP-Live × 5 thresholds) | Thresholds |
+|-------|------------------|--------------------------------------------------|------------|
+| DPC3 | dpc3_policy_sweep_pc_20260601_0012 | 1403651–1403665 | 1,2,4,8,16 |
+| Google | google_policy_sweep_pc_20260601_0012 | 1403666–1403680 | 1,2,4,8,16 |
+| QMM | qmm_policy_sweep_pc_20260601_0012 | 1403681–1403695 | 1,2,4,8,16 |
+| GAP | gap_policy_sweep_pc_20260601_0012 | 1403696–1403710 | 1,2,4,8,16 |
+| GMS | gms_policy_sweep_pc_20260601_0012 | 1403711–1403725 | 1,2,4,8,16 |
+| Ligra | ligra_policy_sweep_pc_20260601_0012 | 1403726–1403740 | 1,2,4,8,16 |
+| ML | ml_policy_sweep_pc_20260601_0012 | 1403741–1403755 | 1,2,4,8,16 |
 
 ### Configuration (Exp-002)
 
@@ -50,14 +50,15 @@
 - **Liveness Data**: PC-indexed bHIST (512 entries, 8-way)
 - **MID_THD**: Default = 1 (threshold for DoA classification)
 
-### Submission Details (Exp-002, 2026-06-01)
+### Submission Details (Exp-002, 2026-06-01, corrected)
 
-- Total jobs: 21 (7 suites × 3 policies)
-- Total traces: ~375 across all suites
+- Total jobs: 105 (7 suites × 3 policies × 5 thresholds)
+- Total traces: ~375 × 15 = ~5,625 across all suites/configs
 - Warmup: 50M cycles
 - Simulation: 100M cycles
-- Submission time: Sequential per suite, completed ~15 minutes
+- Submission time: Sequential per suite, completed ~45 minutes
 - Monitor: `qstat -u $USER` on castillo cluster
+- Per-policy structure: `{suite}_policy_sweep_pc_20260601_0012/{policy}/thd{threshold}/`
 
 ### Design Changes from Exp-001
 

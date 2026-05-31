@@ -97,34 +97,42 @@ declare -a POLICIES=(
   "champsim_srrip_live:srrip_live_llc"
 )
 
+# ── Thresholds for liveness classification ──────────────────────────────────────
+THRESHOLDS=(1 2 4 8 16)
+
 echo "Suite         : ${token}"
 echo "Traces        : ${N}  (tasks ${TASK_RANGE})"
 echo "Policies      : ${#POLICIES[@]}"
+echo "Thresholds    : ${#THRESHOLDS[@]} (${THRESHOLDS[*]})"
+echo "Total configs : $(( ${#POLICIES[@]} * ${#THRESHOLDS[@]} ))"
 echo "Date          : ${DATE}"
 echo "Results base  : results/${BASE_LABEL}/"
 echo "Logs          : logs/${BASE_LABEL}/"
 echo ""
 
-# ── Submit all policies ────────────────────────────────────────────────────────
+# ── Submit all policy × threshold combinations ────────────────────────────────
 for policy_spec in "${POLICIES[@]}"; do
   IFS=":" read -r BINARY POLICY_NAME <<< "$policy_spec"
 
-  RUN_LABEL="${BASE_LABEL}/${POLICY_NAME}"
-  mkdir -p "${PROJECT_ROOT}/results/${RUN_LABEL}"
+  for thd in "${THRESHOLDS[@]}"; do
+    RUN_LABEL="${BASE_LABEL}/${POLICY_NAME}/thd${thd}"
+    mkdir -p "${PROJECT_ROOT}/results/${RUN_LABEL}"
 
-  raw=$(qsub -t "$TASK_RANGE" \
-             -N "pol_${token}_${POLICY_NAME}" \
-             -o "${LOG_DIR}/" \
-             -e "${LOG_DIR}/" \
-             -l h_rt=24:00:00 \
-             -l mem_free=1G \
-             -wd "$PROJECT_ROOT" \
-             -v WARMUP="$WARMUP",SIM="$SIM",\
+    raw=$(qsub -t "$TASK_RANGE" \
+               -N "pol_${token}_${POLICY_NAME}_thd${thd}" \
+               -o "${LOG_DIR}/" \
+               -e "${LOG_DIR}/" \
+               -l h_rt=24:00:00 \
+               -l mem_free=1G \
+               -wd "$PROJECT_ROOT" \
+               -v WARMUP="$WARMUP",SIM="$SIM",\
 TRACE_DIR="$TRACE_DIR",TRACE_EXT="$TRACE_EXT",\
-RUN_LABEL="$RUN_LABEL",BINARY="$BINARY" \
-             "${PROJECT_ROOT}/scripts/submit/run_cs.sh")
-  jid=$(echo "$raw" | awk '/Your job/ {print $3}' | cut -d. -f1)
-  echo "  [jid=${jid}] ${POLICY_NAME} (${BINARY})"
+RUN_LABEL="$RUN_LABEL",BINARY="$BINARY",\
+MID_THD="$thd" \
+               "${PROJECT_ROOT}/scripts/submit/run_cs.sh")
+    jid=$(echo "$raw" | awk '/Your job/ {print $3}' | cut -d. -f1)
+    echo "  [jid=${jid}] ${POLICY_NAME} thd=${thd} (${BINARY})"
+  done
 done
 
-finish_submission $(( ${#POLICIES[@]} * N )) "${BASE_LABEL}"
+finish_submission $(( ${#POLICIES[@]} * ${#THRESHOLDS[@]} * N )) "${BASE_LABEL}"
