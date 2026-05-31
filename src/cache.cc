@@ -232,6 +232,11 @@ void CACHE::load_predictor_settings()
   pfq_ema_alpha = getenv_double("PFQ_EMA_ALPHA", pfq_ema_alpha);
   pfq_ema_thd   = getenv_double("PFQ_EMA_THD", 10.0) / 100.0;
 
+  // Liveness-guided replacement: threshold for DoA/mostly-dead classification.
+  mid_thd = getenv_uint64("MID_THD", 1);
+  if (const char* v = std::getenv("MID_PROMOTE"); v && std::stoull(v))
+    mid_promote = true;
+
   // Replacement guidance: use bHIST signals to guide cache replacement decisions.
   if (const char* v = std::getenv("REPL_GUIDANCE"); v && std::stoull(v))
     repl_guidance_enable = true;
@@ -255,6 +260,25 @@ uint64_t CACHE::get_repl_guidance_score(uint64_t block_address, uint64_t dp_pc) 
   }
 
   return dead_count;
+}
+
+liveness_class CACHE::classify_block_liveness(uint64_t block_address, uint64_t pc) const
+{
+  // Query bHIST for DoA counter for this (PC, block_address) pair.
+  // Classify based on threshold: if DoA >= mid_thd → DoA, else mostly_alive.
+  uint64_t doa = 0;
+
+  if (use_pc_bhist) {
+    doa = bhist_pc.get(pc, block_address);
+  } else {
+    doa = bhist_flat.get(block_address);
+  }
+
+  // Classify based on DoA counter and the MID_THD threshold
+  if (doa >= mid_thd) {
+    return liveness_class::doa;
+  }
+  return liveness_class::mostly_alive;
 }
 
 void CACHE::record_characterization(uint64_t dp_pc, uint64_t block_address)

@@ -475,6 +475,9 @@ struct cache_queue_stats {
   uint64_t PTWQ_TO_CACHE = 0;
 };
 
+// Liveness classification for cache blocks based on eviction history
+enum class liveness_class { doa, mostly_dead, mostly_alive };
+
 class CACHE : public champsim::operable, public MemoryRequestConsumer, public MemoryRequestProducer
 {
   enum [[deprecated(
@@ -523,6 +526,8 @@ class CACHE : public champsim::operable, public MemoryRequestConsumer, public Me
   bool cbpred = false;
   uint64_t pconf_thd = 6; // phist confidence threshold
   uint64_t bconf_thd = 6; // bhist confidence threshold
+  uint64_t mid_thd = 1;   // min DoA-or-mostly-dead evictions before liveness guidance triggers
+  bool mid_promote = false; // promote DoA blocks to MRU on hit (srrip_live)
   uint64_t st_size = 2;   // shadow table capacity
 
   HistTable phist;           // PC → confidence (dpPred)
@@ -543,6 +548,10 @@ class CACHE : public champsim::operable, public MemoryRequestConsumer, public Me
   // Query bHIST for guidance score (dead_count) of a block for replacement.
   // Returns the dead_count from bHIST, or 0 if not found or guidance disabled.
   uint64_t get_repl_guidance_score(uint64_t block_address, uint64_t dp_pc) const;
+
+  // Classify block liveness based on PC-indexed bHIST DoA/mostly_dead counters.
+  // Used by srrip_live and ipv_live replacement policies to guide insertion/promotion.
+  liveness_class classify_block_liveness(uint64_t block_address, uint64_t pc) const;
 
   // Unbounded characterization: track all (PC, address) pairs to measure actual demand.
   // Enables data-driven sizing decisions: how many PCs and addresses per PC do we actually see?
