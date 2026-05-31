@@ -67,7 +67,7 @@ void CACHE::update_replacement_state(uint32_t triggering_cpu, uint32_t set, uint
 
   auto& rrpv = ::rrpv_values[this][set * NUM_WAY + way];
 
-  if (NAME == "cpu0_STLB" || NAME == "LLC") {
+  if (NAME == "LLC") {
     switch (classify_block_liveness(full_addr, ip)) {
       case liveness_class::doa:
         rrpv = hit ? (mid_promote ? 0 : ::maxRRPV - 1) : ::maxRRPV;
