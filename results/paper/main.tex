@@ -1,8 +1,5 @@
 \documentclass[10pt,twocolumn,letterpaper]{article}
 
-% ─────────────────────────────────────────────────────────────────────────────
-% Packages
-% ─────────────────────────────────────────────────────────────────────────────
 \usepackage[margin=0.75in]{geometry}
 \usepackage{graphicx}
 \usepackage{booktabs}
@@ -10,64 +7,38 @@
 \usepackage{times}
 \usepackage{hyperref}
 \usepackage{xcolor}
-\usepackage{listings}
 \usepackage{algorithm}
 \usepackage{algpseudocode}
 \usepackage{float}
 \usepackage{caption}
-\usepackage{subcaption}
-\usepackage{multirow}
-\usepackage{array}
 \usepackage{amsmath}
-\usepackage{amssymb}
 \usepackage{stfloats}
+\usepackage{xspace}
 
 \hypersetup{colorlinks=true, linkcolor=blue, urlcolor=blue, citecolor=blue}
 
-% Code styling
-\lstset{
-  basicstyle=\small\ttfamily,
-  keywordstyle=\color{blue},
-  commentstyle=\color{gray},
-  stringstyle=\color{red},
-  breaklines=true,
-  numbers=left,
-  numberstyle=\tiny,
-  stepnumber=1,
-  xleftmargin=2em,
-  frame=single,
-  language=C++
-}
-
-% Algorithm styling
 \algrenewcommand\algorithmicif{\textbf{if}}
 \algrenewcommand\algorithmicthen{\textbf{then}}
 \algrenewcommand\algorithmicelse{\textbf{else}}
 \algrenewcommand\algorithmicend{\textbf{end}}
-\algrenewcommand\algorithmicfor{\textbf{for}}
-\algrenewcommand\algorithmicdo{\textbf{do}}
 
-\newcommand{\srrip}{\textsc{SRRIP}}
-\newcommand{\ipv}{\textsc{IPV}}
-\newcommand{\lru}{\textsc{LRU}}
-\newcommand{\lfu}{\textsc{LFU}}
-\newcommand{\doa}{\textsc{DoA}}
-\newcommand{\bhist}{\textsc{bHIST}}
-\newcommand{\phist}{\textsc{pHIST}}
-\newcommand{\pfq}{\textsc{PFQ}}
-\newcommand{\stlb}{\textsc{STLB}}
-\newcommand{\llc}{\textsc{LLC}}
-\newcommand{\rrpv}{\textsc{RRPV}}
+\newcommand{\srrip}{\textsc{SRRIP}\xspace}
+\newcommand{\ipv}{\textsc{IPV}\xspace}
+\newcommand{\lru}{\textsc{LRU}\xspace}
+\newcommand{\doa}{\textsc{DoA}\xspace}
+\newcommand{\stlb}{\textsc{STLB}\xspace}
+\newcommand{\llc}{\textsc{LLC}\xspace}
+\newcommand{\rrpv}{\textsc{RRPV}\xspace}
 
-\title{Liveness-Guided Replacement Policies for Cache Hierarchies}
-\author{Oskar Tegby$^*$ and Alberto Ros}
+\title{Liveness-Guided LLC Replacement Policies\\
+       \large Draft}
+\author{Oskar Tegby \and Alberto Ros}
 \date{\today}
 
 \begin{document}
 
 \maketitle
 
-% Adjust float handling for two-column layout
 \setcounter{topnumber}{4}
 \setcounter{bottomnumber}{2}
 \setcounter{totalnumber}{6}
@@ -77,587 +48,292 @@
 \renewcommand{\floatpagefraction}{0.85}
 
 % ─────────────────────────────────────────────────────────────────────────────
-\begin{abstract}
-Modern replacement policies in caches struggle to distinguish between blocks with
-short remaining lifetimes (dead-on-arrival) and those with longer lifetimes.
-This paper proposes augmenting Static Re-Reference Interval Prediction (\srrip)
-and Insertion Policy Version (\ipv) replacement policies with liveness information
-tracked via per-PC history tables. By querying dead-on-arrival statistics at
-block insertion and hit time, we can make more informed replacement decisions.
-
-We evaluate our approach at two cache levels: first the last-level cache (\llc),
-where \srrip-Live achieves 4-5\% speedup on Qualcomm and 2-3\% on Google; then
-the second-level TLB (\stlb), where we extend the approach with learned promotion
-vectors. Applied to both cache levels simultaneously (\ipv-Live\_both), the
-complementary per-page and per-block signals yield \textbf{8\% speedup on
-Qualcomm and 4-5\% on Google} server workloads, demonstrating that liveness
-guidance is effective across the cache hierarchy.
-\end{abstract}
-
-% ─────────────────────────────────────────────────────────────────────────────
 \section{Introduction}
 % ─────────────────────────────────────────────────────────────────────────────
 
-Replacement policies in modern caches must make eviction decisions with incomplete
-information about future block reuse. Traditional policies like \lru operate on
-temporal locality alone, but temporal locality is not uniform across all program
-counters. Some PCs repeatedly generate dead-on-arrival (blocks evicted without
-further access), while others rarely do.
+The program counter (PC) of the load that brought a cache block in is a strong
+predictor of whether that block will be reused before eviction. Some PCs
+consistently generate \emph{dead-on-arrival} (\doa) blocks --- evicted without
+any subsequent access --- while others rarely do. Standard policies like \lru
+and \srrip ignore this signal entirely.
 
-The key insight is that the \emph{program counter} of the instruction that
-generated a cache block is a strong predictor of that block's lifetime within
-the cache. By maintaining per-PC history of which blocks died on arrival, we can
-apply more sophisticated insertion and promotion strategies to the standard
-\srrip and \ipv policies.
-
-This paper makes the following contributions:
-
-\begin{enumerate}
-  \item We propose PC-indexed liveness-guided variants of \srrip and \ipv that
-    integrate dead-on-arrival information into replacement decisions.
-
-  \item We introduce a PC-partitioned history table (\bhist) architecture that
-    efficiently tracks liveness information per (PC, address) pair, avoiding the
-    memory overhead of separate per-PC tables.
-
-  \item We demonstrate that liveness-guided \ipv-Live replacement with 3-way
-    liveness classification and learned promotion vectors achieves 8\% geomean
-    speedup on Qualcomm and 4-5\% on Google when applied to both \llc and
-    \stlb simultaneously, compared to 4-5\% and 2-3\% for LLC-only configurations.
-
-  \item We show that the same approach applies to the second-level TLB (\stlb),
-    where combined page-level and block-level liveness guidance provides
-    additive performance improvements.
-\end{enumerate}
+This report describes two replacement policies that exploit per-PC liveness
+history: \srrip-Live and \ipv-Live. Both track, per PC, how many consecutive
+times blocks from that PC were evicted dead, and use this count to guide
+insertion priority and promotion. We evaluate them at two cache levels
+(last-level cache and second-level TLB) across seven benchmark suites.
 
 % ─────────────────────────────────────────────────────────────────────────────
-\section{Background and Motivation}
+\section{Background}
 % ─────────────────────────────────────────────────────────────────────────────
 
-\subsection{Cache Replacement and Dead-on-Arrival}
+\srrip assigns each cache block a Re-Reference Prediction Value (\rrpv) between
+0 (predict imminent reuse) and $\text{maxRRPV}=3$ (predict distant reuse). On a
+miss, blocks are inserted at $\text{maxRRPV}-1$; on a hit, \rrpv is reset to 0.
+Eviction picks the block with the highest \rrpv, aging all blocks by 1 if none
+sits at $\text{maxRRPV}$.
 
-A block is considered \emph{dead-on-arrival} (\doa) if it is evicted from the
-cache without ever being accessed after insertion. For a cache with size $C$ and
-block size $B$, the number of blocks in the cache at any time is $C/B$. In
-practice, many modern workloads exhibit high \doa rates, ranging from 10\% to
-over 50\%, depending on the program and cache size.
+\ipv generalises this by replacing the fixed insertion and promotion rules with
+a five-element vector: on a miss, a block is inserted at $\text{ipv}[4]$; on a
+hit at current \rrpv $r$, it is promoted to $\text{ipv}[r]$. Different vectors
+can encode different lifetime expectations.
 
-Traditional replacement policies like \lru and \lfu treat all blocks identically
-at insertion time. They do not adapt based on which instruction (\doa) is more
-likely to generate short-lived accesses. This is a key missed opportunity.
+\textbf{Liveness classification.}
+Three classes are defined by how a block behaves during its residency.
+\doa: evicted with zero hits.
+Mostly-dead: at least one hit, but the last hit fell in the \emph{first half}
+of the block's residency (dead time $>$ live time).
+Mostly-alive: last hit in the \emph{second half} (live time $>$ dead time).
 
-\subsection{The Role of the Program Counter}
-
-The program counter at the time of load execution is strongly correlated with
-cache block lifetime. For instance:
-\begin{itemize}
-  \item Streaming prefetch loops often load data that is consumed once and never
-    reused, leading to high \doa rates.
-  \item Reuse loops that repeatedly access the same set of addresses show low
-    \doa rates.
-  \item Pointer-chasing traversals show intermediate \doa rates that depend on
-    pointer density and working set size.
-\end{itemize}
-
-By tracking per-PC \doa statistics, we can guide the insertion and promotion
-strategy for individual cache blocks.
-
-\subsection{History Tables and Liveness Classification}
-
-A history table is a small hardware structure that records per-PC statistics
-of cache block lifetimes. In this work, we focus on tracking a single counter:
-the number of times a block from PC $p$ was evicted without access (\doa count).
-
-We classify blocks into two liveness categories:
-\begin{itemize}
-  \item \textbf{Dead-on-Arrival (DoA)}: When the \doa count for a (PC, address)
-    pair exceeds a threshold $\theta$, we classify the block as \doa.
-  \item \textbf{Mostly-Alive}: All other blocks are considered mostly-alive.
-\end{itemize}
-
-This two-class scheme is simpler than tracking multiple liveness states, and as
-we will show, it is sufficient to capture the main performance benefits.
+\looseness=-1
+We track two saturating counters per PC: $\text{doa}[pc]$, which increments
+on each \doa eviction and resets to zero whenever the evicted block was
+accessed (i.e.\ on mostly-dead or mostly-alive evictions); and
+$\text{dead}[pc]$, which increments on each mostly-dead eviction and resets to
+zero on a mostly-alive eviction (left unchanged on \doa evictions, since \doa
+does not disprove a prior mostly-dead pattern).
+At prediction time a single threshold $\theta$ is applied to both counters:
+$\text{doa}[pc] \geq \theta$ classifies as \doa (checked first);
+$\text{dead}[pc] \geq \theta$ classifies as mostly-dead; otherwise mostly-alive.
+Section~\ref{sec:results} sweeps $\theta \in \{1, 2, 4, 8, 16\}$.
+For SPEC/DPC3, address indexing outperforms PC indexing; both are evaluated.
+In simulation the table is unbounded.
 
 % ─────────────────────────────────────────────────────────────────────────────
-\section{Liveness-Guided Replacement Policies}
+\section{Policies}
 % ─────────────────────────────────────────────────────────────────────────────
-
-\subsection{\srrip with Liveness Guidance (SRRIP-Live)}
-
-\srrip uses a per-block Re-Reference Prediction Value (\rrpv) to track how soon
-a block is likely to be reused. Blocks with high \rrpv values are considered
-less likely to be reused and are evicted first.
-
-Algorithm~\ref{alg:srrip_live_insert} and Algorithm~\ref{alg:srrip_live_hit}
-show the modified insertion and hit handling with liveness guidance.
 
 \begin{algorithm}[t!]
-\caption{\srrip-Live: Block Insertion with Liveness Guidance}
-\label{alg:srrip_live_insert}
+\caption{Per-PC counters: update on eviction and classify}
+\label{alg:pc_counter}
 \begin{algorithmic}[1]
-\Require Block address $addr$, Program counter $pc$
-\Ensure Block inserted with appropriate \rrpv
-
-\State $liveness \gets \text{classify\_liveness}(pc, addr)$
-
-\If{$liveness = \textsc{DoA}$}
-  \Comment{Dead-on-arrival blocks inserted as immediate eviction candidates}
-  \State $block.rrpv \gets \text{maxRRPV}$
-\Else
-  \Comment{Mostly-alive blocks use standard SRRIP insertion}
-  \State $block.rrpv \gets \text{maxRRPV} - 1$
+\State \textbf{On eviction:}
+\If{$\neg accessed$} \Comment{DoA: never hit during residency}
+  \State $\text{doa}[pc] \mathrel{+}= 1$
+  \Comment{$\text{dead}[pc]$ unchanged: DoA does not disprove a prior mostly-dead pattern}
+\ElsIf{$\mathit{dead\_tail} > \mathit{residence} / 2$} \Comment{mostly-dead}
+  \State $\text{dead}[pc] \mathrel{+}= 1$
+  \State $\text{doa}[pc] \gets 0$ \Comment{accessed: not DoA}
+\Else \Comment{mostly-alive}
+  \State $\text{doa}[pc]  \gets 0$
+  \State $\text{dead}[pc] \gets 0$
 \EndIf
-
-\State $block.pc \gets pc$
-\State $block.valid \gets \text{True}$
-\State insert $block$ into cache set
-\end{algorithmic}
-\end{algorithm}
-
-\begin{algorithm}[t!]
-\caption{\srrip-Live: Block Hit Handling with Liveness Promotion}
-\label{alg:srrip_live_hit}
-\begin{algorithmic}[1]
-\Require Block address $addr$, Program counter $pc$
-\Ensure Block promoted with liveness-aware \rrpv update
-
-\State $block \gets \text{find\_block}(addr)$
-\State $liveness \gets \text{classify\_liveness}(pc, addr)$
-
-\If{$liveness = \textsc{DoA}$}
-  \Comment{DoA hit: block showed reuse despite prediction}
-  \State $block.rrpv \gets \text{maxRRPV} - 1$
-  \State $\text{bhist\_pc.increment\_hit}(pc, addr)$
+\medskip
+\State \textbf{Classify} (threshold $\theta$):
+\If{$\text{doa}[pc] \geq \theta$}
+  \State \Return \doa \Comment{DoA checked first; takes priority if both saturate}
+\ElsIf{$\text{dead}[pc] \geq \theta$}
+  \State \Return mostly-dead
 \Else
-  \Comment{Mostly-alive hit: standard SRRIP promotion}
-  \State $block.rrpv \gets 0$
+  \State \Return mostly-alive
 \EndIf
 \end{algorithmic}
 \end{algorithm}
 
-\subsection{\ipv with Liveness Guidance (IPV-Live)}
+\subsection{SRRIP-Live}
 
-The Insertion Policy Version (\ipv) is an extension of \srrip that uses
-information from load instructions to determine insertion priority. We extend
-\ipv similarly:
+On a miss, \doa blocks are inserted at $\text{maxRRPV}$ (immediate eviction
+candidates); mostly-dead and mostly-alive blocks both insert at
+$\text{maxRRPV}-1$ (standard \srrip priority), but differ in how they are
+promoted.  On a hit, \doa blocks receive a partial promotion to
+$\text{maxRRPV}-1$ (they showed unexpected reuse but remain deprioritised);
+mostly-dead blocks receive a moderate promotion to $\text{maxRRPV}-2$;
+mostly-alive blocks are fully promoted to 0.
 
 \begin{algorithm}[t!]
-\caption{\ipv-Live: Block Insertion with Load-based Liveness}
-\label{alg:ipv_live_insert}
+\caption{\srrip-Live}
+\label{alg:srrip_live}
 \begin{algorithmic}[1]
-\Require Block address $addr$, Program counter $pc$, Load type $load\_type$
-\Ensure Block inserted with load-aware and liveness-aware \rrpv
-
-\State $liveness \gets \text{classify\_liveness}(pc, addr)$
-
-\If{$liveness = \textsc{DoA}$}
-  \State $block.rrpv \gets \text{maxRRPV}$
-\Else
-  \If{$load\_type = \textsc{PREFETCH}$}
-    \Comment{Prefetch instructions often generate DoA blocks}
-    \State $block.rrpv \gets \text{maxRRPV} - 1$
-  \Else
-    \Comment{Demand loads assumed more likely to be reused}
-    \State $block.rrpv \gets \text{maxRRPV} - 2$
-  \EndIf
+\State \textbf{On miss} (insert):
+\State $\mathit{class} \gets \text{classify}(pc)$
+\If{$\mathit{class} = \doa$}
+  \State $block.rrpv \gets \text{maxRRPV}$     \Comment{evict first}
+\ElsIf{$\mathit{class} = \text{mostly-dead}$}
+  \State $block.rrpv \gets \text{maxRRPV} - 1$ \Comment{standard priority; moderate promotion on hit}
+\Else \Comment{mostly-alive}
+  \State $block.rrpv \gets \text{maxRRPV} - 1$ \Comment{standard priority; full promotion on hit}
 \EndIf
-
-\State $block.pc \gets pc$
-\State insert $block$ into cache set
+\medskip
+\State \textbf{On hit} (promote):
+\State $\mathit{class} \gets \text{classify}(pc)$
+\If{$\mathit{class} = \doa$}
+  \State $block.rrpv \gets \text{maxRRPV} - 1$ \Comment{partial: stays deprioritised}
+\ElsIf{$\mathit{class} = \text{mostly-dead}$}
+  \State $block.rrpv \gets \text{maxRRPV} - 2$ \Comment{moderate promotion}
+\Else
+  \State $block.rrpv \gets 0$                  \Comment{full: protect the block}
+\EndIf
 \end{algorithmic}
 \end{algorithm}
 
-\subsection{PC-Indexed History Table (bHIST) and Updates}
+\subsection{IPV-Live}
 
-The core infrastructure supporting these policies is a PC-indexed history table.
-The table stores per-PC counters for dead-on-arrival classification:
+\ipv-Live selects a per-class IPV and applies it to both insertion and
+promotion. One vector is defined per liveness class:
+
+\begin{center}
+\small
+\begin{tabular}{lll}
+\toprule
+Class & IPV & Effect \\
+\midrule
+\doa         & $\{0,0,1,2,3\}$ & ins.\ 3; $3\!\to\!2\!\to\!1\!\to\!0$ \\
+Mostly-dead  & $\{0,0,0,2,3\}$ & ins.\ 3; $3\!\to\!2\!\to\!0$         \\
+Mostly-alive & $\{0,0,0,0,2\}$ & ins.\ 2; $2\!\to\!0$                  \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+Both \doa and mostly-dead blocks enter as eviction candidates ($\text{ipv}[4]=3$)
+but earn protection progressively through hits. Mostly-alive blocks enter at
+priority 2 and jump to full protection on any hit.
 
 \begin{algorithm}[t!]
-\caption{\bhist: Update on Cache Block Eviction}
-\label{alg:bhist_update}
+\caption{\ipv-Live: insertion and promotion}
+\label{alg:ipv_live}
 \begin{algorithmic}[1]
-\Require Evicted block with address $addr$, original PC $pc$, accessed flag $accessed$
-\Ensure Update \bhist with eviction statistics
-
-\State $entry \gets \text{bhist\_pc.lookup}(pc, addr)$
-
-\If{$accessed = \textsc{False}$}
-  \Comment{Block was never accessed; increment DoA counter}
-  \State $entry.doa\_count \gets entry.doa\_count + 1$
+\State $\mathit{class} \gets \text{classify}(pc)$
+\State $\mathbf{v} \gets \text{ipv}[\mathit{class}]$
+\Comment{5-element vector: $\mathbf{v}[0\ldots3]$ maps current \rrpv $\to$ next \rrpv on hit;
+         $\mathbf{v}[4]$ is the insertion \rrpv}
+\If{$miss$}
+  \State $block.rrpv \gets \mathbf{v}[4]$ \Comment{set initial \rrpv from insertion slot}
+\Else \Comment{hit}
+  \State $block.rrpv \gets \mathbf{v}[block.rrpv]$ \Comment{advance one step along promotion trajectory}
 \EndIf
-
-\State $entry.total\_evictions \gets entry.total\_evictions + 1$
-
-\If{\text{bHIST is full}}
-  \Comment{LFU or LRU replacement if table overflows}
-  \State $victim \gets \text{select\_victim\_by\_repl\_policy}()$
-  \State $\text{evict}(victim)$
-\EndIf
-
-\State $\text{bhist\_pc.update}(pc, addr, entry)$
 \end{algorithmic}
 \end{algorithm}
 
-\begin{algorithm}[t!]
-\caption{\bhist: Liveness Classification Query}
-\label{alg:classify_liveness}
-\begin{algorithmic}[1]
-\Require Program counter $pc$, Block address $addr$
-\Ensure Liveness classification: \doa or mostly-alive
-
-\State $entry \gets \text{bhist\_pc.lookup}(pc, addr)$
-
-\If{$entry \neq \text{NULL}$}
-  \State $doa\_rate \gets entry.doa\_count / \max(entry.total\_evictions, 1)$
-  \If{$doa\_rate \geq \theta$}
-    \Return \doa
-  \Else
-    \Return mostly-alive
-  \EndIf
-\Else
-  \Comment{No history; default to mostly-alive}
-  \Return mostly-alive
-\EndIf
-\end{algorithm}
-\end{algorithm}
-
-The history table uses a set-associative structure keyed by PC, with each entry
-storing:
-\begin{itemize}
-  \item \textbf{PC}: Program counter
-  \item \textbf{doa\_count}: Number of times blocks from this PC were evicted without access
-  \item \textbf{total\_evictions}: Total number of blocks from this PC evicted
-  \item \textbf{related\_addresses}: Set of addresses recently seen from this PC
-\end{itemize}
-
-When the table overflows, we use either \lfu or \lru replacement to evict the
-least useful entry, depending on configuration.
-
 % ─────────────────────────────────────────────────────────────────────────────
-\section{Experimental Methodology}
+\section{Experimental Setup}
 % ─────────────────────────────────────────────────────────────────────────────
 
-\subsection{Simulation Framework}
-
-We evaluate our approach using ChampSim, a cycle-accurate x86 simulator. The
-baseline configuration includes:
+We simulate with ChampSim using the configuration in
+Table~\ref{tab:config}. Each trace runs for 50M warmup + 100M simulation
+instructions. Speedup is geomean IPC relative to \lru.
 
 \begin{table}[t!]
 \centering
 \small
-\caption{Baseline Cache Configuration}
+\caption{Simulated system configuration}
 \label{tab:config}
-\begin{tabular}{lr}
+\begin{tabular}{lrr}
 \toprule
-\textbf{Component} & \textbf{Configuration} \\
+\textbf{Component} & \textbf{Size / Entries} & \textbf{Latency} \\
 \midrule
-L1 Instruction Cache & 32 KB, 4-way, LRU \\
-L1 Data Cache & 32 KB, 8-way, LRU \\
-L2 Unified Cache & 256 KB, 8-way, LRU \\
-LLC (L3) & 8 MB, 16-way, configurable replacement \\
-STLB & 512 entries, configurable replacement \\
+L1I  & 32~KB, 8-way  & 4~cycles \\
+L1D  & 32~KB, 8-way  & 5~cycles \\
+L2C  & 256~KB, 8-way & 11~cycles \\
+LLC  & 2~MB, 16-way  & 40~cycles \\
 \midrule
-Prefetcher & L2C prefetcher (next-line), enabled \\
+iTLB & 64, 4-way     & 1~cycle \\
+dTLB & 64, 4-way     & 1~cycle \\
+STLB & 1{,}024, 8-way & 8~cycles \\
+\midrule
+DRAM & 3200~MHz, 1 channel & $t_{RP}$/$t_{RCD}$/$t_{CAS}$ = 12.5~ns \\
 \bottomrule
 \end{tabular}
 \end{table}
 
-\subsection{Benchmark Suites}
+Seven benchmark suites are evaluated (Table~\ref{tab:traces}).
 
-We evaluate on three representative benchmark suites:
-
-\begin{itemize}
-  \item \textbf{Qualcomm (QMM)}: 45 traces from real Qualcomm platform workloads,
-    representing server applications with diverse memory access patterns.
-
-  \item \textbf{Google}: 15 traces from Google's data center workloads, emphasizing
-    data center performance.
-
-  \item \textbf{DPC3}: 14 traces from the Data Prefetching Championship 3, used in
-    prior cache research.
-\end{itemize}
-
-\subsection{Methodology}
-
-For each workload, we simulate 50M warmup cycles followed by 100M simulation
-cycles. We measure instructions per cycle (IPC) as the primary metric. Results
-are reported as geomean speedup relative to the \lru baseline.
-
-The \bhist size varies by experiment:
-\begin{itemize}
-  \item \textbf{exp016}: Fixed 512-way PC index, 8-way address hash (512×8 budget)
-  \item \textbf{exp017}: Unbounded tracking (for characterization only)
-\end{itemize}
-
-Liveness threshold $\theta$ is swept in the range $\{1, 2, 4, 8, 16\}$.
+\begin{table}[t!]
+\centering
+\small
+\caption{Benchmark suites}
+\label{tab:traces}
+\begin{tabular}{llr}
+\toprule
+\textbf{Suite} & \textbf{Domain} & \textbf{Traces} \\
+\midrule
+QMM    & Qualcomm server workloads & 45 \\
+Google & Data-centre workloads     & 15 \\
+DPC3   & SPEC CPU                  & 14 \\
+GAP    & Graph analytics           &  6 \\
+GMS    & Graph management systems  &  6 \\
+Ligra  & Graph processing          &  6 \\
+ML     & AI/ML inference           &  4 \\
+\midrule
+       & \textbf{Total}            & \textbf{96} \\
+\bottomrule
+\end{tabular}
+\end{table}
 
 % ─────────────────────────────────────────────────────────────────────────────
 \section{Results}
+\label{sec:results}
 % ─────────────────────────────────────────────────────────────────────────────
 
-\subsection{LLC-Only: Threshold Sensitivity}
+\subsection{Liveness characterisation}
 
-Figure~\ref{fig:llc_thd} shows the impact of varying the \doa threshold
-$\theta$ on LLC-only performance with \srrip-Live. Per-suite geomean view
-reveals optimal threshold for each benchmark suite.
+Figure~\ref{fig:liveness} shows the per-block (\llc) and per-page (\stlb)
+liveness breakdown for each suite, measured by actual hit count at eviction under LRU. The \doa fraction
+dominates everywhere: 51--97\% at the LLC and 56--97\% at the \stlb,
+confirming that dead blocks are not an edge case. QMM has the largest
+mostly-alive fraction at both levels (LLC 13\%, \stlb 18\%), which is
+consistent with having the most headroom for liveness-guided protection.
+ML is the extreme opposite: 97\% \doa at both levels and almost no
+mostly-alive blocks, which immediately explains the regression --- the
+policy aggressively deprioritises nearly every insertion but has almost
+nothing left worth protecting.
+
+Note that Figure~\ref{fig:liveness} is a ground-truth measurement: per-block for the \llc and per-page for the \stlb.
+The replacement policies operate on a per-\textsc{PC} prediction, which is
+a weaker signal: a PC with a high historical \doa rate will trigger \doa
+classification on future inserts, but the correlation between the two is
+imperfect. Understanding how well per-\textsc{PC} prediction tracks per-block
+ground truth is a question left for further characterisation.
 
 \begin{figure*}[t!]
 \centering
-\includegraphics[width=0.95\textwidth]{../plots/llc_threshold_combined.png}
-\caption{\llc threshold sensitivity: three-policy comparison (\lru baseline,
-\srrip without liveness, \srrip-Live with liveness guidance) across five
-benchmark suites. Each subplot shows geomean speedup vs \lru across \doa
-thresholds $\theta \in \{1, 2, 4, 8, 16\}$. \textbf{Key findings}: (1) \srrip
-speedup is constant across thresholds; (2) \srrip-Live performance varies
-significantly with threshold, indicating liveness guidance is effective; (3)
-QMM and Google show strongest improvements (4-5\% and 2-3\% respectively at
-optimal $\theta$), while DPC3, GAP, GMS show modest gains, suggesting
-workload-dependent sensitivity to DoA classification threshold.}
-\label{fig:llc_thd}
+\includegraphics[width=\textwidth]{../plots/liveness_rates.png}
+\caption{Per-block (\llc, left) and per-page (\stlb, right) liveness breakdown under LRU.}
+\label{fig:liveness}
 \end{figure*}
 
-\subsection{LLC-Only: Per-Workload Analysis}
+\subsection{Performance results}
 
-To identify which workloads benefit most from liveness guidance, Figure~\ref{fig:llc_per_wl}
-shows per-workload speedup at the optimal threshold for each suite, sorted by
-gain (descending). Trace names are shortened for readability.
+Sweeping $\theta$ across both policies and cache levels
+(Figures~\ref{fig:llc_thd} and~\ref{fig:stlb_thd}) shows that the gains are
+concentrated in a few suites. In the LLC, GAP benefits most from \ipv-Live
+(+11.2\% vs +7.9\% for \srrip-Live), and DPC3 gains five times more with
+\ipv-Live (+2.5\%) than \srrip-Live (+0.5\%); Ligra is the exception where
+\srrip-Live (+4.1\%) outperforms \ipv-Live (+2.9\%). QMM, Google, and GMS
+behave similarly under both policies. ML regresses under both ($\approx -7.5\%$),
+consistent with its near-total lack of mostly-alive blocks in Figure~\ref{fig:liveness}.
 
 \begin{figure*}[t!]
 \centering
-\includegraphics[width=0.95\textwidth]{../plots/optimal_thd_all7_pc.png}
-\caption{Per-workload \srrip-Live speedup at optimal \doa threshold. Three
-suites, each showing all individual workloads sorted by speedup (descending).
-Shortened trace names (``srv\_743'' $\rightarrow$ ``743'') for readability. SRRIP
-baseline (orange) included for reference. \textbf{Key finding}: High variance
-within suites; some QMM workloads exceed 6\%, others show minimal improvement,
-suggesting application-dependent DoA patterns.}
-\label{fig:llc_per_wl}
+\begin{minipage}[t]{0.48\textwidth}
+  \centering
+  \includegraphics[width=\linewidth]{../plots/llc_threshold_combined.png}
+  \caption{\llc-only threshold sensitivity. \srrip-Live (green), \ipv-Live (purple).}
+  \label{fig:llc_thd}
+\end{minipage}
+\hfill
+\begin{minipage}[t]{0.48\textwidth}
+  \centering
+  \includegraphics[width=\linewidth]{../plots/stlb_threshold_combined.png}
+  \caption{\stlb-only threshold sensitivity. \srrip-Live (green), \ipv-Live (purple).}
+  \label{fig:stlb_thd}
+\end{minipage}
 \end{figure*}
 
-\subsection{Combined LLC+STLB Policies}
+When both cache levels are guided simultaneously
+(Figure~\ref{fig:combined}), QMM's gains are near-additive: LLC (+3.8\%) and
+\stlb (+5.5\%) combine to +8.1\%, consistent with the two levels identifying
+independent sets of \doa blocks. Google's gain is entirely LLC-driven
+(+4.2\%); the \stlb adds nothing, which matches its high LLC MPKI dominating
+performance. DPC3 shows unexpected synergy: +0.5\% and +0.1\% individually,
+yet +2.6\% combined. \ipv-Live gives a marginal extra gain on QMM (+8.2\%) but
+not on DPC3 or Google.
 
-Table~\ref{tab:combined} compares different combinations of replacement policies
-across both LLC and STLB.
-
-\begin{table}[t!]
+\begin{figure*}[t!]
 \centering
-\small
-\caption{Policy Performance Breakdown: LLC-Only vs.\ Combined LLC+STLB}
-\label{tab:combined}
-\begin{tabular}{lrrr}
-\toprule
-\textbf{Policy Configuration} & \textbf{QMM} & \textbf{Google} & \textbf{DPC3} \\
-\midrule
-\multicolumn{4}{l}{\textbf{LLC Only:}} \\
-LRU (baseline) & 0.0\% & 0.0\% & 0.0\% \\
-SRRIP & +2.1\% & +1.8\% & +3.2\% \\
-SRRIP-Live (THD=4) & +4-5\% & +2-3\% & +2\% \\
-IPV & +2.9\% & +2.1\% & +1.5\% \\
-IPV-Live (THD=4) & +3-4\% & +2-3\% & +2\% \\
-\midrule
-\multicolumn{4}{l}{\textbf{Combined LLC + STLB:}} \\
-SRRIP-Live + STLB baseline & +4-5\% & +2-3\% & +2\% \\
-IPV-Live + STLB baseline & +3-4\% & +2-3\% & +2\% \\
-SRRIP-Live\_both & +5-6\% & +3-4\% & +2-3\% \\
-IPV-Live\_both (THD=4) & +\textbf{8}\% & +\textbf{4-5}\% & +2-3\% \\
-\bottomrule
-\end{tabular}
-\end{table}
-
-The combination of IPV-Live in the LLC with IPV-Live in the STLB
-(\ipv-Live\_both) yields the strongest results, with 8\% speedup on Qualcomm
-and 4-5\% on Google. This demonstrates that liveness guidance is effective at
-both cache levels, with the 3-way liveness classification and learned promotion
-vectors providing robust recovery from mispredictions.
-
-\subsection{Combined LLC+STLB: Additive Gains}
-
-Applying \ipv-Live to both \llc and \stlb simultaneously yields substantially
-higher speedups. Table~\ref{tab:combined} summarizes the progression from
-LLC-only to combined configurations, showing the additive benefit of per-page
-liveness guidance in the \stlb.
-
-The key insight is that block-level liveness (LLC) and page-level liveness
-(\stlb) provide complementary signals: even when LLC-STLB \doa correlation is
-low (Google, QMM $\approx 4\%$), liveness guidance at both levels yields
-greater gains than either alone.
-
-\subsection{History Table Overhead and Storage}
-
-The PC-indexed history table adds minimal overhead. With 512 PC entries and 8-way
-address hashing:
-
-\begin{itemize}
-  \item \textbf{Total storage}: $(512 \text{ entries}) \times (64\text{-bit PC} + 32\text{-bit counters}) = 48 \text{ KB}$
-
-  \item \textbf{Lookup latency}: Single cycle (set-associative lookup)
-
-  \item \textbf{Update frequency}: Once per block eviction (amortized over block lifetime)
-\end{itemize}
-
-Compared to the 8 MB LLC, this represents $< 0.6\%$ storage overhead, making it
-practical for real hardware.
-
-% ─────────────────────────────────────────────────────────────────────────────
-\section{Related Work}
-% ─────────────────────────────────────────────────────────────────────────────
-
-\subsection{Liveness-Based Policies}
-
-Prior work has explored using lifetime information to guide cache management:
-
-\begin{itemize}
-  \item \textbf{SRRIP}~\cite{jaleel2010high}: The baseline static re-reference
-    interval prediction policy, which uses static patterns of load instructions
-    to assign insertion priorities. Our work extends this to use dynamic
-    per-PC liveness statistics.
-
-  \item \textbf{Temporal Dead Reckoning}~\cite{lin2015toward}: Tracks per-load
-    statistics to predict block lifetime. Similar in spirit to our approach but
-    uses different classification granularity.
-
-  \item \textbf{Adaptive Insertion Policies}~\cite{qureshi2007adaptive}:
-    Complements our replacement work by making insertion decisions adaptive
-    based on cache miss patterns. Can be combined with liveness guidance.
-\end{itemize}
-
-\subsection{History Table Designs}
-
-Several prior systems use program counter indexing for cache decisions:
-
-\begin{itemize}
-  \item \textbf{Markov Prefetching}~\cite{joseph2001prefetching}: Uses PC-indexed
-    history to predict future cache misses and guide prefetch decisions.
-
-  \item \textbf{Cache Replacement Customization}~\cite{blakely2015toward}:
-    Extends SRRIP-style policies to vary insertion priority based on application
-    and workload characteristics.
-
-  \item \textbf{Address-Correlated Prefetching}~\cite{mutlu2008address}:
-    Demonstrates the effectiveness of PC-indexed correlations in predicting
-    cache behavior and future memory requests.
-\end{itemize}
-
-% ─────────────────────────────────────────────────────────────────────────────
-\section{Discussion and Future Work}
-% ─────────────────────────────────────────────────────────────────────────────
-
-\subsection{Key Findings}
-
-Our results demonstrate that liveness-guided replacement policies are a
-promising direction for improving cache performance:
-
-\begin{enumerate}
-  \item \textbf{Per-PC patterns are strong}: Workloads exhibit significant
-    variation in dead-on-arrival rates across program counters, which can be
-    exploited for better insertion decisions.
-
-  \item \textbf{Threshold matters}: The optimal \doa threshold varies by
-    workload, with server workloads (QMM, Google) preferring lower thresholds
-    (4-8), while desktop workloads (DPC3) prefer higher thresholds (8-16).
-
-  \item \textbf{Applicability across cache levels}: The same liveness-guided
-    approach applies to both the LLC and STLB, suggesting broad applicability.
-
-  \item \textbf{Storage overhead is minimal}: At 48 KB for a practical
-    configuration, the history table adds negligible overhead.
-\end{enumerate}
-
-\subsection{Open Questions}
-
-\begin{itemize}
-  \item \textbf{Prefetcher interaction}: When prefetching is enabled, the
-    relationship between prefetch-generated blocks and \doa rates becomes
-    complex. Further investigation is needed to understand optimal configurations
-    in prefetch-enabled systems.
-
-  \item \textbf{Multi-threshold designs}: Rather than a single global threshold,
-    per-workload or adaptive thresholds might improve generalization.
-
-  \item \textbf{3-class vs 2-class classification}: We use a simplified 2-class
-    scheme (DoA vs mostly-alive). Restoring a 3-class system with distinct
-    handling of ``mostly-dead'' blocks may yield further improvements.
-\end{itemize}
-
-\subsection{Recommended Next Steps}
-
-\begin{enumerate}
-  \item \textbf{Hardware implementation study}: Validate that PC-indexed history
-    lookups remain single-cycle in a more detailed microarchitecture model.
-
-  \item \textbf{Adaptive thresholding}: Implement feedback-based threshold
-    adjustment during runtime based on observed \doa rates.
-
-  \item \textbf{Machine learning integration}: Use the \bhist data to train
-    lightweight neural networks for insertion priority prediction.
-\end{enumerate}
-
-% ─────────────────────────────────────────────────────────────────────────────
-\section{Conclusion}
-% ─────────────────────────────────────────────────────────────────────────────
-
-We have presented liveness-guided variants of SRRIP and IPV replacement policies
-that use per-PC history tables to better predict block lifetime. By classifying
-blocks as dead-on-arrival or mostly-alive based on historical \doa rates, we
-enable more informed insertion and promotion decisions.
-
-Our evaluation on QMM, Google, and DPC3 workloads demonstrates consistent
-improvements, with server workloads showing 6-8\% speedup and modest improvements
-on desktop workloads. The approach is practical, adding less than 0.6\% storage
-overhead while remaining amenable to single-cycle lookup.
-
-Future work will explore adaptive thresholding, hardware implementation details,
-and integration with machine learning techniques to further refine the
-classification.
-
-% ─────────────────────────────────────────────────────────────────────────────
-\section{Data Availability and Reproducibility}
-% ─────────────────────────────────────────────────────────────────────────────
-
-All experimental data, simulation parameters, and analysis scripts are documented
-in the supplementary materials. The key artifacts are:
-
-\begin{itemize}
-  \item \textbf{DATA\_SOURCES.md}: High-level mapping of figures to experimental
-    configurations, benchmark suites, and speedup numbers.
-
-  \item \textbf{DATA\_PROVENANCE.md}: Comprehensive provenance documentation
-    including git commit hashes, cluster job IDs, script parameters, and
-    instructions for reproducing results.
-
-  \item \textbf{Benchmark Suite Details}:
-    \begin{itemize}
-      \item SPEC (DPC3): 14 traces from Mazumdar et al.\ (HPCA 2021)
-      \item Qualcomm (QMM): 45 server platform traces
-      \item Google: 15 data center traces
-      \item GAP, Ligra, GMS, AI/ML: 4-6 traces each
-    \end{itemize}
-
-  \item \textbf{Simulation Configuration}: 50M warmup + 100M measurement cycles
-    per trace, cycle-accurate ChampSim simulator, 8 MB LLC 16-way, 512-entry STLB.
-
-  \item \textbf{Source Code}: Implementation available in the
-    \texttt{liveness-replacement} branch (commit \texttt{99539c2ac032} and earlier).
-    Key commits:
-    \begin{itemize}
-      \item \texttt{547bc52356ef}: SRRIP-Live implementation
-      \item \texttt{72ec846a5f91}: IPV-Live with learned vectors
-      \item \texttt{24fe4735adcf}: 3-way liveness classification
-      \item \texttt{1287e910835e}: Combined LLC+STLB policies
-    \end{itemize}
-\end{itemize}
-
-% ─────────────────────────────────────────────────────────────────────────────
-\section*{Acknowledgments}
-% ─────────────────────────────────────────────────────────────────────────────
-
-This work was supported by the Computer Architecture Group at the University of Murcia.
-
-% ─────────────────────────────────────────────────────────────────────────────
-% References
-% ─────────────────────────────────────────────────────────────────────────────
-
-\bibliographystyle{plain}
-\bibliography{references}
+\includegraphics[width=0.95\textwidth]{../plots/combined_llc_stlb_comparison.png}
+\caption{Geomean speedup for four policy configurations across the three suites
+with combined \llc+\stlb data available.}
+\label{fig:combined}
+\end{figure*}
 
 \end{document}

@@ -25,6 +25,7 @@
 #include <list>
 #include <map>
 #include <set>
+#include <unordered_map>
 #include <string>
 #include <vector>
 
@@ -32,6 +33,8 @@
 #include "champsim_constants.h"
 #include "memory_class.h"
 #include "operable.h"
+
+enum class liveness_class { doa, mostly_dead, mostly_alive };
 
 // Bounded history table with pluggable replacement policy.
 // Used for both pHIST (PC-indexed) and bHIST (address-indexed).
@@ -58,13 +61,19 @@ public:
     stats_.queries++;
     for (const auto& e : entries_) {
       if (e.valid && e.key == key) {
-        if (e.value > 0) {
+        if (e.doa > 0) {
           stats_.table_hits++;
           if (e.promoted) { stats_.promoted_hits++; e.promoted = false; }
         }
-        return e.value;
+        return e.doa;
       }
     }
+    return 0;
+  }
+
+  uint64_t get_dead(uint64_t key) const {
+    for (const auto& e : entries_)
+      if (e.valid && e.key == key) return e.mostly_dead;
     return 0;
   }
 
@@ -74,30 +83,43 @@ public:
     for (auto& e : entries_) e.promoted = false;
   }
 
-  void update(uint64_t key, bool accessed) {
+  void update(uint64_t key, liveness_class lv) {
+    const bool accessed = (lv != liveness_class::doa);
     // 1. Main table hit.
     for (auto& e : entries_) {
       if (e.valid && e.key == key) {
-        e.value = accessed ? 0 : std::min(e.value + 1, MAX_COUNTER);
+        switch (lv) {
+          case liveness_class::doa:
+            e.doa = std::min(e.doa + 1, MAX_COUNTER);
+            break;
+          case liveness_class::mostly_dead:
+            e.mostly_dead = std::min(e.mostly_dead + 1, MAX_COUNTER);
+            e.doa = 0;
+            break;
+          case liveness_class::mostly_alive:
+            e.doa = 0;
+            e.mostly_dead = 0;
+            break;
+        }
         on_hit(e, accessed);
         return;
       }
     }
-    // 2. Promotion buffer.
+    // 2. Promotion buffer: tracks DoA confirmations only.
     if (buf_cap_ > 0) {
       for (auto& b : buffer_) {
         if (b.valid && b.key == key) {
-          if (accessed) {
-            b.dead_count = 0;
-          } else {
+          if (lv == liveness_class::doa) {
             b.dead_count++;
             try_promote();
+          } else {
+            b.dead_count = 0;
           }
           return;
         }
       }
-      // Not in main table or buffer: stage in buffer (dead evictions only).
-      if (!accessed) {
+      // Not in main table or buffer: stage in buffer on DoA evictions only.
+      if (lv == liveness_class::doa) {
         auto& bslot      = buf_victim();
         bslot.key        = key;
         bslot.dead_count = 1;
@@ -107,17 +129,20 @@ public:
       }
       return;
     }
-    // 3. No buffer: insert directly.
-    auto& slot  = victim_slot();
-    slot.key    = key;
-    slot.value  = accessed ? 0 : 1;
-    slot.valid  = true;
-    on_insert(slot, accessed);
+    // 3. No buffer: insert on dead evictions; skip on mostly-alive.
+    if (lv != liveness_class::mostly_alive) {
+      auto& slot       = victim_slot();
+      slot.key         = key;
+      slot.doa         = (lv == liveness_class::doa) ? 1 : 0;
+      slot.mostly_dead = (lv == liveness_class::mostly_dead) ? 1 : 0;
+      slot.valid       = true;
+      on_insert(slot, accessed);
+    }
   }
 
   void reset(uint64_t key) {
     for (auto& e : entries_)
-      if (e.valid && e.key == key) { e.value = 0; return; }
+      if (e.valid && e.key == key) { e.doa = 0; e.mostly_dead = 0; return; }
   }
 
 private:
@@ -126,11 +151,12 @@ private:
   static constexpr uint32_t SRRIP_MAX  = 3;
 
   struct Entry {
-    uint64_t key      = 0;
-    uint64_t value    = 0;
-    uint64_t freq     = 0;
-    uint64_t ts       = 0;
-    uint32_t rrpv     = 0;
+    uint64_t key         = 0;
+    uint64_t doa         = 0;  // saturating count of consecutive DoA evictions
+    uint64_t mostly_dead = 0;  // saturating count of consecutive mostly-dead evictions
+    uint64_t freq        = 0;
+    uint64_t ts          = 0;
+    uint32_t rrpv        = 0;
     bool          valid    = false;
     mutable bool  promoted = false;  // set on buffer promotion; cleared on first hit
   };
@@ -223,9 +249,10 @@ private:
     auto& slot = victim_slot();
     const bool has_victim = slot.valid;
     const uint64_t victim_key = has_victim ? slot.key : 0;
-    slot.key   = best->key;
-    slot.value = best->dead_count;
-    slot.valid = true;
+    slot.key         = best->key;
+    slot.doa         = best->dead_count;
+    slot.mostly_dead = 0;
+    slot.valid       = true;
     on_promote(slot, best->dead_count);
     best->key        = has_victim ? victim_key : 0;
     best->dead_count = 0;
@@ -293,8 +320,17 @@ public:
     return 0;
   }
 
-  // Increment counter on dead eviction (!accessed); reset to 0 on live eviction.
-  void update(uint64_t pc, uint64_t addr, bool accessed) {
+  uint64_t get_dead(uint64_t pc, uint64_t addr) const {
+    for (const auto& e : entries_) {
+      if (!e.valid || e.pc != pc) continue;
+      for (const auto& a : e.addrs)
+        if (a.valid && a.addr == addr) return a.mostly_dead;
+      return 0;
+    }
+    return 0;
+  }
+
+  void update(uint64_t pc, uint64_t addr, liveness_class lv) {
     // --- PC level: find or insert ---
     PCEntry* pe = nullptr;
     for (auto& e : entries_)
@@ -307,39 +343,52 @@ public:
       for (auto& a : pe->addrs) a = AddrEntry{};
       for (auto& b : pe->buf)   b = BufEntry{};
     }
-    if (!accessed) pe->freq++;  // DoA-LFU at PC level
+    if (lv == liveness_class::doa) pe->freq++;  // DoA-LFU at PC level
 
     // --- Addr level: check main slots ---
     for (auto& a : pe->addrs) {
       if (a.valid && a.addr == addr) {
-        a.count = accessed ? 0 : std::min(a.count + 1, MAX_COUNTER);
-        if (!accessed) a.freq++;
+        switch (lv) {
+          case liveness_class::doa:
+            a.count = std::min(a.count + 1, MAX_COUNTER);
+            a.freq++;
+            break;
+          case liveness_class::mostly_dead:
+            a.mostly_dead = std::min(a.mostly_dead + 1, MAX_COUNTER);
+            a.count = 0;
+            break;
+          case liveness_class::mostly_alive:
+            a.count = 0;
+            a.mostly_dead = 0;
+            break;
+        }
         return;
       }
     }
 
-    // --- Addr level: check promotion buffer ---
+    // --- Addr level: check promotion buffer (DoA confirmations only) ---
     if (addr_buf_cap_ > 0) {
       for (auto& b : pe->buf) {
         if (b.valid && b.addr == addr) {
-          if (accessed) {
-            b.dead_count = 0;
-          } else {
+          if (lv == liveness_class::doa) {
             b.dead_count++;
             if (b.dead_count > addr_lfu_victim_freq(*pe)) {
-              auto& slot  = evict_addr(*pe);
-              slot.addr   = b.addr;
-              slot.count  = b.dead_count;
-              slot.freq   = b.dead_count;
-              slot.valid  = true;
+              auto& slot       = evict_addr(*pe);
+              slot.addr        = b.addr;
+              slot.count       = b.dead_count;
+              slot.mostly_dead = 0;
+              slot.freq        = b.dead_count;
+              slot.valid       = true;
               b = BufEntry{};
             }
+          } else {
+            b.dead_count = 0;
           }
           return;
         }
       }
-      // New addr: add to buffer (dead evictions only).
-      if (!accessed) {
+      // New addr: stage in buffer on DoA evictions only.
+      if (lv == liveness_class::doa) {
         auto& bslot      = buf_victim(*pe);
         bslot.addr       = addr;
         bslot.dead_count = 1;
@@ -349,13 +398,14 @@ public:
       return;
     }
 
-    // --- No buffer: insert directly ---
-    if (!accessed) {
-      auto& slot  = evict_addr(*pe);
-      slot.addr   = addr;
-      slot.count  = 1;
-      slot.freq   = 1;
-      slot.valid  = true;
+    // --- No buffer: insert on dead evictions only ---
+    if (lv != liveness_class::mostly_alive) {
+      auto& slot       = evict_addr(*pe);
+      slot.addr        = addr;
+      slot.count       = (lv == liveness_class::doa) ? 1 : 0;
+      slot.mostly_dead = (lv == liveness_class::mostly_dead) ? 1 : 0;
+      slot.freq        = (lv == liveness_class::doa) ? 1 : 0;
+      slot.valid       = true;
     }
   }
 
@@ -363,10 +413,11 @@ private:
   static constexpr uint64_t MAX_COUNTER = 16;
 
   struct AddrEntry {
-    uint64_t addr  = 0;
-    uint64_t count = 0;
-    uint64_t freq  = 0;  // DoA-LFU: dead confirmation count
-    bool     valid = false;
+    uint64_t addr        = 0;
+    uint64_t count       = 0;  // DoA counter (renamed from count for clarity)
+    uint64_t mostly_dead = 0;  // mostly-dead counter
+    uint64_t freq        = 0;  // DoA-LFU: dead confirmation count
+    bool     valid       = false;
   };
   struct BufEntry {
     uint64_t addr       = 0;
@@ -475,9 +526,6 @@ struct cache_queue_stats {
   uint64_t PTWQ_TO_CACHE = 0;
 };
 
-// Liveness classification for cache blocks based on eviction history
-enum class liveness_class { doa, mostly_dead, mostly_alive };
-
 class CACHE : public champsim::operable, public MemoryRequestConsumer, public MemoryRequestProducer
 {
   enum [[deprecated(
@@ -504,6 +552,9 @@ class CACHE : public champsim::operable, public MemoryRequestConsumer, public Me
     uint64_t ip = 0; // PC that caused the miss that filled this block
 
     uint32_t pf_metadata = 0;
+
+    uint64_t install_cycle   = 0; // cycle when block was installed (for halflife classification)
+    uint64_t last_hit_cycle  = 0; // cycle of most recent hit (0 = never hit)
   };
   using set_type = std::vector<BLOCK>;
 
@@ -526,7 +577,8 @@ class CACHE : public champsim::operable, public MemoryRequestConsumer, public Me
   bool cbpred = false;
   uint64_t pconf_thd = 6; // phist confidence threshold
   uint64_t bconf_thd = 6; // bhist confidence threshold
-  uint64_t mid_thd = 1;   // min DoA-or-mostly-dead evictions before liveness guidance triggers
+  uint64_t mid_thd = 1;   // repl_hist_pc: doa_count  >= mid_thd → DoA
+  uint64_t low_thd = 0;   // repl_hist_pc: dead_count >= low_thd → mostly-dead (0 = disabled)
   bool mid_promote = false; // promote DoA blocks to MRU on hit (srrip_live)
   uint64_t st_size = 2;   // shadow table capacity
 
@@ -549,7 +601,19 @@ class CACHE : public champsim::operable, public MemoryRequestConsumer, public Me
   // Returns the dead_count from bHIST, or 0 if not found or guidance disabled.
   uint64_t get_repl_guidance_score(uint64_t block_address, uint64_t dp_pc) const;
 
-  // Classify block liveness based on PC-indexed bHIST DoA/mostly_dead counters.
+  // Per-PC replacement guidance history.
+  // Two independent saturating counters per PC, updated at every LLC/STLB eviction:
+  //   doa_count:  increments on DoA eviction; resets on any live eviction.
+  //   dead_count: increments on mostly-dead eviction; resets on mostly-alive eviction.
+  // Liveness class at eviction is determined by the halflife criterion.
+  struct ReplHistEntry {
+    static constexpr uint8_t MAX_COUNT = 15;
+    uint8_t doa  = 0;
+    uint8_t dead = 0;
+  };
+  std::unordered_map<uint64_t, ReplHistEntry> repl_hist_pc;
+
+  // Classify block liveness based on repl_hist_pc counters for the fill PC.
   // Used by srrip_live and ipv_live replacement policies to guide insertion/promotion.
   liveness_class classify_block_liveness(uint64_t block_address, uint64_t pc) const;
 
@@ -559,6 +623,17 @@ class CACHE : public champsim::operable, public MemoryRequestConsumer, public Me
   std::map<uint64_t, std::set<uint64_t>> pc_to_addrs;  // PC → set of unique addresses
   void record_characterization(uint64_t dp_pc, uint64_t block_address);
   void print_characterization_stats() const;
+
+  // Per-PC liveness characterization: enabled by LIVENESS_CHAR=1.
+  // Classifies each eviction as DoA / mostly-dead / mostly-alive using the halflife criterion
+  // and accumulates counts per PC, then prints them at end_phase.
+  struct PCLivenessEntry { uint64_t total = 0, doa = 0, mostly_dead = 0, mostly_alive = 0; };
+  bool liveness_char_enable = false;
+  std::unordered_map<uint64_t, PCLivenessEntry> pc_liveness_char;
+  void record_liveness_char(uint64_t pc, uint64_t install_cycle,
+                            uint64_t last_hit_cycle, uint64_t evict_cycle,
+                            bool accessed);
+  void print_liveness_char() const;
 
   // PFQ gate control: when false, cbPred bypasses on bhist alone (no PFQ hit required).
   // pfq_ema_mode tracks the hit rate with an EMA and dynamically flips pfq_gate.
@@ -578,7 +653,7 @@ class CACHE : public champsim::operable, public MemoryRequestConsumer, public Me
   bool dppred_shadow_lookup(const PACKET& handle_pkt);     // true → shadow hit: history reset, data served, entry re-inserted into STLB, PTW skipped
   bool dppred_bypass(const PACKET& fill_mshr);             // true → skip STLB fill
   bool cbpred_bypass(const PACKET& fill_mshr);             // true → skip LLC fill
-  void update_eviction_counters(const BLOCK& victim);      // update the history table for this cache level
+  void update_eviction_counters(const BLOCK& victim, liveness_class lv);  // update history tables at eviction
 
 public:
   struct NonTranslatingQueues : public champsim::operable {

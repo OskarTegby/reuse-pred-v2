@@ -136,15 +136,39 @@ bool CACHE::cbpred_bypass(const PACKET& fill_mshr)
 // translation entry evicted from the STLB, bhist for a cache block evicted
 // from the LLC.  Increments the confidence counter if the entry was never
 // accessed since insertion; resets it to zero otherwise.
-void CACHE::update_eviction_counters(const BLOCK& victim)
+void CACHE::update_eviction_counters(const BLOCK& victim, liveness_class lv)
 {
+  // cbpred / dppred bypass-predictor tables.
+  // phist and bhist_flat are HistTable (take liveness_class); bhist_pc is
+  // PCPartitionedTable and still uses bool accessed.
+  const liveness_class bypass_lv = victim.accessed ? liveness_class::mostly_alive : liveness_class::doa;
   if (dppred && NAME == "cpu0_STLB")
-    phist.update(victim.ip, victim.accessed);
+    phist.update(victim.ip, bypass_lv);
   else if (cbpred && NAME == "LLC" && victim.dp) {
     if (use_pc_bhist)
-      bhist_pc.update(victim.dp_pc, victim.address >> OFFSET_BITS, victim.accessed);
+      bhist_pc.update(victim.dp_pc, victim.address >> OFFSET_BITS, bypass_lv);
     else
-      bhist_flat.update(victim.address >> OFFSET_BITS, victim.accessed);
+      bhist_flat.update(victim.address >> OFFSET_BITS, bypass_lv);
+  }
+
+  // Replacement-guidance history: two independent counters per fill PC.
+  // doa_count:  increments on DoA; resets on any live eviction.
+  // dead_count: increments on mostly-dead; resets on mostly-alive.
+  if (NAME == "LLC" || NAME == "cpu0_STLB") {
+    auto& e = repl_hist_pc[victim.ip];
+    switch (lv) {
+      case liveness_class::doa:
+        e.doa = static_cast<uint8_t>(std::min<int>(e.doa + 1, ReplHistEntry::MAX_COUNT));
+        break;
+      case liveness_class::mostly_dead:
+        e.dead = static_cast<uint8_t>(std::min<int>(e.dead + 1, ReplHistEntry::MAX_COUNT));
+        e.doa  = 0;
+        break;
+      case liveness_class::mostly_alive:
+        e.doa  = 0;
+        e.dead = 0;
+        break;
+    }
   }
 }
 
@@ -232,8 +256,11 @@ void CACHE::load_predictor_settings()
   pfq_ema_alpha = getenv_double("PFQ_EMA_ALPHA", pfq_ema_alpha);
   pfq_ema_thd   = getenv_double("PFQ_EMA_THD", 10.0) / 100.0;
 
-  // Liveness-guided replacement: threshold for DoA/mostly-dead classification.
+  // Liveness-guided replacement: two independent thresholds.
+  // repl_hist_pc.doa  >= mid_thd → DoA
+  // repl_hist_pc.dead >= low_thd → mostly-dead (LOW_THD=0 disables, collapses to 2-class)
   mid_thd = getenv_uint64("MID_THD", 1);
+  low_thd = getenv_uint64("LOW_THD", 0);
   if (const char* v = std::getenv("MID_PROMOTE"); v && std::stoull(v))
     mid_promote = true;
 
@@ -241,6 +268,10 @@ void CACHE::load_predictor_settings()
   if (const char* v = std::getenv("REPL_GUIDANCE"); v && std::stoull(v))
     repl_guidance_enable = true;
   repl_guidance_thd = getenv_uint64("REPL_GUIDANCE_THD", 0);
+
+  // Per-PC liveness characterization (LIVENESS_CHAR=1).
+  if (const char* v = std::getenv("LIVENESS_CHAR"); v && std::stoull(v))
+    liveness_char_enable = true;
 
   // Unbounded characterization: track all (PC, address) pairs to measure actual demand.
   if (const char* v = std::getenv("CHARACTERIZATION"); v && std::stoull(v))
@@ -262,21 +293,14 @@ uint64_t CACHE::get_repl_guidance_score(uint64_t block_address, uint64_t dp_pc) 
   return dead_count;
 }
 
-liveness_class CACHE::classify_block_liveness(uint64_t block_address, uint64_t pc) const
+liveness_class CACHE::classify_block_liveness(uint64_t /*block_address*/, uint64_t pc) const
 {
-  // Query bHIST for DoA counter for this (PC, block_address) pair.
-  // Classify based on threshold: if DoA >= mid_thd → DoA, else mostly_alive.
-  uint64_t doa = 0;
-
-  if (use_pc_bhist) {
-    doa = bhist_pc.get(pc, block_address);
-  } else {
-    doa = bhist_flat.get(block_address);
-  }
-
-  // Classify based on DoA counter and the MID_THD threshold
-  if (doa >= mid_thd) {
-    return liveness_class::doa;
+  // Two independent thresholds, checked in priority order.
+  // DoA counter and mostly-dead counter are updated independently at eviction.
+  const auto it = repl_hist_pc.find(pc);
+  if (it != repl_hist_pc.end()) {
+    if (it->second.doa  >= mid_thd)                return liveness_class::doa;
+    if (low_thd > 0 && it->second.dead >= low_thd) return liveness_class::mostly_dead;
   }
   return liveness_class::mostly_alive;
 }
@@ -315,6 +339,39 @@ void CACHE::print_characterization_stats() const
             << "  Min/Max addresses per PC: " << min_addrs << " / " << max_addrs << "\n"
             << "  Recommended fixed budget: " << total_pairs << " entries or ~" << (uint64_t)std::ceil(avg_addrs)
             << " per-PC with " << total_pcs << " PCs\n";
+}
+
+void CACHE::record_liveness_char(uint64_t pc, uint64_t install_cycle,
+                                   uint64_t last_hit_cycle, uint64_t evict_cycle,
+                                   bool accessed)
+{
+  auto& entry = pc_liveness_char[pc];
+  entry.total++;
+  if (!accessed) {
+    entry.doa++;
+    return;
+  }
+  // Halflife criterion: last hit in first half of residency → mostly-dead,
+  // second half → mostly-alive.
+  const uint64_t lifetime     = evict_cycle - install_cycle;
+  const uint64_t time_til_end = evict_cycle - last_hit_cycle;
+  if (lifetime == 0 || time_til_end < lifetime / 2)
+    entry.mostly_alive++;
+  else
+    entry.mostly_dead++;
+}
+
+void CACHE::print_liveness_char() const
+{
+  if (!liveness_char_enable || pc_liveness_char.empty())
+    return;
+
+  printf("%s LIVENESS_CHAR BEGIN\n", NAME.c_str());
+  for (const auto& [pc, e] : pc_liveness_char) {
+    printf("  PC=0x%016lx total=%lu doa=%lu mostly_dead=%lu mostly_alive=%lu\n",
+           pc, e.total, e.doa, e.mostly_dead, e.mostly_alive);
+  }
+  printf("%s LIVENESS_CHAR END\n", NAME.c_str());
 }
 
 bool CACHE::handle_fill(const PACKET& fill_mshr)
@@ -365,7 +422,17 @@ bool CACHE::handle_fill(const PACKET& fill_mshr)
       predictor_bypassed = true;
       way = set_end;
     } else {
-      update_eviction_counters(*way);
+      // Compute liveness class using halflife criterion.
+      liveness_class evict_lv;
+      if (!way->accessed) {
+        evict_lv = liveness_class::doa;
+      } else {
+        const uint64_t lifetime     = current_cycle - way->install_cycle;
+        const uint64_t time_til_end = current_cycle - way->last_hit_cycle;
+        evict_lv = (lifetime == 0 || time_til_end < lifetime / 2)
+                   ? liveness_class::mostly_alive : liveness_class::mostly_dead;
+      }
+      update_eviction_counters(*way, evict_lv);
     }
   }
 
@@ -414,6 +481,9 @@ bool CACHE::handle_fill(const PACKET& fill_mshr)
 
       if (way->valid) {
         sim_stats.back().evictions++;
+        if (liveness_char_enable)
+          record_liveness_char(way->ip, way->install_cycle, way->last_hit_cycle,
+                               current_cycle, way->accessed);
         if (!way->accessed) {
           sim_stats.back().doa++;
           // LLC only: reverse-STLB lookup — find the STLB entry for this block's
@@ -449,6 +519,8 @@ bool CACHE::handle_fill(const PACKET& fill_mshr)
       way->v_address = fill_mshr.v_address;
       way->data = fill_mshr.data;
       way->ip = fill_mshr.ip;
+      way->install_cycle  = current_cycle;
+      way->last_hit_cycle = 0;
 
       metadata_thru =
           impl_prefetcher_cache_fill(pkt_address, get_set_index(fill_mshr.address), way_idx, fill_mshr.type == PREFETCH, evicting_address, metadata_thru);
@@ -523,6 +595,7 @@ bool CACHE::try_hit(const PACKET& handle_pkt)
       way->accessed = true;
     else if (NAME == "LLC" && way->dp)
       way->accessed = true;
+    way->last_hit_cycle = current_cycle;
 
     // update prefetch stats and reset prefetch bit
     if (way->prefetch && !handle_pkt.prefetch_from_this) {
@@ -919,6 +992,7 @@ void CACHE::end_phase(unsigned finished_cpu)
   }
 
   print_characterization_stats();
+  print_liveness_char();
 }
 
 bool CACHE::should_activate_prefetcher(const PACKET& pkt) const { return ((1 << pkt.type) & pref_activate_mask) && !pkt.prefetch_from_this; }
