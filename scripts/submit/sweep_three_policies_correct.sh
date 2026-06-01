@@ -155,7 +155,7 @@ for thd in "${SRRIP_LIVE_THRESHOLDS[@]}"; do
              -v WARMUP="$WARMUP",SIM="$SIM",\
 TRACE_DIR="$TRACE_DIR",TRACE_EXT="$TRACE_EXT",\
 RUN_LABEL="$RUN_LABEL",BINARY="champsim_srrip_live",\
-MID_THD="$thd" \
+MID_THD="$thd",BHIST_MODE="pc" \
              "${PROJECT_ROOT}/scripts/submit/run_cs.sh")
   jid=$(echo "$raw" | awk '/Your job/ {print $3}' | cut -d. -f1)
   echo "  [jid=${jid}] srrip_live_llc thd=${thd}"
