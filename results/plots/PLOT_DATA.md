@@ -4,17 +4,21 @@ Generated on branch `liveness-guided-replacement` (commit `8989555edfa4`).
 
 ---
 
-## Step 0 — Build binaries (always required first)
+## Step 0 — Build and transfer binaries
 
 Run locally, **never on Castillo**:
 
 ```bash
 make static
+scp bin/champsim_lru bin/champsim_srrip_live bin/champsim_ipv_live \
+    bin/champsim_stlb_srrip_live bin/champsim_stlb_ipv_live \
+    castillo:reuse-pred/bin/
 ```
 
-This produces `bin/champsim_lru`, `bin/champsim_srrip_live`, `bin/champsim_ipv_live`,
-`bin/champsim_stlb_srrip_live`, `bin/champsim_stlb_ipv_live`.
-Transfer to Castillo with `scp bin/* castillo:reuse-pred/bin/`.
+Record the commit hash used for any new submission:
+```bash
+git rev-parse HEAD   # paste this into the result dir README or DATA_SOURCES.md
+```
 
 ---
 
@@ -69,6 +73,12 @@ slightly off but the qualitative picture holds.
 The hardcoded directory constants in the plot scripts point to **Config A** runs.
 After the pending Mazumdar sweep completes (see below), update the directory
 constants at the top of each plot script before regenerating.
+
+**Binary commit for Config A runs: unknown.** The simulations were run
+2026-05-13 to 2026-05-22, which predates the earliest commit in this repo
+(2026-05-25, `ab1880d64ff8`). The exact source version cannot be recovered.
+For all future submissions, run `git rev-parse HEAD` at submit time and
+record it alongside the result directory.
 
 #### LLC threshold (Figure 2)
 
@@ -151,6 +161,15 @@ Key env vars passed to simulations:
 
 ## Regenerate all plots
 
+First download the result directories from Castillo (run locally):
+```bash
+# adjust castillo:reuse-pred/results/ path if needed
+rsync -av --progress castillo:reuse-pred/results/{suite}_repl_pol_20260522_0722 results/
+rsync -av --progress castillo:reuse-pred/results/cluster results/
+# repeat for each suite dir listed in the tables above
+```
+
+Then generate the plots:
 ```bash
 python3 scripts/analysis/plot_liveness_rates.py
 python3 scripts/analysis/plot_llc_threshold_combined.py
