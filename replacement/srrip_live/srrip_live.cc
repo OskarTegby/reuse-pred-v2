@@ -110,8 +110,9 @@ void CACHE::update_replacement_state(uint32_t triggering_cpu, uint32_t set, uint
   auto& st   = ::stats[this];
 
   bool use_liveness = false;
-  if (const char* target = std::getenv("SRRIP_LIVE_TARGET")) {
-    std::string t(target);
+  const char* target_env = std::getenv("SRRIP_LIVE_TARGET");
+  if (target_env && target_env[0] != '\0') {
+    std::string t(target_env);
     if      (t == "llc"  && NAME == "LLC")        use_liveness = true;
     else if (t == "stlb" && NAME == "cpu0_STLB")  use_liveness = true;
     else if (t == "both" && (NAME == "LLC" || NAME == "cpu0_STLB")) use_liveness = true;
@@ -120,15 +121,21 @@ void CACHE::update_replacement_state(uint32_t triggering_cpu, uint32_t set, uint
   }
 
   if (use_liveness) {
-    const liveness_class lc = classify_block_liveness(full_addr, ip);
     if (hit) {
-      if      (lc == liveness_class::doa)        { rrpv = ::maxRRPV - 1;     st.hit_doa++;   }
-      else if (lc == liveness_class::mostly_dead) { rrpv = ::maxRRPV - 2;     st.hit_dead++;  }
-      else                                        { rrpv = 0;                  st.hit_alive++; }
+      // Use the class stored at insertion time — do not re-classify at hit time.
+      // Re-classifying allows a block inserted as alive to lose full promotion if
+      // its PC accumulates DoA history while the block sits in the cache, which
+      // causes live blocks to be evicted prematurely.
+      switch (cls) {
+        case 1:  rrpv = ::maxRRPV - 1; st.hit_doa++;   break;  // DoA: partial
+        case 2:  rrpv = ::maxRRPV - 2; st.hit_dead++;  break;  // mostly-dead: moderate
+        default: rrpv = 0;             st.hit_alive++;  break;  // alive or unguided: full
+      }
     } else {
-      if      (lc == liveness_class::doa)        { rrpv = ::maxRRPV;     cls = 1; st.ins_doa++;  }
-      else if (lc == liveness_class::mostly_dead) { rrpv = ::maxRRPV - 1; cls = 2; st.ins_dead++; }
-      else                                        { rrpv = ::maxRRPV - 1; cls = 3; st.ins_alive++;}
+      const liveness_class lc = classify_block_liveness(full_addr, ip);
+      if      (lc == liveness_class::doa)         { rrpv = ::maxRRPV;     cls = 1; st.ins_doa++;  }
+      else if (lc == liveness_class::mostly_dead)  { rrpv = ::maxRRPV - 1; cls = 2; st.ins_dead++; }
+      else                                         { rrpv = ::maxRRPV - 1; cls = 3; st.ins_alive++;}
     }
   } else {
     if (hit) { rrpv = 0;             st.hit_unguided++; }

@@ -53,6 +53,9 @@ export BHIST_ADDR_WAYS=${BHIST_ADDR_WAYS:-16}
 export BHIST_ADDR_BUF=${BHIST_ADDR_BUF:-0}
 export REPL_POL=${REPL_POL:-lru}
 export PFQ_CAP=${PFQ_CAP:-8}
+export LIVENESS_CHAR=${LIVENESS_CHAR:-0}
+export SRRIP_LIVE_TARGET=${SRRIP_LIVE_TARGET:-}
+export LOW_THD=${LOW_THD:-0}
 export ST_SIZE=${ST_SIZE:-2}
 
 # Binary selection: BINARY env var selects the per-policy executable.
