@@ -1,11 +1,10 @@
 #!/bin/bash
 set -euo pipefail
 
-# Promotion buffer size sweep: history table sizes fixed at small values to put
-# genuine pressure on the promotion buffer (LLC=256, STLB=256 — past the knee
-# in the STLB size study). Buffer size varied jointly from 0 to 128.
+# Promotion buffer size sweep: history table sizes fixed at small values (LLC=256,
+# STLB=256 — past the knee) to create genuine eviction pressure. Buffer size scaled
+# upward well beyond the table size to see how much a large buffer can compensate.
 # Policy: IPV-Live, per-level optimal thresholds.
-# Goal: quantify how much the promotion buffer contributes under real pressure.
 
 BASE=~/ChampSim-dev
 TRACES="$BASE/trace-files/QMM"; EXT="champsimtrace.xz"
@@ -39,7 +38,7 @@ submit "$LABEL/buf0" champsim_both_ipv_live "buf_0" \
   "LLC_MID_THD=4,LLC_LOW_THD=4,STLB_MID_THD=1,STLB_LOW_THD=1,BHIST_MODE=pc,SRRIP_LIVE_TARGET=both,\
 REPL_HIST_LLC_CAP=${LLC_CAP},REPL_HIST_STLB_CAP=${STLB_CAP},REPL_HIST_BUF_CAP=0,REPL_HIST_REPL=lfu_doa"
 
-for buf in 4 8 16 32 64 128; do
+for buf in 32 64 128 256 512 1024; do
   submit "$LABEL/buf${buf}" champsim_both_ipv_live "buf_${buf}" \
     "LLC_MID_THD=4,LLC_LOW_THD=4,STLB_MID_THD=1,STLB_LOW_THD=1,BHIST_MODE=pc,SRRIP_LIVE_TARGET=both,\
 REPL_HIST_LLC_CAP=${LLC_CAP},REPL_HIST_STLB_CAP=${STLB_CAP},REPL_HIST_BUF_CAP=${buf},REPL_HIST_REPL=lfu_doa"
