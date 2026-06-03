@@ -55,7 +55,12 @@ export REPL_POL=${REPL_POL:-lru}
 export PFQ_CAP=${PFQ_CAP:-8}
 export LIVENESS_CHAR=${LIVENESS_CHAR:-0}
 export SRRIP_LIVE_TARGET=${SRRIP_LIVE_TARGET:-}
-export LOW_THD=${LOW_THD:-0}
+export LOW_THD=${LOW_THD:-$MID_THD}
+export REPL_HIST_LLC_CAP=${REPL_HIST_LLC_CAP:-0}
+export REPL_HIST_STLB_CAP=${REPL_HIST_STLB_CAP:-0}
+export REPL_HIST_BUF_CAP=${REPL_HIST_BUF_CAP:-0}
+export REPL_HIST_SHADOW_CAP=${REPL_HIST_SHADOW_CAP:-0}
+export REPL_HIST_REPL=${REPL_HIST_REPL:-lfu_doa}
 export ST_SIZE=${ST_SIZE:-2}
 
 # Binary selection: BINARY env var selects the per-policy executable.

@@ -51,13 +51,30 @@ public:
     uint64_t table_hits    = 0;  // get() found the key (value > 0)
     uint64_t promotions    = 0;  // buffer → main table promotions
     uint64_t promoted_hits = 0;  // later get() hits on promoted entries
+    // Occupancy
+    bool     main_ever_full = false; // true once victim_slot() found no free slot
+    bool     buf_ever_full  = false; // true once buf_victim() found no free slot
+    // Shadow (victim) buffer: tracks entries fully evicted from the promotion buffer.
+    // When an evicted entry's PC appears again, we know useful history was lost.
+    uint64_t buf_evictions       = 0;  // entries lost from the promotion buffer
+    uint64_t shadow_hits         = 0;  // evicted PCs seen again (before shadow ages out)
+    uint64_t shadow_hit_doa_sum  = 0;  // sum of dead_count at eviction for shadow hits
+    uint64_t shadow_hit_nonzero  = 0;  // shadow hits where dead_count > 0 at eviction
   };
 
-  HistTable() = default;
-  HistTable(uint64_t cap, Policy pol, uint64_t buf_cap = 0)
-    : cap_(cap), pol_(pol), entries_(cap), buf_cap_(buf_cap), buffer_(buf_cap) {}
+  // Default: unbounded mode — backed by an unordered_map, no eviction.
+  // Semantically identical to the old repl_hist_pc unordered_map; used as the
+  // backward-compatible fallback when no capacity limit is configured.
+  HistTable() : unbounded_(true) {}
+  HistTable(uint64_t cap, Policy pol, uint64_t buf_cap = 0, uint64_t shadow_cap = 0)
+    : cap_(cap), pol_(pol), entries_(cap), buf_cap_(buf_cap), buffer_(buf_cap),
+      shadow_cap_(shadow_cap), shadow_(shadow_cap) {}
 
   uint64_t get(uint64_t key) const {
+    if (unbounded_) {
+      auto it = unmap_.find(key);
+      return it != unmap_.end() ? it->second.first : 0;
+    }
     stats_.queries++;
     for (const auto& e : entries_) {
       if (e.valid && e.key == key) {
@@ -72,9 +89,25 @@ public:
   }
 
   uint64_t get_dead(uint64_t key) const {
+    if (unbounded_) {
+      auto it = unmap_.find(key);
+      return it != unmap_.end() ? it->second.second : 0;
+    }
     for (const auto& e : entries_)
       if (e.valid && e.key == key) return e.mostly_dead;
     return 0;
+  }
+
+  // Returns {doa, mostly_dead} in one scan — use instead of separate get()+get_dead()
+  // calls when both values are needed (avoids scanning entries_ twice in bounded mode).
+  std::pair<uint64_t,uint64_t> get_both(uint64_t key) const {
+    if (unbounded_) {
+      auto it = unmap_.find(key);
+      return it != unmap_.end() ? it->second : std::pair<uint64_t,uint64_t>{0, 0};
+    }
+    for (const auto& e : entries_)
+      if (e.valid && e.key == key) return {e.doa, e.mostly_dead};
+    return {0, 0};
   }
 
   const Stats& get_stats() const { return stats_; }
@@ -83,7 +116,57 @@ public:
     for (auto& e : entries_) e.promoted = false;
   }
 
+  // Print occupancy and shadow-buffer instrumentation to stdout.
+  // mid_thd: used to flag shadow hits where dead_count >= mid_thd, meaning the
+  // next block from that PC was misclassified (should have been DoA but was mostly_alive).
+  void print_stats(const char* prefix, uint64_t mid_thd = 0, uint64_t low_thd = 0) const {
+    if (unbounded_) {
+      printf("%s repl_hist: unbounded (%zu entries)\n", prefix, unmap_.size());
+      return;
+    }
+    const uint64_t main_occ = static_cast<uint64_t>(
+        std::count_if(entries_.begin(), entries_.end(), [](const Entry& e){ return e.valid; }));
+    const uint64_t buf_occ  = static_cast<uint64_t>(
+        std::count_if(buffer_.begin(), buffer_.end(), [](const BufEntry& b){ return b.valid; }));
+    printf("%s repl_hist occupancy : main %lu/%lu (%.0f%%)%s  buf %lu/%lu (%.0f%%)%s\n",
+           prefix,
+           main_occ, cap_,
+           cap_ ? 100.0 * main_occ / cap_ : 0.0,
+           stats_.main_ever_full ? " [was full]" : "",
+           buf_occ, buf_cap_,
+           buf_cap_ ? 100.0 * buf_occ / buf_cap_ : 0.0,
+           stats_.buf_ever_full  ? " [was full]" : "");
+    if (shadow_cap_ > 0) {
+      const double hit_rate = stats_.buf_evictions
+          ? 100.0 * stats_.shadow_hits / stats_.buf_evictions : 0.0;
+      const double avg_doa  = stats_.shadow_hits
+          ? static_cast<double>(stats_.shadow_hit_doa_sum) / stats_.shadow_hits : 0.0;
+      uint64_t misclass = 0;
+      if (mid_thd > 0)
+        misclass = std::count_if(shadow_.begin(), shadow_.end(),
+            [&](const ShadowEntry& s){ return s.valid && s.dead_count >= mid_thd; });
+      printf("%s repl_hist shadow    : evictions=%lu  shadow_hits=%lu (%.1f%%)  "
+             "avg_doa@evict=%.2f  nonzero=%lu",
+             prefix,
+             stats_.buf_evictions, stats_.shadow_hits, hit_rate,
+             avg_doa, stats_.shadow_hit_nonzero);
+      if (mid_thd > 0)
+        printf("  misclass(doa>=%lu)=%lu", mid_thd, misclass);
+      printf("\n");
+    }
+    (void)low_thd;  // reserved for future mostly-dead misclassification tracking
+  }
+
   void update(uint64_t key, liveness_class lv) {
+    if (unbounded_) {
+      auto& [doa, dead] = unmap_[key];
+      switch (lv) {
+        case liveness_class::doa:          doa++;              break;
+        case liveness_class::mostly_dead:  dead++; doa = 0;   break;
+        case liveness_class::mostly_alive: doa = 0; dead = 0; break;
+      }
+      return;
+    }
     const bool accessed = (lv != liveness_class::doa);
     // 1. Main table hit.
     for (auto& e : entries_) {
@@ -118,7 +201,20 @@ public:
           return;
         }
       }
-      // Not in main table or buffer: stage in buffer on DoA evictions only.
+      // Not in main table or buffer: check shadow before staging.
+      // A shadow hit means this PC was fully evicted but is still generating DoA events.
+      if (shadow_cap_ > 0 && lv == liveness_class::doa) {
+        for (auto& s : shadow_) {
+          if (s.valid && s.key == key) {
+            ++stats_.shadow_hits;
+            stats_.shadow_hit_doa_sum += s.dead_count;
+            if (s.dead_count > 0) ++stats_.shadow_hit_nonzero;
+            s.valid = false;  // consume: count first re-appearance only
+            break;
+          }
+        }
+      }
+      // Stage in buffer on DoA evictions only.
       if (lv == liveness_class::doa) {
         auto& bslot      = buf_victim();
         bslot.key        = key;
@@ -168,13 +264,27 @@ private:
     bool     valid      = false;
   };
 
-  uint64_t cap_         = 0;
-  Policy   pol_         = Policy::LRU;
-  std::vector<Entry> entries_;
-  uint64_t clock_       = 0;
-  uint64_t buf_cap_   = 0;
-  uint64_t buf_clock_ = 0;
+  // Shadow (victim) buffer: holds entries evicted from the promotion buffer.
+  // Pure instrumentation — does not affect policy decisions.
+  struct ShadowEntry {
+    uint64_t key        = 0;
+    uint64_t dead_count = 0;  // dead_count from the promotion buffer at final eviction
+    uint64_t ts         = 0;
+    bool     valid      = false;
+  };
+
+  bool     unbounded_    = false;
+  mutable std::unordered_map<uint64_t, std::pair<uint64_t,uint64_t>> unmap_;
+  uint64_t cap_          = 0;
+  Policy   pol_          = Policy::LRU;
+  std::vector<Entry>    entries_;
+  uint64_t clock_        = 0;
+  uint64_t buf_cap_      = 0;
+  uint64_t buf_clock_    = 0;
   std::vector<BufEntry> buffer_;
+  uint64_t shadow_cap_   = 0;
+  uint64_t shadow_clock_ = 0;
+  std::vector<ShadowEntry> shadow_;
   mutable Stats stats_;
 
   void on_hit(Entry& e, bool accessed) {
@@ -262,6 +372,7 @@ private:
 
   Entry& victim_slot() {
     for (auto& e : entries_) if (!e.valid) return e;
+    stats_.main_ever_full = true;
     switch (pol_) {
     case Policy::LRU:
       return *std::min_element(entries_.begin(), entries_.end(),
@@ -280,14 +391,33 @@ private:
     return entries_[0];
   }
 
+  ShadowEntry& shadow_victim() {
+    for (auto& s : shadow_) if (!s.valid) return s;
+    // LRU eviction within the shadow buffer.
+    return *std::min_element(shadow_.begin(), shadow_.end(),
+      [](const ShadowEntry& a, const ShadowEntry& b){ return a.ts < b.ts; });
+  }
+
   // DoA-LFU eviction: evict the buffer entry with the fewest dead confirmations.
   // ts (insertion time) breaks ties — evict the older entry among equals.
+  // Records the evicted entry in the shadow buffer (instrumentation only).
   BufEntry& buf_victim() {
     for (auto& b : buffer_) if (!b.valid) return b;
-    return *std::min_element(buffer_.begin(), buffer_.end(),
+    stats_.buf_ever_full = true;
+    auto& victim = *std::min_element(buffer_.begin(), buffer_.end(),
       [](const BufEntry& a, const BufEntry& b){
         return a.dead_count < b.dead_count ||
                (a.dead_count == b.dead_count && a.ts < b.ts); });
+    // Record the final eviction in the shadow buffer.
+    if (shadow_cap_ > 0 && victim.valid) {
+      ++stats_.buf_evictions;
+      auto& se    = shadow_victim();
+      se.key        = victim.key;
+      se.dead_count = victim.dead_count;
+      se.ts         = ++shadow_clock_;
+      se.valid      = true;
+    }
+    return victim;
   }
 };
 
@@ -602,16 +732,13 @@ class CACHE : public champsim::operable, public MemoryRequestConsumer, public Me
   uint64_t get_repl_guidance_score(uint64_t block_address, uint64_t dp_pc) const;
 
   // Per-PC replacement guidance history.
-  // Two independent saturating counters per PC, updated at every LLC/STLB eviction:
-  //   doa_count:  increments on DoA eviction; resets on any live eviction.
-  //   dead_count: increments on mostly-dead eviction; resets on mostly-alive eviction.
-  // Liveness class at eviction is determined by the halflife criterion.
-  struct ReplHistEntry {
-    static constexpr uint8_t MAX_COUNT = 15;
-    uint8_t doa  = 0;
-    uint8_t dead = 0;
-  };
-  std::unordered_map<uint64_t, ReplHistEntry> repl_hist_pc;
+  // Tracks two counters per PC: doa (consecutive DoA evictions) and mostly_dead
+  // (consecutive mostly-dead evictions). Updated at every LLC/STLB eviction.
+  // Default: unbounded (unordered_map fallback, backward compatible).
+  // Bounded: configured via REPL_HIST_{LLC,STLB}_CAP + REPL_HIST_{BUF_CAP,REPL} env vars
+  // in load_predictor_settings(). Uses the same HistTable replacement policies
+  // (lru/lfu/lfu_doa/srrip) and optional promotion buffer as phist/bhist.
+  HistTable repl_hist_pc;
 
   // Classify block liveness based on repl_hist_pc counters for the fill PC.
   // Used by srrip_live and ipv_live replacement policies to guide insertion/promotion.

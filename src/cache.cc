@@ -151,25 +151,9 @@ void CACHE::update_eviction_counters(const BLOCK& victim, liveness_class lv)
       bhist_flat.update(victim.address >> OFFSET_BITS, bypass_lv);
   }
 
-  // Replacement-guidance history: two independent counters per fill PC.
-  // doa_count:  increments on DoA; resets on any live eviction.
-  // dead_count: increments on mostly-dead; resets on mostly-alive.
-  if (NAME == "LLC" || NAME == "cpu0_STLB") {
-    auto& e = repl_hist_pc[victim.ip];
-    switch (lv) {
-      case liveness_class::doa:
-        e.doa = static_cast<uint8_t>(std::min<int>(e.doa + 1, ReplHistEntry::MAX_COUNT));
-        break;
-      case liveness_class::mostly_dead:
-        e.dead = static_cast<uint8_t>(std::min<int>(e.dead + 1, ReplHistEntry::MAX_COUNT));
-        e.doa  = 0;
-        break;
-      case liveness_class::mostly_alive:
-        e.doa  = 0;
-        e.dead = 0;
-        break;
-    }
-  }
+  // Replacement-guidance history: delegated to HistTable (bounded or unbounded).
+  if (NAME == "LLC" || NAME == "cpu0_STLB")
+    repl_hist_pc.update(victim.ip, lv);
 }
 
 // Reads environment variables to enable dpPred/cbPred and tune their
@@ -261,6 +245,29 @@ void CACHE::load_predictor_settings()
   // repl_hist_pc.dead >= low_thd → mostly-dead (LOW_THD=0 disables, collapses to 2-class)
   mid_thd = getenv_uint64("MID_THD", 1);
   low_thd = getenv_uint64("LOW_THD", 0);
+
+  // Bounded repl_hist_pc: 0 = unbounded (default, backward compatible).
+  // REPL_HIST_REPL controls table management policy (same options as HIST_REPL).
+  // REPL_HIST_BUF_CAP controls the promotion buffer size (default 0 = disabled).
+  {
+    const uint64_t rh_cap = (NAME == "LLC")
+        ? getenv_uint64("REPL_HIST_LLC_CAP",  0)
+        : getenv_uint64("REPL_HIST_STLB_CAP", 0);
+    if (rh_cap > 0) {
+      const uint64_t rh_buf    = getenv_uint64("REPL_HIST_BUF_CAP",    0);
+      const uint64_t rh_shadow = getenv_uint64("REPL_HIST_SHADOW_CAP", 0);
+      const char* rh_repl      = std::getenv("REPL_HIST_REPL");
+      auto parse_rh_policy     = [](const char* v) -> HistTable::Policy {
+        if (!v) return HistTable::Policy::LRU;
+        if (std::string_view(v) == "lfu")     return HistTable::Policy::LFU;
+        if (std::string_view(v) == "lfu_doa") return HistTable::Policy::LFU_DOA;
+        if (std::string_view(v) == "srrip")   return HistTable::Policy::SRRIP;
+        return HistTable::Policy::LRU;
+      };
+      repl_hist_pc = HistTable(rh_cap, parse_rh_policy(rh_repl), rh_buf, rh_shadow);
+    }
+    // else: keep default-constructed HistTable (unbounded mode)
+  }
   if (const char* v = std::getenv("MID_PROMOTE"); v && std::stoull(v))
     mid_promote = true;
 
@@ -295,13 +302,9 @@ uint64_t CACHE::get_repl_guidance_score(uint64_t block_address, uint64_t dp_pc) 
 
 liveness_class CACHE::classify_block_liveness(uint64_t /*block_address*/, uint64_t pc) const
 {
-  // Two independent thresholds, checked in priority order.
-  // DoA counter and mostly-dead counter are updated independently at eviction.
-  const auto it = repl_hist_pc.find(pc);
-  if (it != repl_hist_pc.end()) {
-    if (it->second.doa  >= mid_thd)                return liveness_class::doa;
-    if (low_thd > 0 && it->second.dead >= low_thd) return liveness_class::mostly_dead;
-  }
+  const auto [doa, dead] = repl_hist_pc.get_both(pc);
+  if (doa  >= mid_thd)                return liveness_class::doa;
+  if (low_thd > 0 && dead >= low_thd) return liveness_class::mostly_dead;
   return liveness_class::mostly_alive;
 }
 
@@ -355,7 +358,7 @@ void CACHE::record_liveness_char(uint64_t pc, uint64_t install_cycle,
   // second half → mostly-alive.
   const uint64_t lifetime     = evict_cycle - install_cycle;
   const uint64_t time_til_end = evict_cycle - last_hit_cycle;
-  if (lifetime == 0 || time_til_end < lifetime / 2)
+  if (lifetime == 0 || time_til_end <= lifetime / 2)
     entry.mostly_alive++;
   else
     entry.mostly_dead++;
@@ -429,7 +432,7 @@ bool CACHE::handle_fill(const PACKET& fill_mshr)
       } else {
         const uint64_t lifetime     = current_cycle - way->install_cycle;
         const uint64_t time_til_end = current_cycle - way->last_hit_cycle;
-        evict_lv = (lifetime == 0 || time_til_end < lifetime / 2)
+        evict_lv = (lifetime == 0 || time_til_end <= lifetime / 2)
                    ? liveness_class::mostly_alive : liveness_class::mostly_dead;
       }
       update_eviction_counters(*way, evict_lv);
@@ -520,7 +523,7 @@ bool CACHE::handle_fill(const PACKET& fill_mshr)
       way->data = fill_mshr.data;
       way->ip = fill_mshr.ip;
       way->install_cycle  = current_cycle;
-      way->last_hit_cycle = 0;
+      way->last_hit_cycle = current_cycle;
 
       metadata_thru =
           impl_prefetcher_cache_fill(pkt_address, get_set_index(fill_mshr.address), way_idx, fill_mshr.type == PREFETCH, evicting_address, metadata_thru);
@@ -591,9 +594,7 @@ bool CACHE::try_hit(const PACKET& handle_pkt)
       ret->return_data(copy);
 
     way->dirty = (handle_pkt.type == WRITE);
-    if (NAME == "cpu0_STLB")
-      way->accessed = true;
-    else if (NAME == "LLC" && way->dp)
+    if (NAME == "cpu0_STLB" || NAME == "LLC")
       way->accessed = true;
     way->last_hit_cycle = current_cycle;
 

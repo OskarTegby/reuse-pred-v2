@@ -18,13 +18,15 @@ SHARED_TRACES=/home/users/shared/traces
 # ── Argument parsing ──────────────────────────────────────────────────────────
 SUITE=""
 DEBUG=0
+LLC_ONLY=0
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
     qmm|google) SUITE="$1"; shift ;;
     --debug) DEBUG=1; shift ;;
+    --llc-only) LLC_ONLY=1; shift ;;
     *)
-      echo "Usage: $0 {qmm|google} [--debug]" >&2
+      echo "Usage: $0 {qmm|google} [--debug] [--llc-only]" >&2
       exit 2 ;;
   esac
 done
@@ -90,6 +92,22 @@ RUN_LABEL="$RUN_LABEL",BINARY="champsim_lru" \
 jid=$(echo "$raw" | awk '/Your job/ {print $3}' | cut -d. -f1)
 echo "  [jid=${jid}] lru"
 
+# ── SRRIP baseline ────────────────────────────────────────────────────────────
+echo "Submitting SRRIP baseline..."
+RUN_LABEL="${BASE_LABEL}/srrip"
+mkdir -p "${PROJECT_ROOT}/results/${RUN_LABEL}"
+raw=$(qsub -t "$TASK_RANGE" \
+           -N "maz_${SUITE}_srrip" \
+           -o "${LOG_DIR}/" -e "${LOG_DIR}/" \
+           -l h_rt=24:00:00 -l mem_free=1G \
+           -wd "$PROJECT_ROOT" \
+           -v WARMUP="$WARMUP",SIM="$SIM",\
+TRACE_DIR="$TRACE_DIR",TRACE_EXT="$TRACE_EXT",\
+RUN_LABEL="$RUN_LABEL",BINARY="champsim_srrip" \
+           "${PROJECT_ROOT}/scripts/submit/run_cs.sh")
+jid=$(echo "$raw" | awk '/Your job/ {print $3}' | cut -d. -f1)
+echo "  [jid=${jid}] srrip"
+
 # ── LLC SRRIP-Live (5 thresholds) ────────────────────────────────────────────
 echo "Submitting LLC SRRIP-Live..."
 for thd in "${THRESHOLDS[@]}"; do
@@ -103,7 +121,7 @@ for thd in "${THRESHOLDS[@]}"; do
              -v WARMUP="$WARMUP",SIM="$SIM",\
 TRACE_DIR="$TRACE_DIR",TRACE_EXT="$TRACE_EXT",\
 RUN_LABEL="$RUN_LABEL",BINARY="champsim_srrip_live",\
-MID_THD="$thd",BHIST_MODE="pc" \
+MID_THD="$thd",LOW_THD="$thd",BHIST_MODE="pc" \
              "${PROJECT_ROOT}/scripts/submit/run_cs.sh")
   jid=$(echo "$raw" | awk '/Your job/ {print $3}' | cut -d. -f1)
   echo "  [jid=${jid}] llc_srrip_live thd=${thd}"
@@ -122,11 +140,16 @@ for thd in "${THRESHOLDS[@]}"; do
              -v WARMUP="$WARMUP",SIM="$SIM",\
 TRACE_DIR="$TRACE_DIR",TRACE_EXT="$TRACE_EXT",\
 RUN_LABEL="$RUN_LABEL",BINARY="champsim_ipv_live",\
-MID_THD="$thd",BHIST_MODE="pc" \
+MID_THD="$thd",LOW_THD="$thd",BHIST_MODE="pc" \
              "${PROJECT_ROOT}/scripts/submit/run_cs.sh")
   jid=$(echo "$raw" | awk '/Your job/ {print $3}' | cut -d. -f1)
   echo "  [jid=${jid}] llc_ipv_live thd=${thd}"
 done
+
+if [ "$LLC_ONLY" -eq 1 ]; then
+  finish_submission $(( 12 * N )) "${BASE_LABEL}"
+  exit 0
+fi
 
 # ── STLB SRRIP-Live (5 thresholds) ───────────────────────────────────────────
 echo "Submitting STLB SRRIP-Live..."
@@ -141,7 +164,7 @@ for thd in "${THRESHOLDS[@]}"; do
              -v WARMUP="$WARMUP",SIM="$SIM",\
 TRACE_DIR="$TRACE_DIR",TRACE_EXT="$TRACE_EXT",\
 RUN_LABEL="$RUN_LABEL",BINARY="champsim_stlb_srrip_live",\
-MID_THD="$thd",BHIST_MODE="pc",SRRIP_LIVE_TARGET="stlb" \
+MID_THD="$thd",LOW_THD="$thd",BHIST_MODE="pc",SRRIP_LIVE_TARGET="stlb" \
              "${PROJECT_ROOT}/scripts/submit/run_cs.sh")
   jid=$(echo "$raw" | awk '/Your job/ {print $3}' | cut -d. -f1)
   echo "  [jid=${jid}] stlb_srrip_live thd=${thd}"
@@ -160,7 +183,7 @@ for thd in "${THRESHOLDS[@]}"; do
              -v WARMUP="$WARMUP",SIM="$SIM",\
 TRACE_DIR="$TRACE_DIR",TRACE_EXT="$TRACE_EXT",\
 RUN_LABEL="$RUN_LABEL",BINARY="champsim_stlb_ipv_live",\
-MID_THD="$thd",BHIST_MODE="pc",SRRIP_LIVE_TARGET="stlb" \
+MID_THD="$thd",LOW_THD="$thd",BHIST_MODE="pc",SRRIP_LIVE_TARGET="stlb" \
              "${PROJECT_ROOT}/scripts/submit/run_cs.sh")
   jid=$(echo "$raw" | awk '/Your job/ {print $3}' | cut -d. -f1)
   echo "  [jid=${jid}] stlb_ipv_live thd=${thd}"
