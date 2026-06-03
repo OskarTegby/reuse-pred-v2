@@ -346,6 +346,36 @@ successfully retains and filters this critical set. The PCs that spill out
 to warm-miss status are mostly-alive producers that do not require precise
 liveness guidance to be placed well.
 
+\subsection{LLC size study results}
+
+We swept the LLC main table capacity from 4096 down to 128 entries, holding
+the promotion buffer at 128 entries and leaving the STLB unbounded. The
+results (Table~\ref{tab:llc_size_buf128}) show that performance remains
+remarkably flat: shrinking from 4096 to 256 entries costs only 0.375~pp,
+and even 128 entries retains 7.274\% speedup (a loss of just 0.815~pp
+from the 4096-entry baseline). This validates the design: the promotion
+buffer's quality gate ensures that the small table focuses on DoA producers,
+not on maintaining a complete PC directory.
+
+\begin{table}[t!]
+\centering
+\small
+\caption{LLC history table size study (buf=128, STLB unbounded, IPV-Live)}
+\label{tab:llc_size_buf128}
+\begin{tabular}{lrr}
+\toprule
+\textbf{LLC capacity} & \textbf{Speedup vs \lru} & \textbf{Loss vs 4096} \\
+\midrule
+4096 & +8.089\% & --- \\
+2048 & +7.966\% & -0.123~pp \\
+1024 & +7.887\% & -0.202~pp \\
+512  & +7.742\% & -0.347~pp \\
+256  & +7.714\% & -0.375~pp \\
+128  & +7.274\% & -0.815~pp \\
+\bottomrule
+\end{tabular}
+\end{table}
+
 % ─────────────────────────────────────────────────────────────────────────────
 \section{Results}
 \label{sec:results}
