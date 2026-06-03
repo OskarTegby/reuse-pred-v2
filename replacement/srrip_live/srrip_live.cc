@@ -185,5 +185,6 @@ void CACHE::replacement_final_stats()
          pct(st.evict_rrpv_alive[2],evict_alive), pct(st.evict_rrpv_alive[3],evict_alive));
   printf("  Aging loops      : %lu  (%.2f per eviction)\n",
          st.aging_loops, pct(st.aging_loops, evict_total) / 100.0);
+  repl_hist_pc.print_stats(NAME.c_str(), mid_thd, low_thd);
   printf("\n");
 }
