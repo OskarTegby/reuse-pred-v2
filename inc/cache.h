@@ -26,6 +26,7 @@
 #include <map>
 #include <set>
 #include <unordered_map>
+#include <unordered_set>
 #include <string>
 #include <vector>
 
@@ -61,9 +62,10 @@ public:
     uint64_t shadow_hit_doa_sum  = 0;  // sum of dead_count at eviction for shadow hits
     uint64_t shadow_hit_nonzero  = 0;  // shadow hits where dead_count > 0 at eviction
     // Classification source tracking (set by classify()).
-    mutable uint64_t classify_main = 0;  // resolved from main table
-    mutable uint64_t classify_buf  = 0;  // resolved from promotion buffer (main miss)
-    mutable uint64_t classify_miss = 0;  // not found in either → defaults to mostly_alive
+    mutable uint64_t classify_main      = 0;  // resolved from main table
+    mutable uint64_t classify_buf       = 0;  // resolved from promotion buffer (main miss)
+    mutable uint64_t classify_warm_miss = 0;  // not in table/buf, but found in shadow (recently evicted — accuracy loss)
+    mutable uint64_t classify_cold_miss = 0;  // not found anywhere (no prior history — expected)
   };
 
   // Default: unbounded mode — backed by an unordered_map, no eviction.
@@ -160,8 +162,12 @@ public:
         return liveness_class::mostly_alive;
       }
     }
-    // 3. Not found anywhere.
-    ++stats_.classify_miss;
+    // 3. Not found anywhere. Warm miss: PC was seen before (entry evicted).
+    // Cold miss: PC has never generated an eviction — no history to lose.
+    if (!seen_pcs_.empty() && seen_pcs_.count(key))
+      ++stats_.classify_warm_miss;
+    else
+      ++stats_.classify_cold_miss;
     return liveness_class::mostly_alive;
   }
 
@@ -191,13 +197,17 @@ public:
            buf_occ, buf_cap_,
            buf_cap_ ? 100.0 * buf_occ / buf_cap_ : 0.0,
            stats_.buf_ever_full  ? " [was full]" : "");
-    const uint64_t classify_total = stats_.classify_main + stats_.classify_buf + stats_.classify_miss;
+    const uint64_t classify_total = stats_.classify_main + stats_.classify_buf
+                                  + stats_.classify_warm_miss + stats_.classify_cold_miss;
     if (classify_total > 0) {
-      printf("%s repl_hist classify  : main=%lu (%.1f%%)  buf=%lu (%.1f%%)  miss=%lu (%.1f%%)\n",
+      auto pct_c = [&](uint64_t n){ return classify_total ? 100.0 * n / classify_total : 0.0; };
+      printf("%s repl_hist classify  : main=%lu (%.1f%%)  buf=%lu (%.1f%%)  "
+             "warm_miss=%lu (%.1f%%)  cold_miss=%lu (%.1f%%)\n",
              prefix,
-             stats_.classify_main, cap_ ? 100.0 * stats_.classify_main / classify_total : 0.0,
-             stats_.classify_buf,  cap_ ? 100.0 * stats_.classify_buf  / classify_total : 0.0,
-             stats_.classify_miss, cap_ ? 100.0 * stats_.classify_miss / classify_total : 0.0);
+             stats_.classify_main,      pct_c(stats_.classify_main),
+             stats_.classify_buf,       pct_c(stats_.classify_buf),
+             stats_.classify_warm_miss, pct_c(stats_.classify_warm_miss),
+             stats_.classify_cold_miss, pct_c(stats_.classify_cold_miss));
     }
     if (shadow_cap_ > 0) {
       const double hit_rate = stats_.buf_evictions
@@ -221,6 +231,7 @@ public:
   }
 
   void update(uint64_t key, liveness_class lv) {
+    if (shadow_cap_ > 0) seen_pcs_.insert(key);
     if (!unbounded_ && checkpoint_interval_ > 0) {
       if (++update_count_ % checkpoint_interval_ == 0) {
         const uint64_t main_occ = static_cast<uint64_t>(
@@ -367,6 +378,10 @@ private:
   uint64_t shadow_cap_   = 0;
   uint64_t shadow_clock_ = 0;
   std::vector<ShadowEntry> shadow_;
+  // Instrumentation: tracks every key ever passed to update(), so classify() can
+  // distinguish warm misses (PC was known, entry was evicted) from cold misses
+  // (PC has never generated an eviction before). Only populated when shadow_cap_ > 0.
+  std::unordered_set<uint64_t> seen_pcs_;
   mutable Stats stats_;
 
   void on_hit(Entry& e, bool accessed) {
