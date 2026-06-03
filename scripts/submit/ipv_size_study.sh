@@ -36,7 +36,7 @@ submit "stlb_ipv_size_${DATE}/unbounded" "champsim_stlb_ipv_live" "ipv_stlb_ub" 
 
 for cap in 1024 512 256 128; do
   submit "stlb_ipv_size_${DATE}/cap${cap}" "champsim_stlb_ipv_live" "ipv_stlb_${cap}" \
-    "MID_THD=1,LOW_THD=1,BHIST_MODE=pc,SRRIP_LIVE_TARGET=stlb,REPL_HIST_STLB_CAP=${cap},REPL_HIST_BUF_CAP=8,REPL_HIST_REPL=lfu_doa"
+    "MID_THD=1,LOW_THD=1,BHIST_MODE=pc,SRRIP_LIVE_TARGET=stlb,REPL_HIST_STLB_CAP=${cap},REPL_HIST_BUF_CAP=32,REPL_HIST_REPL=lfu_doa"
 done
 
 echo ""

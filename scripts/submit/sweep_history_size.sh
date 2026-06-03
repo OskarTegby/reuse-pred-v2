@@ -78,7 +78,7 @@ if [ "$llc_only" != "1" ]; then
       submit "stlb_size_${policy}_${DATE}/cap${cap}" "$binary" "stlb_sz_${policy}_${cap}" \
         "$policy" "$cap" 45 \
         "MID_THD=1,LOW_THD=1,BHIST_MODE=pc,SRRIP_LIVE_TARGET=stlb,\
-REPL_HIST_STLB_CAP=${cap},REPL_HIST_BUF_CAP=8,REPL_HIST_REPL=lfu_doa"
+REPL_HIST_STLB_CAP=${cap},REPL_HIST_BUF_CAP=32,REPL_HIST_REPL=lfu_doa"
     done
   done
 fi
