@@ -62,10 +62,11 @@ public:
     uint64_t shadow_hit_doa_sum  = 0;  // sum of dead_count at eviction for shadow hits
     uint64_t shadow_hit_nonzero  = 0;  // shadow hits where dead_count > 0 at eviction
     // Classification source tracking (set by classify()).
-    mutable uint64_t classify_main      = 0;  // resolved from main table
-    mutable uint64_t classify_buf       = 0;  // resolved from promotion buffer (main miss)
-    mutable uint64_t classify_warm_miss = 0;  // not in table/buf, but found in shadow (recently evicted — accuracy loss)
-    mutable uint64_t classify_cold_miss = 0;  // not found anywhere (no prior history — expected)
+    mutable uint64_t classify_main      = 0;  // found in main table (at or above threshold)
+    mutable uint64_t classify_buf_guided= 0;  // found in promo buffer AND above threshold → DoA (recovered)
+    mutable uint64_t classify_buf_weak  = 0;  // found in promo buffer but below threshold (demoted from main, doa lost)
+    mutable uint64_t classify_warm_miss = 0;  // not in table or buf, but PC was seen before (fully evicted — accuracy loss)
+    mutable uint64_t classify_cold_miss = 0;  // PC never seen before (no history — expected)
   };
 
   // Default: unbounded mode — backed by an unordered_map, no eviction.
@@ -155,10 +156,10 @@ public:
     for (const auto& b : buffer_) {
       if (b.valid && b.key == key) {
         if (b.dead_count >= mid_thd) {
-          ++stats_.classify_buf;
+          ++stats_.classify_buf_guided;  // buffer has enough evidence — recovered classification
           return liveness_class::doa;
         }
-        ++stats_.classify_buf;  // found in buffer but below threshold
+        ++stats_.classify_buf_weak;  // entry demoted here from main table, doa count was reset to 0
         return liveness_class::mostly_alive;
       }
     }
@@ -197,17 +198,20 @@ public:
            buf_occ, buf_cap_,
            buf_cap_ ? 100.0 * buf_occ / buf_cap_ : 0.0,
            stats_.buf_ever_full  ? " [was full]" : "");
-    const uint64_t classify_total = stats_.classify_main + stats_.classify_buf
-                                  + stats_.classify_warm_miss + stats_.classify_cold_miss;
+    const uint64_t classify_total = stats_.classify_main + stats_.classify_buf_guided
+                                  + stats_.classify_buf_weak + stats_.classify_warm_miss
+                                  + stats_.classify_cold_miss;
     if (classify_total > 0) {
       auto pct_c = [&](uint64_t n){ return classify_total ? 100.0 * n / classify_total : 0.0; };
-      printf("%s repl_hist classify  : main=%lu (%.1f%%)  buf=%lu (%.1f%%)  "
+      printf("%s repl_hist classify  : main=%lu (%.1f%%)  "
+             "buf_guided=%lu (%.1f%%)  buf_weak=%lu (%.1f%%)  "
              "warm_miss=%lu (%.1f%%)  cold_miss=%lu (%.1f%%)\n",
              prefix,
-             stats_.classify_main,      pct_c(stats_.classify_main),
-             stats_.classify_buf,       pct_c(stats_.classify_buf),
-             stats_.classify_warm_miss, pct_c(stats_.classify_warm_miss),
-             stats_.classify_cold_miss, pct_c(stats_.classify_cold_miss));
+             stats_.classify_main,       pct_c(stats_.classify_main),
+             stats_.classify_buf_guided, pct_c(stats_.classify_buf_guided),
+             stats_.classify_buf_weak,   pct_c(stats_.classify_buf_weak),
+             stats_.classify_warm_miss,  pct_c(stats_.classify_warm_miss),
+             stats_.classify_cold_miss,  pct_c(stats_.classify_cold_miss));
     }
     if (shadow_cap_ > 0) {
       const double hit_rate = stats_.buf_evictions
