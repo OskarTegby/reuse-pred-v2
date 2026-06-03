@@ -241,10 +241,17 @@ void CACHE::load_predictor_settings()
   pfq_ema_thd   = getenv_double("PFQ_EMA_THD", 10.0) / 100.0;
 
   // Liveness-guided replacement: two independent thresholds.
-  // repl_hist_pc.doa  >= mid_thd → DoA
-  // repl_hist_pc.dead >= low_thd → mostly-dead (LOW_THD=0 disables, collapses to 2-class)
-  mid_thd = getenv_uint64("MID_THD", 1);
-  low_thd = getenv_uint64("LOW_THD", 0);
+  // Per-level thresholds: LLC_MID_THD / STLB_MID_THD override MID_THD for a
+  // specific cache level, allowing LLC and STLB to use different optimal thresholds
+  // in a combined run. Falls back to MID_THD if the level-specific var is unset.
+  const char* level_mid = (NAME == "LLC")       ? std::getenv("LLC_MID_THD")
+                        : (NAME == "cpu0_STLB")  ? std::getenv("STLB_MID_THD")
+                        : nullptr;
+  const char* level_low = (NAME == "LLC")       ? std::getenv("LLC_LOW_THD")
+                        : (NAME == "cpu0_STLB")  ? std::getenv("STLB_LOW_THD")
+                        : nullptr;
+  mid_thd = level_mid ? std::stoull(level_mid) : getenv_uint64("MID_THD", 1);
+  low_thd = level_low ? std::stoull(level_low) : getenv_uint64("LOW_THD", 0);
 
   // Bounded repl_hist_pc: 0 = unbounded (default, backward compatible).
   // REPL_HIST_REPL controls table management policy (same options as HIST_REPL).
