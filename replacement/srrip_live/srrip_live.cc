@@ -165,6 +165,7 @@ void CACHE::replacement_final_stats()
   printf("%s SRRIP-Live STATS:\n", NAME.c_str());
   printf("  Activation rate  : %.1f%%  (%lu guided / %lu total insertions)\n",
          pct(guided_ins, total_ins), guided_ins, total_ins);
+  printf("  guided_insertions=%lu\n", guided_ins);
   printf("  Insert mix       : DoA=%.1f%%  Dead=%.1f%%  Alive=%.1f%%  Unguided=%.1f%%\n",
          pct(st.ins_doa,total_ins), pct(st.ins_dead,total_ins),
          pct(st.ins_alive,total_ins), pct(st.ins_unguided,total_ins));

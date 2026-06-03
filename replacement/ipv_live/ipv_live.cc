@@ -206,6 +206,7 @@ void CACHE::replacement_final_stats()
          g_ipv_mostly_alive[3],g_ipv_mostly_alive[4]);
   printf("  Activation rate : %.1f%%  (%lu guided / %lu total insertions)\n",
          pct(guided_ins, total_ins), guided_ins, total_ins);
+  printf("  guided_insertions=%lu\n", guided_ins);
   printf("  Insert mix      : DoA=%.1f%%  Dead=%.1f%%  Alive=%.1f%%  Unguided=%.1f%%\n",
          pct(st.ins_doa,total_ins), pct(st.ins_dead,total_ins),
          pct(st.ins_alive,total_ins), pct(st.ins_unguided,total_ins));
