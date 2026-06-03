@@ -376,6 +376,37 @@ not on maintaining a complete PC directory.
 \end{tabular}
 \end{table}
 
+\subsection{STLB size study results}
+
+In contrast, the STLB history table shows significantly steeper degradation
+with size reduction (Table~\ref{tab:stlb_size_buf128}). Shrinking from 1024
+to 512 entries costs 1.667~pp --- more than four times the LLC degradation
+from 4096 to 256. This reflects a key difference: the STLB operates on a
+much smaller PC space (6,214 unique PCs vs 24,933 for LLC) and exhibits a
+sharper Pareto concentration. Halving the STLB table size evicts more of the
+critical DoA-producing PCs, whereas LLC's DoA producers are so concentrated
+that a table of 256 entries still captures the majority.
+
+\begin{table}[t!]
+\centering
+\small
+\caption{STLB history table size study (buf=128, LLC unbounded, IPV-Live)}
+\label{tab:stlb_size_buf128}
+\begin{tabular}{lrr}
+\toprule
+\textbf{STLB capacity} & \textbf{Speedup vs \lru} & \textbf{Loss vs 1024} \\
+\midrule
+1024 & +7.835\% & --- \\
+512  & +6.168\% & -1.667~pp \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+These asymmetric curves indicate that LLC and STLB history tables should be
+sized differently in hardware: LLC can be shrunk to 256 entries with minimal
+loss, while STLB requires closer to its full capacity to maintain most of
+the guidance benefit.
+
 % ─────────────────────────────────────────────────────────────────────────────
 \section{Results}
 \label{sec:results}
