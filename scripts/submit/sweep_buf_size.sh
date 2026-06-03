@@ -33,11 +33,6 @@ echo "  Fixed: LLC=${LLC_CAP} entries, STLB=${STLB_CAP} entries, lfu_doa"
 echo "  Policy: IPV-Live, LLC_MID_THD=4, STLB_MID_THD=1"
 echo ""
 
-# buf=0: no promotion buffer — baseline for this study
-submit "$LABEL/buf0" champsim_both_ipv_live "buf_0" \
-  "LLC_MID_THD=4,LLC_LOW_THD=4,STLB_MID_THD=1,STLB_LOW_THD=1,BHIST_MODE=pc,SRRIP_LIVE_TARGET=both,\
-REPL_HIST_LLC_CAP=${LLC_CAP},REPL_HIST_STLB_CAP=${STLB_CAP},REPL_HIST_BUF_CAP=0,REPL_HIST_REPL=lfu_doa"
-
 for buf in 32 64 128 256 512 1024; do
   submit "$LABEL/buf${buf}" champsim_both_ipv_live "buf_${buf}" \
     "LLC_MID_THD=4,LLC_LOW_THD=4,STLB_MID_THD=1,STLB_LOW_THD=1,BHIST_MODE=pc,SRRIP_LIVE_TARGET=both,\
@@ -45,5 +40,5 @@ REPL_HIST_LLC_CAP=${LLC_CAP},REPL_HIST_STLB_CAP=${STLB_CAP},REPL_HIST_BUF_CAP=${
 done
 
 echo ""
-echo "Submitted: 7 job arrays × 45 traces = 315 jobs"
+echo "Submitted: 6 job arrays × 45 traces = 270 jobs"
 echo "Label: $LABEL"
