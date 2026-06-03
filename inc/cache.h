@@ -70,6 +70,13 @@ public:
     : cap_(cap), pol_(pol), entries_(cap), buf_cap_(buf_cap), buffer_(buf_cap),
       shadow_cap_(shadow_cap), shadow_(shadow_cap) {}
 
+  // Enable periodic occupancy checkpoints to stderr every `interval` update() calls.
+  // Call after construction; name labels the output lines.
+  void set_checkpoint(uint64_t interval, std::string name) {
+    checkpoint_interval_ = interval;
+    checkpoint_name_     = std::move(name);
+  }
+
   uint64_t get(uint64_t key) const {
     if (unbounded_) {
       auto it = unmap_.find(key);
@@ -158,6 +165,22 @@ public:
   }
 
   void update(uint64_t key, liveness_class lv) {
+    if (!unbounded_ && checkpoint_interval_ > 0) {
+      if (++update_count_ % checkpoint_interval_ == 0) {
+        const uint64_t main_occ = static_cast<uint64_t>(
+            std::count_if(entries_.begin(), entries_.end(),
+                          [](const Entry& e){ return e.valid; }));
+        const uint64_t buf_occ = static_cast<uint64_t>(
+            std::count_if(buffer_.begin(), buffer_.end(),
+                          [](const BufEntry& b){ return b.valid; }));
+        fprintf(stderr,
+            "[repl_hist %s] update=%-10lu  main=%lu/%lu (%.0f%%)  buf=%lu/%lu (%.0f%%)  shadow_evictions=%lu  shadow_hits=%lu\n",
+            checkpoint_name_.c_str(), update_count_,
+            main_occ, cap_, cap_ ? 100.0 * main_occ / cap_ : 0.0,
+            buf_occ,  buf_cap_, buf_cap_ ? 100.0 * buf_occ / buf_cap_ : 0.0,
+            stats_.buf_evictions, stats_.shadow_hits);
+      }
+    }
     if (unbounded_) {
       auto& [doa, dead] = unmap_[key];
       switch (lv) {
@@ -273,7 +296,10 @@ private:
     bool     valid      = false;
   };
 
-  bool     unbounded_    = false;
+  bool        unbounded_           = false;
+  uint64_t    checkpoint_interval_ = 0;
+  uint64_t    update_count_        = 0;
+  std::string checkpoint_name_;
   mutable std::unordered_map<uint64_t, std::pair<uint64_t,uint64_t>> unmap_;
   uint64_t cap_          = 0;
   Policy   pol_          = Policy::LRU;

@@ -265,6 +265,9 @@ void CACHE::load_predictor_settings()
         return HistTable::Policy::LRU;
       };
       repl_hist_pc = HistTable(rh_cap, parse_rh_policy(rh_repl), rh_buf, rh_shadow);
+      const uint64_t rh_ckpt = getenv_uint64("REPL_HIST_CHECKPOINT", 0);
+      if (rh_ckpt > 0)
+        repl_hist_pc.set_checkpoint(rh_ckpt, NAME);
     }
     // else: keep default-constructed HistTable (unbounded mode)
   }
