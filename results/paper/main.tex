@@ -303,6 +303,50 @@ ML     & AI/ML inference           &  4 \\
 \end{table}
 
 % ─────────────────────────────────────────────────────────────────────────────
+\section{Bounded History Tables and Promotion Buffers}
+% ─────────────────────────────────────────────────────────────────────────────
+
+The per-PC liveness history table can be implemented with unbounded storage
+(using a hash table that grows as new PCs are encountered), but this is
+impractical for hardware. A bounded table with $N$ entries raises a design
+question: when a new PC evicts an old one, how do we avoid losing useful
+history?
+
+We employ a \emph{promotion buffer} --- a second-level buffer between the
+main table and full eviction. When a PC is evicted from the main table, it
+enters the promotion buffer with its dead-count reset to 1. To re-enter the
+main table, it must accumulate enough evidence (dead-count $\geq$ threshold)
+in the buffer to ``beat'' the worst entry in the main table (by frequency
+for LFU-DoA replacement). This two-level design acts as a quality gate: weak
+entries spend time in the buffer proving their importance before displacing
+established entries in the main table.
+
+\subsection{Validation: Why small tables work}
+
+To understand the effectiveness of bounded tables, we performed a detailed
+analysis on a single trace using shadow instrumentation. With an unbounded
+table, the LLC tracks \emph{24,933 unique PCs} over a 50M warmup + 100M
+simulation run. A bounded table with 256 main entries + 128 buffer entries
+(384 total) covers only 1.5\% of the PC space --- yet maintains 88\% DoA
+insertion rate, nearly identical to the unbounded case.
+
+The key insight comes from analysing what happens to the missing PCs:
+of 230K classification queries, 54.4\% are \emph{warm misses} (PCs seen
+before but currently evicted). However, an oracle buffer (infinite
+non-evicting) reveals that only 65\% of warm misses would be resolved by
+larger capacity. More importantly, the warm misses being lost are
+predominantly \emph{mostly-alive blocks} (78.3\% in simulation) --- blocks
+that would be correctly inserted at high priority even if their PC history
+were unknown.
+
+The flat performance curve across table sizes is thus explained by a
+Pareto effect: the DoA-producing PCs are concentrated in the head (top
+$\sim$380 PCs generate the bulk of DoA insertions), and the promotion buffer
+successfully retains and filters this critical set. The PCs that spill out
+to warm-miss status are mostly-alive producers that do not require precise
+liveness guidance to be placed well.
+
+% ─────────────────────────────────────────────────────────────────────────────
 \section{Results}
 \label{sec:results}
 % ─────────────────────────────────────────────────────────────────────────────
