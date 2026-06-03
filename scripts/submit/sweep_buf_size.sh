@@ -33,12 +33,20 @@ echo "  Fixed: LLC=${LLC_CAP} entries, STLB=${STLB_CAP} entries, lfu_doa"
 echo "  Policy: IPV-Live, LLC_MID_THD=4, STLB_MID_THD=1"
 echo ""
 
-for buf in 32 64 128 256 512 1024; do
+# Sweep: double from 16 up to 1024, then an effectively-infinite case (65536).
+# From the oracle buffer analysis, ~12K unique PCs appear in the buffer,
+# so 65536 entries is safely infinite for this workload.
+for buf in 16 32 64 128 256 512 1024; do
   submit "$LABEL/buf${buf}" champsim_both_ipv_live "buf_${buf}" \
     "LLC_MID_THD=4,LLC_LOW_THD=4,STLB_MID_THD=1,STLB_LOW_THD=1,BHIST_MODE=pc,SRRIP_LIVE_TARGET=both,\
 REPL_HIST_LLC_CAP=${LLC_CAP},REPL_HIST_STLB_CAP=${STLB_CAP},REPL_HIST_BUF_CAP=${buf},REPL_HIST_REPL=lfu_doa"
 done
 
+# Infinite promotion buffer: large enough to never evict any entry.
+submit "$LABEL/buf_inf" champsim_both_ipv_live "buf_inf" \
+  "LLC_MID_THD=4,LLC_LOW_THD=4,STLB_MID_THD=1,STLB_LOW_THD=1,BHIST_MODE=pc,SRRIP_LIVE_TARGET=both,\
+REPL_HIST_LLC_CAP=${LLC_CAP},REPL_HIST_STLB_CAP=${STLB_CAP},REPL_HIST_BUF_CAP=65536,REPL_HIST_REPL=lfu_doa"
+
 echo ""
-echo "Submitted: 6 job arrays × 45 traces = 270 jobs"
+echo "Submitted: 9 job arrays × 45 traces = 405 jobs"
 echo "Label: $LABEL"
