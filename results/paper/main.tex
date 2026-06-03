@@ -130,6 +130,41 @@ In simulation the table is unbounded.
 \end{algorithmic}
 \end{algorithm}
 
+\subsection{LRU-Live}
+
+Standard \lru inserts every block at the MRU position (position~0).
+\lru-Live replaces this fixed rule with a liveness-dependent insertion
+position.  For an $N$-way set, three insertion points are defined:
+position~0 for mostly-alive blocks (same as standard \lru); position
+$\lfloor N/3 \rfloor$ for mostly-dead blocks (one grace band, since the
+block showed at least one hit in a prior residency); and position
+$\lfloor 2N/3 \rfloor$ for \doa blocks (near the eviction end, since the
+block showed no reuse).  On a hit, all classes are promoted to the MRU
+position (position~0).
+
+\begin{algorithm}[t!]
+\caption{\lru-Live}
+\label{alg:lru_live}
+\begin{algorithmic}[1]
+\State \textbf{On miss} (insert):
+\State $\mathit{class} \gets \text{classify}(pc)$
+\If{$\mathit{class} = \doa$}
+  \State $block.pos \gets \lfloor 2N/3 \rfloor$ \Comment{near eviction end}
+\ElsIf{$\mathit{class} = \text{mostly-dead}$}
+  \State $block.pos \gets \lfloor N/3 \rfloor$   \Comment{one grace band}
+\Else \Comment{mostly-alive}
+  \State $block.pos \gets 0$                       \Comment{MRU: standard \lru}
+\EndIf
+\medskip
+\State \textbf{On hit} (promote):
+\State $block.pos \gets 0$ \Comment{full promotion to MRU for all classes}
+\end{algorithmic}
+\end{algorithm}
+
+\lru-Live requires no state beyond what \lru already tracks: the per-block
+position counter of $\lceil \log_2 N \rceil$ bits is already present.  The
+liveness table adds the same per-\textsc{PC} overhead as the policies below.
+
 \subsection{SRRIP-Live}
 
 On a miss, \doa blocks are inserted at $\text{maxRRPV}$ (immediate eviction
@@ -139,6 +174,14 @@ promoted.  On a hit, \doa blocks receive a partial promotion to
 $\text{maxRRPV}-1$ (they showed unexpected reuse but remain deprioritised);
 mostly-dead blocks receive a moderate promotion to $\text{maxRRPV}-2$;
 mostly-alive blocks are fully promoted to 0.
+
+\lru-Live and \srrip-Live express the same core idea: use liveness to
+differentiate insertion priority.  \srrip-Live coarsens the $N$ LRU positions
+into four \rrpv levels, reducing per-block state from $\lceil\log_2 N\rceil$
+bits to 2 bits, and additionally differentiates hit promotion by class (DoA
+blocks hit from positions are only partially promoted, whereas \lru-Live
+always promotes to MRU).  The coarser representation is cheaper in hardware
+and, as Section~\ref{sec:results} shows, suffers no loss in effectiveness.
 
 \begin{algorithm}[t!]
 \caption{\srrip-Live}
