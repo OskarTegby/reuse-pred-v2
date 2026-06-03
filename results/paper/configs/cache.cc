@@ -151,25 +151,9 @@ void CACHE::update_eviction_counters(const BLOCK& victim, liveness_class lv)
       bhist_flat.update(victim.address >> OFFSET_BITS, bypass_lv);
   }
 
-  // Replacement-guidance history: two independent counters per fill PC.
-  // doa_count:  increments on DoA; resets on any live eviction.
-  // dead_count: increments on mostly-dead; resets on mostly-alive.
-  if (NAME == "LLC" || NAME == "cpu0_STLB") {
-    auto& e = repl_hist_pc[victim.ip];
-    switch (lv) {
-      case liveness_class::doa:
-        e.doa++;
-        break;
-      case liveness_class::mostly_dead:
-        e.dead++;
-        e.doa = 0;
-        break;
-      case liveness_class::mostly_alive:
-        e.doa  = 0;
-        e.dead = 0;
-        break;
-    }
-  }
+  // Replacement-guidance history: delegated to HistTable (bounded or unbounded).
+  if (NAME == "LLC" || NAME == "cpu0_STLB")
+    repl_hist_pc.update(victim.ip, lv);
 }
 
 // Reads environment variables to enable dpPred/cbPred and tune their
@@ -257,10 +241,43 @@ void CACHE::load_predictor_settings()
   pfq_ema_thd   = getenv_double("PFQ_EMA_THD", 10.0) / 100.0;
 
   // Liveness-guided replacement: two independent thresholds.
-  // repl_hist_pc.doa  >= mid_thd → DoA
-  // repl_hist_pc.dead >= low_thd → mostly-dead (LOW_THD=0 disables, collapses to 2-class)
-  mid_thd = getenv_uint64("MID_THD", 1);
-  low_thd = getenv_uint64("LOW_THD", 0);
+  // Per-level thresholds: LLC_MID_THD / STLB_MID_THD override MID_THD for a
+  // specific cache level, allowing LLC and STLB to use different optimal thresholds
+  // in a combined run. Falls back to MID_THD if the level-specific var is unset.
+  const char* level_mid = (NAME == "LLC")       ? std::getenv("LLC_MID_THD")
+                        : (NAME == "cpu0_STLB")  ? std::getenv("STLB_MID_THD")
+                        : nullptr;
+  const char* level_low = (NAME == "LLC")       ? std::getenv("LLC_LOW_THD")
+                        : (NAME == "cpu0_STLB")  ? std::getenv("STLB_LOW_THD")
+                        : nullptr;
+  mid_thd = level_mid ? std::stoull(level_mid) : getenv_uint64("MID_THD", 1);
+  low_thd = level_low ? std::stoull(level_low) : getenv_uint64("LOW_THD", 0);
+
+  // Bounded repl_hist_pc: 0 = unbounded (default, backward compatible).
+  // REPL_HIST_REPL controls table management policy (same options as HIST_REPL).
+  // REPL_HIST_BUF_CAP controls the promotion buffer size (default 0 = disabled).
+  {
+    const uint64_t rh_cap = (NAME == "LLC")
+        ? getenv_uint64("REPL_HIST_LLC_CAP",  0)
+        : getenv_uint64("REPL_HIST_STLB_CAP", 0);
+    if (rh_cap > 0) {
+      const uint64_t rh_buf    = getenv_uint64("REPL_HIST_BUF_CAP",    0);
+      const uint64_t rh_shadow = getenv_uint64("REPL_HIST_SHADOW_CAP", 0);
+      const char* rh_repl      = std::getenv("REPL_HIST_REPL");
+      auto parse_rh_policy     = [](const char* v) -> HistTable::Policy {
+        if (!v) return HistTable::Policy::LRU;
+        if (std::string_view(v) == "lfu")     return HistTable::Policy::LFU;
+        if (std::string_view(v) == "lfu_doa") return HistTable::Policy::LFU_DOA;
+        if (std::string_view(v) == "srrip")   return HistTable::Policy::SRRIP;
+        return HistTable::Policy::LRU;
+      };
+      repl_hist_pc = HistTable(rh_cap, parse_rh_policy(rh_repl), rh_buf, rh_shadow);
+      const uint64_t rh_ckpt = getenv_uint64("REPL_HIST_CHECKPOINT", 0);
+      if (rh_ckpt > 0)
+        repl_hist_pc.set_checkpoint(rh_ckpt, NAME);
+    }
+    // else: keep default-constructed HistTable (unbounded mode)
+  }
   if (const char* v = std::getenv("MID_PROMOTE"); v && std::stoull(v))
     mid_promote = true;
 
@@ -295,14 +312,7 @@ uint64_t CACHE::get_repl_guidance_score(uint64_t block_address, uint64_t dp_pc) 
 
 liveness_class CACHE::classify_block_liveness(uint64_t /*block_address*/, uint64_t pc) const
 {
-  // Two independent thresholds, checked in priority order.
-  // DoA counter and mostly-dead counter are updated independently at eviction.
-  const auto it = repl_hist_pc.find(pc);
-  if (it != repl_hist_pc.end()) {
-    if (it->second.doa  >= mid_thd)                return liveness_class::doa;
-    if (low_thd > 0 && it->second.dead >= low_thd) return liveness_class::mostly_dead;
-  }
-  return liveness_class::mostly_alive;
+  return repl_hist_pc.classify(pc, mid_thd, low_thd);
 }
 
 void CACHE::record_characterization(uint64_t dp_pc, uint64_t block_address)

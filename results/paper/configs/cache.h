@@ -26,6 +26,7 @@
 #include <map>
 #include <set>
 #include <unordered_map>
+#include <unordered_set>
 #include <string>
 #include <vector>
 
@@ -51,13 +52,44 @@ public:
     uint64_t table_hits    = 0;  // get() found the key (value > 0)
     uint64_t promotions    = 0;  // buffer → main table promotions
     uint64_t promoted_hits = 0;  // later get() hits on promoted entries
+    // Occupancy
+    bool     main_ever_full = false; // true once victim_slot() found no free slot
+    bool     buf_ever_full  = false; // true once buf_victim() found no free slot
+    // Shadow (victim) buffer: tracks entries fully evicted from the promotion buffer.
+    // When an evicted entry's PC appears again, we know useful history was lost.
+    uint64_t buf_evictions       = 0;  // entries lost from the promotion buffer
+    uint64_t shadow_hits         = 0;  // evicted PCs seen again (before shadow ages out)
+    uint64_t shadow_hit_doa_sum  = 0;  // sum of dead_count at eviction for shadow hits
+    uint64_t shadow_hit_nonzero  = 0;  // shadow hits where dead_count > 0 at eviction
+    // Classification source tracking (set by classify()).
+    mutable uint64_t classify_main      = 0;  // found in main table (at or above threshold)
+    mutable uint64_t classify_buf_guided= 0;  // found in promo buffer AND above threshold → DoA (recovered)
+    mutable uint64_t classify_buf_weak  = 0;  // found in promo buffer but below threshold (demoted from main, doa lost)
+    mutable uint64_t classify_warm_miss        = 0;  // not in table or buf, but PC was seen before (fully evicted)
+    mutable uint64_t classify_warm_oracle_hit  = 0;  // warm miss where oracle would have classified correctly (oracle dead_count >= mid_thd)
+    mutable uint64_t classify_cold_miss        = 0;  // PC never seen before (no history — expected)
   };
 
-  HistTable() = default;
-  HistTable(uint64_t cap, Policy pol, uint64_t buf_cap = 0)
-    : cap_(cap), pol_(pol), entries_(cap), buf_cap_(buf_cap), buffer_(buf_cap) {}
+  // Default: unbounded mode — backed by an unordered_map, no eviction.
+  // Semantically identical to the old repl_hist_pc unordered_map; used as the
+  // backward-compatible fallback when no capacity limit is configured.
+  HistTable() : unbounded_(true) {}
+  HistTable(uint64_t cap, Policy pol, uint64_t buf_cap = 0, uint64_t shadow_cap = 0)
+    : cap_(cap), pol_(pol), entries_(cap), buf_cap_(buf_cap), buffer_(buf_cap),
+      shadow_cap_(shadow_cap), shadow_(shadow_cap) {}
+
+  // Enable periodic occupancy checkpoints to stderr every `interval` update() calls.
+  // Call after construction; name labels the output lines.
+  void set_checkpoint(uint64_t interval, std::string name) {
+    checkpoint_interval_ = interval;
+    checkpoint_name_     = std::move(name);
+  }
 
   uint64_t get(uint64_t key) const {
+    if (unbounded_) {
+      auto it = unmap_.find(key);
+      return it != unmap_.end() ? it->second.first : 0;
+    }
     stats_.queries++;
     for (const auto& e : entries_) {
       if (e.valid && e.key == key) {
@@ -72,9 +104,78 @@ public:
   }
 
   uint64_t get_dead(uint64_t key) const {
+    if (unbounded_) {
+      auto it = unmap_.find(key);
+      return it != unmap_.end() ? it->second.second : 0;
+    }
     for (const auto& e : entries_)
       if (e.valid && e.key == key) return e.mostly_dead;
     return 0;
+  }
+
+  // Returns {doa, mostly_dead} in one scan — use instead of separate get()+get_dead()
+  // calls when both values are needed (avoids scanning entries_ twice in bounded mode).
+  std::pair<uint64_t,uint64_t> get_both(uint64_t key) const {
+    if (unbounded_) {
+      auto it = unmap_.find(key);
+      return it != unmap_.end() ? it->second : std::pair<uint64_t,uint64_t>{0, 0};
+    }
+    for (const auto& e : entries_)
+      if (e.valid && e.key == key) return {e.doa, e.mostly_dead};
+    return {0, 0};
+  }
+
+  // Classify a PC against mid_thd / low_thd, consulting main table then promotion
+  // buffer. Tracks which structure resolved the classification in stats.
+  liveness_class classify(uint64_t key, uint64_t mid_thd, uint64_t low_thd) const {
+    if (unbounded_) {
+      auto it = unmap_.find(key);
+      if (it != unmap_.end()) {
+        const auto [doa, dead] = it->second;
+        if (doa  >= mid_thd)                return liveness_class::doa;
+        if (low_thd > 0 && dead >= low_thd) return liveness_class::mostly_dead;
+      }
+      return liveness_class::mostly_alive;
+    }
+    // 1. Main table.
+    for (const auto& e : entries_) {
+      if (e.valid && e.key == key) {
+        if (e.doa >= mid_thd) {
+          ++stats_.classify_main;
+          return liveness_class::doa;
+        }
+        if (low_thd > 0 && e.mostly_dead >= low_thd) {
+          ++stats_.classify_main;
+          return liveness_class::mostly_dead;
+        }
+        // Found in table but below threshold — counts as main hit (evidence exists).
+        ++stats_.classify_main;
+        return liveness_class::mostly_alive;
+      }
+    }
+    // 2. Promotion buffer: can only signal DoA (buffer tracks dead_count only).
+    for (const auto& b : buffer_) {
+      if (b.valid && b.key == key) {
+        if (b.dead_count >= mid_thd) {
+          ++stats_.classify_buf_guided;  // buffer has enough evidence — recovered classification
+          return liveness_class::doa;
+        }
+        ++stats_.classify_buf_weak;  // entry demoted here from main table, doa count was reset to 0
+        return liveness_class::mostly_alive;
+      }
+    }
+    // 3. Not found anywhere. Warm miss: PC was seen before (entry evicted).
+    // Cold miss: PC has never generated an eviction — no history to lose.
+    if (!seen_pcs_.empty() && seen_pcs_.count(key)) {
+      ++stats_.classify_warm_miss;
+      // Oracle check: would an infinite promotion buffer have classified this correctly?
+      auto it = oracle_buf_.find(key);
+      if (it != oracle_buf_.end() && it->second >= mid_thd)
+        ++stats_.classify_warm_oracle_hit;
+    } else {
+      ++stats_.classify_cold_miss;
+    }
+    return liveness_class::mostly_alive;
   }
 
   const Stats& get_stats() const { return stats_; }
@@ -83,7 +184,106 @@ public:
     for (auto& e : entries_) e.promoted = false;
   }
 
+  // Print occupancy and shadow-buffer instrumentation to stdout.
+  // mid_thd: used to flag shadow hits where dead_count >= mid_thd, meaning the
+  // next block from that PC was misclassified (should have been DoA but was mostly_alive).
+  void print_stats(const char* prefix, uint64_t mid_thd = 0, uint64_t low_thd = 0) const {
+    if (unbounded_) {
+      printf("%s repl_hist: unbounded (%zu entries)\n", prefix, unmap_.size());
+      return;
+    }
+    const uint64_t main_occ = static_cast<uint64_t>(
+        std::count_if(entries_.begin(), entries_.end(), [](const Entry& e){ return e.valid; }));
+    const uint64_t buf_occ  = static_cast<uint64_t>(
+        std::count_if(buffer_.begin(), buffer_.end(), [](const BufEntry& b){ return b.valid; }));
+    printf("%s repl_hist occupancy : main %lu/%lu (%.0f%%)%s  buf %lu/%lu (%.0f%%)%s\n",
+           prefix,
+           main_occ, cap_,
+           cap_ ? 100.0 * main_occ / cap_ : 0.0,
+           stats_.main_ever_full ? " [was full]" : "",
+           buf_occ, buf_cap_,
+           buf_cap_ ? 100.0 * buf_occ / buf_cap_ : 0.0,
+           stats_.buf_ever_full  ? " [was full]" : "");
+    const uint64_t classify_total = stats_.classify_main + stats_.classify_buf_guided
+                                  + stats_.classify_buf_weak + stats_.classify_warm_miss
+                                  + stats_.classify_cold_miss;  // oracle_hit is a subset of warm_miss, not additive
+    if (classify_total > 0) {
+      auto pct_c = [&](uint64_t n){ return classify_total ? 100.0 * n / classify_total : 0.0; };
+      printf("%s repl_hist classify  : main=%lu (%.1f%%)  "
+             "buf_guided=%lu (%.1f%%)  buf_weak=%lu (%.1f%%)  "
+             "warm_miss=%lu (%.1f%%)  cold_miss=%lu (%.1f%%)\n",
+             prefix,
+             stats_.classify_main,       pct_c(stats_.classify_main),
+             stats_.classify_buf_guided, pct_c(stats_.classify_buf_guided),
+             stats_.classify_buf_weak,   pct_c(stats_.classify_buf_weak),
+             stats_.classify_warm_miss,  pct_c(stats_.classify_warm_miss),
+             stats_.classify_cold_miss,  pct_c(stats_.classify_cold_miss));
+      if (stats_.classify_warm_miss > 0) {
+        printf("%s repl_hist oracle    : warm_miss=%lu  oracle_would_hit=%lu (%.1f%% of warm)  "
+               "oracle_buf_size=%zu\n",
+               prefix,
+               stats_.classify_warm_miss,
+               stats_.classify_warm_oracle_hit,
+               stats_.classify_warm_miss ? 100.0 * stats_.classify_warm_oracle_hit / stats_.classify_warm_miss : 0.0,
+               oracle_buf_.size());
+      }
+    }
+    if (shadow_cap_ > 0) {
+      const double hit_rate = stats_.buf_evictions
+          ? 100.0 * stats_.shadow_hits / stats_.buf_evictions : 0.0;
+      const double avg_doa  = stats_.shadow_hits
+          ? static_cast<double>(stats_.shadow_hit_doa_sum) / stats_.shadow_hits : 0.0;
+      uint64_t misclass = 0;
+      if (mid_thd > 0)
+        misclass = std::count_if(shadow_.begin(), shadow_.end(),
+            [&](const ShadowEntry& s){ return s.valid && s.dead_count >= mid_thd; });
+      printf("%s repl_hist shadow    : evictions=%lu  shadow_hits=%lu (%.1f%%)  "
+             "avg_doa@evict=%.2f  nonzero=%lu",
+             prefix,
+             stats_.buf_evictions, stats_.shadow_hits, hit_rate,
+             avg_doa, stats_.shadow_hit_nonzero);
+      if (mid_thd > 0)
+        printf("  misclass(doa>=%lu)=%lu", mid_thd, misclass);
+      printf("\n");
+    }
+    (void)low_thd;  // reserved for future mostly-dead misclassification tracking
+  }
+
   void update(uint64_t key, liveness_class lv) {
+    if (shadow_cap_ > 0) {
+      seen_pcs_.insert(key);
+      // Oracle: if this key was evicted from the promo buffer at some point,
+      // keep its evidence accumulating as if it had never been evicted.
+      if (lv == liveness_class::doa) {
+        auto it = oracle_buf_.find(key);
+        if (it != oracle_buf_.end()) ++it->second;
+      }
+    }
+    if (!unbounded_ && checkpoint_interval_ > 0) {
+      if (++update_count_ % checkpoint_interval_ == 0) {
+        const uint64_t main_occ = static_cast<uint64_t>(
+            std::count_if(entries_.begin(), entries_.end(),
+                          [](const Entry& e){ return e.valid; }));
+        const uint64_t buf_occ = static_cast<uint64_t>(
+            std::count_if(buffer_.begin(), buffer_.end(),
+                          [](const BufEntry& b){ return b.valid; }));
+        fprintf(stderr,
+            "[repl_hist %s] update=%-10lu  main=%lu/%lu (%.0f%%)  buf=%lu/%lu (%.0f%%)  shadow_evictions=%lu  shadow_hits=%lu\n",
+            checkpoint_name_.c_str(), update_count_,
+            main_occ, cap_, cap_ ? 100.0 * main_occ / cap_ : 0.0,
+            buf_occ,  buf_cap_, buf_cap_ ? 100.0 * buf_occ / buf_cap_ : 0.0,
+            stats_.buf_evictions, stats_.shadow_hits);
+      }
+    }
+    if (unbounded_) {
+      auto& [doa, dead] = unmap_[key];
+      switch (lv) {
+        case liveness_class::doa:          doa++;              break;
+        case liveness_class::mostly_dead:  dead++; doa = 0;   break;
+        case liveness_class::mostly_alive: doa = 0; dead = 0; break;
+      }
+      return;
+    }
     const bool accessed = (lv != liveness_class::doa);
     // 1. Main table hit.
     for (auto& e : entries_) {
@@ -118,7 +318,20 @@ public:
           return;
         }
       }
-      // Not in main table or buffer: stage in buffer on DoA evictions only.
+      // Not in main table or buffer: check shadow before staging.
+      // A shadow hit means this PC was fully evicted but is still generating DoA events.
+      if (shadow_cap_ > 0 && lv == liveness_class::doa) {
+        for (auto& s : shadow_) {
+          if (s.valid && s.key == key) {
+            ++stats_.shadow_hits;
+            stats_.shadow_hit_doa_sum += s.dead_count;
+            if (s.dead_count > 0) ++stats_.shadow_hit_nonzero;
+            s.valid = false;  // consume: count first re-appearance only
+            break;
+          }
+        }
+      }
+      // Stage in buffer on DoA evictions only.
       if (lv == liveness_class::doa) {
         auto& bslot      = buf_victim();
         bslot.key        = key;
@@ -168,13 +381,39 @@ private:
     bool     valid      = false;
   };
 
-  uint64_t cap_         = 0;
-  Policy   pol_         = Policy::LRU;
-  std::vector<Entry> entries_;
-  uint64_t clock_       = 0;
-  uint64_t buf_cap_   = 0;
-  uint64_t buf_clock_ = 0;
+  // Shadow (victim) buffer: holds entries evicted from the promotion buffer.
+  // Pure instrumentation — does not affect policy decisions.
+  struct ShadowEntry {
+    uint64_t key        = 0;
+    uint64_t dead_count = 0;  // dead_count from the promotion buffer at final eviction
+    uint64_t ts         = 0;
+    bool     valid      = false;
+  };
+
+  bool        unbounded_           = false;
+  uint64_t    checkpoint_interval_ = 0;
+  uint64_t    update_count_        = 0;
+  std::string checkpoint_name_;
+  mutable std::unordered_map<uint64_t, std::pair<uint64_t,uint64_t>> unmap_;
+  uint64_t cap_          = 0;
+  Policy   pol_          = Policy::LRU;
+  std::vector<Entry>    entries_;
+  uint64_t clock_        = 0;
+  uint64_t buf_cap_      = 0;
+  uint64_t buf_clock_    = 0;
   std::vector<BufEntry> buffer_;
+  uint64_t shadow_cap_   = 0;
+  uint64_t shadow_clock_ = 0;
+  std::vector<ShadowEntry> shadow_;
+  // Instrumentation: tracks every key ever passed to update(), so classify() can
+  // distinguish warm misses (PC was known, entry was evicted) from cold misses
+  // (PC has never generated an eviction before). Only populated when shadow_cap_ > 0.
+  std::unordered_set<uint64_t> seen_pcs_;
+  // Oracle buffer: captures entries evicted from the promotion buffer and keeps
+  // accumulating dead_count for them indefinitely (never evicts). Answers the
+  // counterfactual: "if we had kept this entry, would it have guided classification?"
+  // Only populated when shadow_cap_ > 0 (i.e. when instrumentation is active).
+  std::unordered_map<uint64_t, uint64_t> oracle_buf_;
   mutable Stats stats_;
 
   void on_hit(Entry& e, bool accessed) {
@@ -262,6 +501,7 @@ private:
 
   Entry& victim_slot() {
     for (auto& e : entries_) if (!e.valid) return e;
+    stats_.main_ever_full = true;
     switch (pol_) {
     case Policy::LRU:
       return *std::min_element(entries_.begin(), entries_.end(),
@@ -280,14 +520,35 @@ private:
     return entries_[0];
   }
 
+  ShadowEntry& shadow_victim() {
+    for (auto& s : shadow_) if (!s.valid) return s;
+    // LRU eviction within the shadow buffer.
+    return *std::min_element(shadow_.begin(), shadow_.end(),
+      [](const ShadowEntry& a, const ShadowEntry& b){ return a.ts < b.ts; });
+  }
+
   // DoA-LFU eviction: evict the buffer entry with the fewest dead confirmations.
   // ts (insertion time) breaks ties — evict the older entry among equals.
+  // Records the evicted entry in the shadow buffer (instrumentation only).
   BufEntry& buf_victim() {
     for (auto& b : buffer_) if (!b.valid) return b;
-    return *std::min_element(buffer_.begin(), buffer_.end(),
+    stats_.buf_ever_full = true;
+    auto& victim = *std::min_element(buffer_.begin(), buffer_.end(),
       [](const BufEntry& a, const BufEntry& b){
         return a.dead_count < b.dead_count ||
                (a.dead_count == b.dead_count && a.ts < b.ts); });
+    // Record the final eviction in the shadow and oracle buffers.
+    if (shadow_cap_ > 0 && victim.valid) {
+      ++stats_.buf_evictions;
+      auto& se    = shadow_victim();
+      se.key        = victim.key;
+      se.dead_count = victim.dead_count;
+      se.ts         = ++shadow_clock_;
+      se.valid      = true;
+      // Oracle: accumulate dead_count on top of any prior visits.
+      oracle_buf_[victim.key] += victim.dead_count;
+    }
+    return victim;
   }
 };
 
@@ -602,15 +863,13 @@ class CACHE : public champsim::operable, public MemoryRequestConsumer, public Me
   uint64_t get_repl_guidance_score(uint64_t block_address, uint64_t dp_pc) const;
 
   // Per-PC replacement guidance history.
-  // Two independent saturating counters per PC, updated at every LLC/STLB eviction:
-  //   doa_count:  increments on DoA eviction; resets on any live eviction.
-  //   dead_count: increments on mostly-dead eviction; resets on mostly-alive eviction.
-  // Liveness class at eviction is determined by the halflife criterion.
-  struct ReplHistEntry {
-    uint64_t doa  = 0;
-    uint64_t dead = 0;
-  };
-  std::unordered_map<uint64_t, ReplHistEntry> repl_hist_pc;
+  // Tracks two counters per PC: doa (consecutive DoA evictions) and mostly_dead
+  // (consecutive mostly-dead evictions). Updated at every LLC/STLB eviction.
+  // Default: unbounded (unordered_map fallback, backward compatible).
+  // Bounded: configured via REPL_HIST_{LLC,STLB}_CAP + REPL_HIST_{BUF_CAP,REPL} env vars
+  // in load_predictor_settings(). Uses the same HistTable replacement policies
+  // (lru/lfu/lfu_doa/srrip) and optional promotion buffer as phist/bhist.
+  HistTable repl_hist_pc;
 
   // Classify block liveness based on repl_hist_pc counters for the fill PC.
   // Used by srrip_live and ipv_live replacement policies to guide insertion/promotion.

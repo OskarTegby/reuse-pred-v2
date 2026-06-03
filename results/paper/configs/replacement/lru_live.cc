@@ -90,7 +90,7 @@ void CACHE::update_replacement_state(uint32_t triggering_cpu, uint32_t set, uint
     auto& st    = ::stats[this];
 
     bool use_liveness = false;
-    const char* target_env = std::getenv("LRU_LIVE_TARGET");
+    const char* target_env = std::getenv("SRRIP_LIVE_TARGET");
     if (target_env && target_env[0] != '\0') {
         std::string t(target_env);
         if      (t == "llc"  && NAME == "LLC")        use_liveness = true;
@@ -173,6 +173,7 @@ void CACHE::replacement_final_stats()
            pos_doa, pos_dead, N);
     printf("  Activation rate  : %.1f%%  (%lu guided / %lu total insertions)\n",
            pct(guided_ins, total_ins), guided_ins, total_ins);
+    printf("  guided_insertions=%lu\n", guided_ins);
     printf("  Insert mix       : DoA=%.1f%%  Dead=%.1f%%  Alive=%.1f%%  Unguided=%.1f%%\n",
            pct(st.ins_doa,total_ins), pct(st.ins_dead,total_ins),
            pct(st.ins_alive,total_ins), pct(st.ins_unguided,total_ins));
@@ -182,5 +183,6 @@ void CACHE::replacement_final_stats()
     printf("  Evict class mix  : DoA=%.1f%%  Dead=%.1f%%  Alive=%.1f%%  Unguided=%.1f%%\n",
            pct(st.evict_doa,total_evict), pct(st.evict_dead,total_evict),
            pct(st.evict_alive,total_evict), pct(st.evict_unguided,total_evict));
+    repl_hist_pc.print_stats(NAME.c_str(), mid_thd, low_thd);
     printf("\n");
 }
