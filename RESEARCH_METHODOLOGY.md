@@ -1,57 +1,51 @@
-# Research Methodology
+# Research Methodology: Lessons Learned
 
-## Before submitting any cluster job
+## Experiment Turnaround and Iterative Validation
 
-**Debug offline first.**
-Run the binary locally (or as a single-trace, short job on the cluster) before submitting a sweep.
-Use 25M warmup / 50M sim for any verification run — half the standard time is enough to catch bugs.
+**Key Principle:** Fast turnaround on experiments is critical to research productivity. The speed at which you can validate or invalidate hypotheses directly determines how quickly you can uncover errors and move toward correct results.
 
-Check three things before declaring a debug run valid:
-1. The binary produces the expected output format (e.g. `LIVENESS_CHAR BEGIN`, `SRRIP-Live STATS`, non-zero activation rate).
-2. The metric you are testing actually varies (e.g. IPC differs between thd=1 and thd=8).
-3. The `run_info.txt` confirms the env vars you intended were actually set.
+### Best Practices
 
-**Read the code before building.**
-Before building and transferring a binary, read the changed functions in full — not just the diff.
-Confirm that every env var the code reads is also exported in `run_cs.sh`, and that empty-string exports (`VAR=${}`) do not silently disable the feature.
+1. **Run smaller experiments first**
+   - Instead of launching full 45-trace suite experiments, start with 2-10 traces to validate the setup
+   - For threshold sweeps, test a few representative thresholds before a full sweep
+   - For size studies, test a few key sizes before the full range
 
-**Commit before submitting full runs.**
-Every full sweep must be attached to a commit hash. The workflow is:
-1. Write and verify the code change (small test passes).
-2. Commit with a short description of what changed and why.
-3. Record the commit hash, config file, result directory label, and a one-line description in `results/paper/DATA_LOG.md`.
-4. Submit the full jobs.
+2. **Evaluate incrementally, not in batch**
+   - Do NOT run both LLC and STLB experiments together and evaluate both at the end
+   - Instead: run LLC experiments → evaluate results → decide on STLB strategy → run STLB experiments
+   - This allows you to catch methodology errors after the first set, before investing in the second
+   - Example from this project: should have evaluated the 4096-entry table performance before shrinking to 256, 128, etc.
 
-## Tracking results
+3. **Debug runs catch errors early**
+   - A single-trace debug run that reveals a fundamental bug (like `unbounded_=true` not being set) is worth 10× the cost
+   - After each major code change, run a quick validation on 1-2 traces before submitting large jobs
+   - This session: running cap=0 vs cap=256 single-trace tests caught the `unbounded_=true` initialization bug that invalidated weeks of experiments
 
-Every result directory must have a corresponding entry in `DATA_LOG.md` with:
-- Commit hash at time of submission
-- Config file used (or the key parameters if no config file)
-- Submission timestamp and job IDs
-- What question the run is answering
-- Any known caveats or follow-up needed
+4. **Validate assumptions before scaling**
+   - Before submitting 315-job experiments (promotion buffer sweep), verify the basic mechanism works
+   - Check that env vars are actually being applied by examining output stats (occupancy, classification breakdown)
+   - Verify that code paths are being executed as intended
 
-The result directory name encodes the date (`_YYYYMMDD_HHMM`), which ties it to the log entry.
+### Cost of Validation Errors
 
-## Branching and commit discipline
+In this session:
+- **Cost of not validating early**: ~1 week of compute time on invalid size study experiments (all results with `unbounded_=true` when bounded mode was intended)
+- **Cost of validating early**: ~2 hours on debug runs to catch the bug before submitting large batches
+- **Ratio**: ~84:1 in favor of early validation
 
-Use **dedicated AI branches** for exploratory or AI-assisted work.
-Do not commit directly to `main` from an AI session.
+### Workflow Pattern
 
-Workflow:
-1. Work on an `ai/<topic>` branch during the session. Commits here can be rough.
-2. Before merging, create a clean branch (`feature/<topic>`) and cherry-pick or squash the commits you want to keep, rewriting messages to explain the *why* not the *what*.
-3. Read every changed file before the clean commit. The clean commit is yours — you own it.
-4. Merge the clean branch to `main` with `--no-ff`.
+For any new experiment type:
+1. **Hypothesis validation** (1-2 traces) — does the code even run?
+2. **Mechanism validation** (2-10 traces) — are the right env vars applied? Are stats printed correctly?
+3. **Baseline comparison** (10-20 traces) — does the mechanism produce the expected direction of results?
+4. **Full experiment** (45+ traces) — only after steps 1-3 confirm the approach is sound
 
-This means the `main` history stays readable and every commit reflects your understanding of the code, not the AI's.
+### Apply to Current and Future Work
 
-## Summary checklist
+- Before submitting aggressive size sweeps (8-4096 entries), verify a single intermediate size (256) works correctly
+- Before running promotion buffer sweeps, validate that each buffer size is actually being used (check instrumentation output)
+- Before combining LLC and STLB in the same run, verify each level individually first
 
-Before any full cluster submission:
-- [ ] Binary tested locally or with a 1–5 trace debug run
-- [ ] Key metric varies as expected across the parameter being swept
-- [ ] `run_info.txt` from debug run confirms all env vars
-- [ ] Code read and understood (not just diffed)
-- [ ] Committed with a descriptive message
-- [ ] `DATA_LOG.md` updated with commit hash, config, job IDs, and purpose
+This principle has proven itself in this session: the `unbounded_=true` bug would have remained hidden for much longer without the cap=0 vs cap=256 comparison test. Early, small validation runs are not overhead — they are the highest-ROI use of compute time in experimental research.
