@@ -24,7 +24,7 @@ echo "=== IPV-Live LLC Size Study ($DATE) ==="
 submit "llc_ipv_size_${DATE}/unbounded" "champsim_ipv_live" "ipv_llc_ub" \
   "MID_THD=4,LOW_THD=4,BHIST_MODE=pc,SRRIP_LIVE_TARGET=llc"
 
-for cap in 4096 1024 256 128; do
+for cap in 4096 2048 1024 512 256 128; do
   submit "llc_ipv_size_${DATE}/cap${cap}" "champsim_ipv_live" "ipv_llc_${cap}" \
     "MID_THD=4,LOW_THD=4,BHIST_MODE=pc,SRRIP_LIVE_TARGET=llc,REPL_HIST_LLC_CAP=${cap},REPL_HIST_BUF_CAP=32,REPL_HIST_REPL=lfu_doa"
 done
@@ -34,10 +34,10 @@ echo "=== IPV-Live STLB Size Study ($DATE) ==="
 submit "stlb_ipv_size_${DATE}/unbounded" "champsim_stlb_ipv_live" "ipv_stlb_ub" \
   "MID_THD=1,LOW_THD=1,BHIST_MODE=pc,SRRIP_LIVE_TARGET=stlb"
 
-for cap in 1024 256 128; do
+for cap in 1024 512 256 128; do
   submit "stlb_ipv_size_${DATE}/cap${cap}" "champsim_stlb_ipv_live" "ipv_stlb_${cap}" \
     "MID_THD=1,LOW_THD=1,BHIST_MODE=pc,SRRIP_LIVE_TARGET=stlb,REPL_HIST_STLB_CAP=${cap},REPL_HIST_BUF_CAP=8,REPL_HIST_REPL=lfu_doa"
 done
 
 echo ""
-echo "Submitted: 9 job arrays × 45 traces = 405 jobs"
+echo "Submitted: 11 job arrays × 45 traces = 495 jobs"
