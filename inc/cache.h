@@ -65,8 +65,9 @@ public:
     mutable uint64_t classify_main      = 0;  // found in main table (at or above threshold)
     mutable uint64_t classify_buf_guided= 0;  // found in promo buffer AND above threshold → DoA (recovered)
     mutable uint64_t classify_buf_weak  = 0;  // found in promo buffer but below threshold (demoted from main, doa lost)
-    mutable uint64_t classify_warm_miss = 0;  // not in table or buf, but PC was seen before (fully evicted — accuracy loss)
-    mutable uint64_t classify_cold_miss = 0;  // PC never seen before (no history — expected)
+    mutable uint64_t classify_warm_miss        = 0;  // not in table or buf, but PC was seen before (fully evicted)
+    mutable uint64_t classify_warm_oracle_hit  = 0;  // warm miss where oracle would have classified correctly (oracle dead_count >= mid_thd)
+    mutable uint64_t classify_cold_miss        = 0;  // PC never seen before (no history — expected)
   };
 
   // Default: unbounded mode — backed by an unordered_map, no eviction.
@@ -165,10 +166,15 @@ public:
     }
     // 3. Not found anywhere. Warm miss: PC was seen before (entry evicted).
     // Cold miss: PC has never generated an eviction — no history to lose.
-    if (!seen_pcs_.empty() && seen_pcs_.count(key))
+    if (!seen_pcs_.empty() && seen_pcs_.count(key)) {
       ++stats_.classify_warm_miss;
-    else
+      // Oracle check: would an infinite promotion buffer have classified this correctly?
+      auto it = oracle_buf_.find(key);
+      if (it != oracle_buf_.end() && it->second >= mid_thd)
+        ++stats_.classify_warm_oracle_hit;
+    } else {
       ++stats_.classify_cold_miss;
+    }
     return liveness_class::mostly_alive;
   }
 
@@ -200,7 +206,7 @@ public:
            stats_.buf_ever_full  ? " [was full]" : "");
     const uint64_t classify_total = stats_.classify_main + stats_.classify_buf_guided
                                   + stats_.classify_buf_weak + stats_.classify_warm_miss
-                                  + stats_.classify_cold_miss;
+                                  + stats_.classify_cold_miss;  // oracle_hit is a subset of warm_miss, not additive
     if (classify_total > 0) {
       auto pct_c = [&](uint64_t n){ return classify_total ? 100.0 * n / classify_total : 0.0; };
       printf("%s repl_hist classify  : main=%lu (%.1f%%)  "
@@ -212,6 +218,15 @@ public:
              stats_.classify_buf_weak,   pct_c(stats_.classify_buf_weak),
              stats_.classify_warm_miss,  pct_c(stats_.classify_warm_miss),
              stats_.classify_cold_miss,  pct_c(stats_.classify_cold_miss));
+      if (stats_.classify_warm_miss > 0) {
+        printf("%s repl_hist oracle    : warm_miss=%lu  oracle_would_hit=%lu (%.1f%% of warm)  "
+               "oracle_buf_size=%zu\n",
+               prefix,
+               stats_.classify_warm_miss,
+               stats_.classify_warm_oracle_hit,
+               stats_.classify_warm_miss ? 100.0 * stats_.classify_warm_oracle_hit / stats_.classify_warm_miss : 0.0,
+               oracle_buf_.size());
+      }
     }
     if (shadow_cap_ > 0) {
       const double hit_rate = stats_.buf_evictions
@@ -235,7 +250,15 @@ public:
   }
 
   void update(uint64_t key, liveness_class lv) {
-    if (shadow_cap_ > 0) seen_pcs_.insert(key);
+    if (shadow_cap_ > 0) {
+      seen_pcs_.insert(key);
+      // Oracle: if this key was evicted from the promo buffer at some point,
+      // keep its evidence accumulating as if it had never been evicted.
+      if (lv == liveness_class::doa) {
+        auto it = oracle_buf_.find(key);
+        if (it != oracle_buf_.end()) ++it->second;
+      }
+    }
     if (!unbounded_ && checkpoint_interval_ > 0) {
       if (++update_count_ % checkpoint_interval_ == 0) {
         const uint64_t main_occ = static_cast<uint64_t>(
@@ -386,6 +409,11 @@ private:
   // distinguish warm misses (PC was known, entry was evicted) from cold misses
   // (PC has never generated an eviction before). Only populated when shadow_cap_ > 0.
   std::unordered_set<uint64_t> seen_pcs_;
+  // Oracle buffer: captures entries evicted from the promotion buffer and keeps
+  // accumulating dead_count for them indefinitely (never evicts). Answers the
+  // counterfactual: "if we had kept this entry, would it have guided classification?"
+  // Only populated when shadow_cap_ > 0 (i.e. when instrumentation is active).
+  std::unordered_map<uint64_t, uint64_t> oracle_buf_;
   mutable Stats stats_;
 
   void on_hit(Entry& e, bool accessed) {
@@ -509,7 +537,7 @@ private:
       [](const BufEntry& a, const BufEntry& b){
         return a.dead_count < b.dead_count ||
                (a.dead_count == b.dead_count && a.ts < b.ts); });
-    // Record the final eviction in the shadow buffer.
+    // Record the final eviction in the shadow and oracle buffers.
     if (shadow_cap_ > 0 && victim.valid) {
       ++stats_.buf_evictions;
       auto& se    = shadow_victim();
@@ -517,6 +545,8 @@ private:
       se.dead_count = victim.dead_count;
       se.ts         = ++shadow_clock_;
       se.valid      = true;
+      // Oracle: accumulate dead_count on top of any prior visits.
+      oracle_buf_[victim.key] += victim.dead_count;
     }
     return victim;
   }
