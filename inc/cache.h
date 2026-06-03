@@ -60,6 +60,10 @@ public:
     uint64_t shadow_hits         = 0;  // evicted PCs seen again (before shadow ages out)
     uint64_t shadow_hit_doa_sum  = 0;  // sum of dead_count at eviction for shadow hits
     uint64_t shadow_hit_nonzero  = 0;  // shadow hits where dead_count > 0 at eviction
+    // Classification source tracking (set by classify()).
+    mutable uint64_t classify_main = 0;  // resolved from main table
+    mutable uint64_t classify_buf  = 0;  // resolved from promotion buffer (main miss)
+    mutable uint64_t classify_miss = 0;  // not found in either → defaults to mostly_alive
   };
 
   // Default: unbounded mode — backed by an unordered_map, no eviction.
@@ -117,6 +121,50 @@ public:
     return {0, 0};
   }
 
+  // Classify a PC against mid_thd / low_thd, consulting main table then promotion
+  // buffer. Tracks which structure resolved the classification in stats.
+  liveness_class classify(uint64_t key, uint64_t mid_thd, uint64_t low_thd) const {
+    if (unbounded_) {
+      auto it = unmap_.find(key);
+      if (it != unmap_.end()) {
+        const auto [doa, dead] = it->second;
+        if (doa  >= mid_thd)                return liveness_class::doa;
+        if (low_thd > 0 && dead >= low_thd) return liveness_class::mostly_dead;
+      }
+      return liveness_class::mostly_alive;
+    }
+    // 1. Main table.
+    for (const auto& e : entries_) {
+      if (e.valid && e.key == key) {
+        if (e.doa >= mid_thd) {
+          ++stats_.classify_main;
+          return liveness_class::doa;
+        }
+        if (low_thd > 0 && e.mostly_dead >= low_thd) {
+          ++stats_.classify_main;
+          return liveness_class::mostly_dead;
+        }
+        // Found in table but below threshold — counts as main hit (evidence exists).
+        ++stats_.classify_main;
+        return liveness_class::mostly_alive;
+      }
+    }
+    // 2. Promotion buffer: can only signal DoA (buffer tracks dead_count only).
+    for (const auto& b : buffer_) {
+      if (b.valid && b.key == key) {
+        if (b.dead_count >= mid_thd) {
+          ++stats_.classify_buf;
+          return liveness_class::doa;
+        }
+        ++stats_.classify_buf;  // found in buffer but below threshold
+        return liveness_class::mostly_alive;
+      }
+    }
+    // 3. Not found anywhere.
+    ++stats_.classify_miss;
+    return liveness_class::mostly_alive;
+  }
+
   const Stats& get_stats() const { return stats_; }
   void reset_stats() {
     stats_ = Stats{};
@@ -143,6 +191,14 @@ public:
            buf_occ, buf_cap_,
            buf_cap_ ? 100.0 * buf_occ / buf_cap_ : 0.0,
            stats_.buf_ever_full  ? " [was full]" : "");
+    const uint64_t classify_total = stats_.classify_main + stats_.classify_buf + stats_.classify_miss;
+    if (classify_total > 0) {
+      printf("%s repl_hist classify  : main=%lu (%.1f%%)  buf=%lu (%.1f%%)  miss=%lu (%.1f%%)\n",
+             prefix,
+             stats_.classify_main, cap_ ? 100.0 * stats_.classify_main / classify_total : 0.0,
+             stats_.classify_buf,  cap_ ? 100.0 * stats_.classify_buf  / classify_total : 0.0,
+             stats_.classify_miss, cap_ ? 100.0 * stats_.classify_miss / classify_total : 0.0);
+    }
     if (shadow_cap_ > 0) {
       const double hit_rate = stats_.buf_evictions
           ? 100.0 * stats_.shadow_hits / stats_.buf_evictions : 0.0;

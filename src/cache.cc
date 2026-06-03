@@ -305,10 +305,7 @@ uint64_t CACHE::get_repl_guidance_score(uint64_t block_address, uint64_t dp_pc) 
 
 liveness_class CACHE::classify_block_liveness(uint64_t /*block_address*/, uint64_t pc) const
 {
-  const auto [doa, dead] = repl_hist_pc.get_both(pc);
-  if (doa  >= mid_thd)                return liveness_class::doa;
-  if (low_thd > 0 && dead >= low_thd) return liveness_class::mostly_dead;
-  return liveness_class::mostly_alive;
+  return repl_hist_pc.classify(pc, mid_thd, low_thd);
 }
 
 void CACHE::record_characterization(uint64_t dp_pc, uint64_t block_address)
