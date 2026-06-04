@@ -342,8 +342,8 @@ policy, with \lru shown only as a secondary reference.
 A subtle corollary is that the guided and base implementations must be
 \emph{identical} when liveness is off. We verify this directly: with the
 history table set to zero capacity, SRRIP-Live reproduces plain SRRIP's IPC
-exactly. Any deviation indicates an implementation difference being
-misattributed to liveness (Section~\ref{sec:accesstype}).
+exactly. Any deviation would indicate an implementation difference being
+misattributed to liveness.
 
 \subsection{LLC size study}
 \label{sec:llcsize}
@@ -396,38 +396,6 @@ unbounded & +1.40\% & +2.77\% \\
 \bottomrule
 \end{tabular}
 \end{table}
-
-\subsection{Not all hits are equal: access-type-aware liveness}
-\label{sec:accesstype}
-
-Both the liveness predictor and the replacement policy implicitly treat every
-cache hit as equal evidence of reuse. This assumption is wrong. An \llc hit
-can be a demand load or RFO (the core is actively using the line), a prefetch
-hit (speculative), or a \emph{writeback} hit --- a dirty line evicted from the
-L2 landing on the \llc copy. A writeback is not a read of the block and is
-therefore weak evidence that the block will be reused; it merely records where
-dirty data was deposited.
-
-This matters in two distinct places. First, in \textbf{predictor labeling}: the
-Accessed bit that decides whether an evicted block was dead-on-arrival is, by
-default, set on \emph{every} hit. A block that is only ever written back (never
-read) is thus mislabeled as live, and the PC that fetched it is taught it
-produces live blocks --- diluting the very DoA signal the predictor learns. We
-add a configuration (\texttt{ACCESSED\_ON\_WRITE}) that restricts the Accessed
-bit to reuse-indicating accesses, so write-back-only blocks are correctly
-labeled DoA. Second, in \textbf{promotion}: once a block has been predicted
-mostly-dead or DoA, weak hits (writebacks, and optionally prefetches) should
-not rescue it. The bar for overturning a dead prediction should scale with the
-predictor's confidence --- a predicted-dead block must earn its rescue through
-genuine demand reuse.
-
-We note that this access-type distinction is absent from prior dead-page /
-dead-block predictors~\cite{mazumdar2021}, which set their Accessed bit on any
-hit and apply the prediction to \emph{bypass} rather than to replacement
-promotion. Treating the hit type as a first-class input to both the predictor's
-training signal and the promotion decision is, to our knowledge, novel, and we
-evaluate it as a separable optimization that is folded into the baseline so
-that liveness benefit is never miscredited to it.
 
 % ─────────────────────────────────────────────────────────────────────────────
 \section{Results}
