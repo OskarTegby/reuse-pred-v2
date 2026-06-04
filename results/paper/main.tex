@@ -345,6 +345,19 @@ history table set to zero capacity, SRRIP-Live reproduces plain SRRIP's IPC
 exactly. Any deviation would indicate an implementation difference being
 misattributed to liveness.
 
+\paragraph{Liveness labeling and writeback hits.}
+The liveness predictor is trained from each block's reuse behaviour during its
+residency, captured by an Accessed bit (set on a hit) and the cycle of the last
+hit. We exclude \emph{writeback} hits from both signals: a writeback is a dirty
+line being deposited from the L2, not a read of the block, and so is not
+evidence that the block will be reused. Counting writebacks as reuse mislabels
+write-back-only blocks as live and teaches their fetching PC that it produces
+live blocks, diluting the dead-on-arrival signal. Excluding them sharpens the
+classification (e.g.\ on one server trace the dead-on-arrival insertion rate
+rose from 24\% to 43\%). This mirrors the replacement policies, which likewise
+do not promote on writeback hits; we keep both consistent so the base policy
+and the guided policy differ only in their use of the liveness signal.
+
 \subsection{LLC size study}
 \label{sec:llcsize}
 
