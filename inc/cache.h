@@ -859,14 +859,6 @@ class CACHE : public champsim::operable, public MemoryRequestConsumer, public Me
   bool repl_guidance_enable = false;  // enable replacement guidance from bHIST
   uint64_t repl_guidance_thd = 0;     // threshold: dead_count >= thd → good victim
 
-  // Liveness labeling: which hit types count as "reuse" and set the Accessed
-  // bit (the training signal for the liveness/DoA predictor). A writeback hit
-  // is a dirty line landing from L2, not a read of the block, so it is weak
-  // evidence of reuse. When accessed_on_write=false, writeback hits do NOT set
-  // the Accessed bit, so blocks that are only written-back (never read) are
-  // correctly labeled DoA. Default true preserves the original behavior.
-  // Env: ACCESSED_ON_WRITE (1=set on writes [default], 0=demand/prefetch only).
-  bool accessed_on_write = true;
 
   // Query bHIST for guidance score (dead_count) of a block for replacement.
   // Returns the dead_count from bHIST, or 0 if not found or guidance disabled.
