@@ -34,6 +34,17 @@ In this session:
 - **Cost of validating early**: ~2 hours on debug runs to catch the bug before submitting large batches
 - **Ratio**: ~84:1 in favor of early validation
 
+### Single-trace existence checks
+
+To determine merely *whether a configuration changes behavior at all* (e.g. does
+enabling a feature, or changing a size, alter IPC / insert mix / activation
+counts?), one trace is enough. A difference on a single trace proves the knob is
+wired and doing something; identical output on a single trace is strong evidence
+it is inert (modulo trace-specific luck). Only escalate to many traces once you
+need the *magnitude* of an effect averaged across workloads — never to answer the
+binary "does this do anything?" question. This keeps the debug loop seconds-long
+instead of minutes-long.
+
 ### Workflow Pattern
 
 For any new experiment type:
