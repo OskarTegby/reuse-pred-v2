@@ -81,9 +81,9 @@ void CACHE::update_replacement_state(uint32_t triggering_cpu, uint32_t set, uint
                                       uint64_t full_addr, uint64_t ip, uint64_t victim_addr,
                                       uint32_t type, uint8_t hit)
 {
-    if (hit && type == WRITE)
-        return;
-
+    // No write-hit special-case: keep the no-liveness default path identical to
+    // baseline LRU so any speedup is attributable to liveness alone (matches the
+    // fix applied to srrip_live/ipv_live).
     const std::size_t base = set * NUM_WAY;
     auto* ranks = ::lru_rank[this].data() + base;
     auto& cls   = ::slot_class[this][base + way];
@@ -103,12 +103,15 @@ void CACHE::update_replacement_state(uint32_t triggering_cpu, uint32_t set, uint
     const uint32_t N = NUM_WAY;
 
     if (hit) {
-        // Promote to MRU (rank N-1): ways above old rank shift down by 1.
-        const uint32_t old_r = ranks[way];
-        for (uint32_t w = 0; w < N; ++w)
-            if (w != way && ranks[w] > old_r)
-                --ranks[w];
-        ranks[way] = N - 1;
+        // Promote to MRU (rank N-1) unless this is a writeback hit (matches the
+        // baseline LRU convention of not promoting on writebacks).
+        if (type != WRITE) {
+            const uint32_t old_r = ranks[way];
+            for (uint32_t w = 0; w < N; ++w)
+                if (w != way && ranks[w] > old_r)
+                    --ranks[w];
+            ranks[way] = N - 1;
+        }
 
         if (use_liveness) {
             switch (cls) {

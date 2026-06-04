@@ -130,9 +130,9 @@ void CACHE::update_replacement_state(uint32_t triggering_cpu, uint32_t set, uint
                                       uint64_t full_addr, uint64_t ip, uint64_t victim_addr,
                                       uint32_t type, uint8_t hit)
 {
-  if (hit && type == WRITE)
-    return;
-
+  // No write-hit special-case: keep the no-liveness default path identical to
+  // baseline insertion/promotion so any speedup is attributable to liveness
+  // alone (matches the fix applied to srrip_live). See srrip_live.cc for detail.
   const std::size_t idx = set * NUM_WAY + way;
   auto& rrpv = ::rrpv_values[this][idx];
   auto& cls  = ::slot_class[this][idx];
@@ -152,10 +152,11 @@ void CACHE::update_replacement_state(uint32_t triggering_cpu, uint32_t set, uint
   if (use_liveness) {
     if (hit) {
       // Use the IPV stored at insertion time, not a fresh re-classification.
+      // Skip promotion on writeback hits (matches LRU/baseline convention).
       const auto& ipv = (cls == 1) ? ::g_ipv_doa :
                         (cls == 2) ? ::g_ipv_mostly_dead :
                                      ::g_ipv_mostly_alive;
-      rrpv = ipv[rrpv];
+      if (type != WRITE) rrpv = ipv[rrpv];
       if      (cls == 1) st.hit_doa++;
       else if (cls == 2) st.hit_dead++;
       else               st.hit_alive++;
@@ -171,7 +172,7 @@ void CACHE::update_replacement_state(uint32_t triggering_cpu, uint32_t set, uint
     }
   } else {
     const auto& ipv = ::g_ipv_mostly_alive;
-    if (hit) { rrpv = ipv[rrpv]; st.hit_unguided++; }
+    if (hit) { if (type != WRITE) rrpv = ipv[rrpv]; st.hit_unguided++; }
     else     { rrpv = ipv[4]; cls = 0; st.ins_unguided++; }
   }
 }
