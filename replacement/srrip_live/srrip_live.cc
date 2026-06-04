@@ -101,9 +101,11 @@ void CACHE::update_replacement_state(uint32_t triggering_cpu, uint32_t set, uint
                                       uint64_t full_addr, uint64_t ip, uint64_t victim_addr,
                                       uint32_t type, uint8_t hit)
 {
-  if (hit && type == WRITE)
-    return;
-
+  // NOTE: plain SRRIP promotes every hit (including write hits) to RRPV 0.
+  // We deliberately do NOT special-case write hits here, so that when liveness
+  // provides no signal (block defaults to mostly-alive), this policy behaves
+  // identically to baseline SRRIP. Any speedup over SRRIP is then attributable
+  // to liveness guidance alone, not to incidental write-hit handling.
   const std::size_t idx = set * NUM_WAY + way;
   auto& rrpv = ::rrpv_values[this][idx];
   auto& cls  = ::slot_class[this][idx];
