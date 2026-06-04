@@ -275,8 +275,11 @@ void CACHE::load_predictor_settings()
       const uint64_t rh_ckpt = getenv_uint64("REPL_HIST_CHECKPOINT", 0);
       if (rh_ckpt > 0)
         repl_hist_pc.set_checkpoint(rh_ckpt, NAME);
+    } else if (std::getenv("REPL_HIST_LLC_CAP") || std::getenv("REPL_HIST_STLB_CAP")) {
+      // Explicitly set to 0: zero-capacity bounded table — classify() always returns mostly_alive.
+      repl_hist_pc = HistTable(0, HistTable::Policy::LRU, 0, 0);
     }
-    // else: keep default-constructed HistTable (unbounded mode)
+    // else (env var absent entirely): keep default-constructed HistTable (unbounded mode)
   }
   if (const char* v = std::getenv("MID_PROMOTE"); v && std::stoull(v))
     mid_promote = true;

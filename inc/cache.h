@@ -75,7 +75,7 @@ public:
   // backward-compatible fallback when no capacity limit is configured.
   HistTable() : unbounded_(true) {}
   HistTable(uint64_t cap, Policy pol, uint64_t buf_cap = 0, uint64_t shadow_cap = 0)
-    : cap_(cap), pol_(pol), entries_(cap), buf_cap_(buf_cap), buffer_(buf_cap),
+    : unbounded_(false), cap_(cap), pol_(pol), entries_(cap), buf_cap_(buf_cap), buffer_(buf_cap),
       shadow_cap_(shadow_cap), shadow_(shadow_cap) {}
 
   // Enable periodic occupancy checkpoints to stderr every `interval` update() calls.
@@ -250,6 +250,7 @@ public:
   }
 
   void update(uint64_t key, liveness_class lv) {
+    if (!unbounded_ && cap_ == 0 && buf_cap_ == 0) return;  // truly empty — nothing to store
     if (shadow_cap_ > 0) {
       seen_pcs_.insert(key);
       // Oracle: if this key was evicted from the promo buffer at some point,
