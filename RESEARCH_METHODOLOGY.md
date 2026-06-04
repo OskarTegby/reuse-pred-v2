@@ -42,6 +42,19 @@ For any new experiment type:
 3. **Baseline comparison** (10-20 traces) — does the mechanism produce the expected direction of results?
 4. **Full experiment** (45+ traces) — only after steps 1-3 confirm the approach is sound
 
+5. **Zero-size sanity check for any size parameter**
+   - Before testing a range of sizes, first verify that setting the size to zero
+     disables the technique entirely and falls back to the baseline behavior.
+   - If size=0 does NOT produce the same result as the disabled baseline, the
+     size parameter is not properly guarding the mechanism — the technique may
+     be active through a different code path regardless of the size setting.
+   - Example: `REPL_HIST_LLC_CAP=0` does NOT disable liveness guidance — it
+     leaves `repl_hist_pc` in unbounded mode. So "zero" is not "off" here.
+     The correct zero-size test is to set `SRRIP_LIVE_TARGET=none` and verify
+     that result matches plain SRRIP/IPV exactly. Only once that is confirmed
+     can you trust that non-zero sizes are measuring the right thing.
+   - This check costs one extra job and can save weeks of misinterpretation.
+
 ### Apply to Current and Future Work
 
 - Before submitting aggressive size sweeps (8-4096 entries), verify a single intermediate size (256) works correctly
