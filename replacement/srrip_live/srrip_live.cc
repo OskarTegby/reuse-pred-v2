@@ -29,7 +29,9 @@
 #include <array>
 #include <cassert>
 #include <cstdint>
+#include <cstdlib>
 #include <string>
+#include <string_view>
 #include <unordered_map>
 #include <vector>
 
@@ -53,6 +55,19 @@ struct Stats {
     uint64_t aging_loops = 0;
 };
 std::unordered_map<CACHE*, Stats> stats;
+
+// PROMOTE_WEAK=0 → do not promote on weak hits (writebacks/prefetches). For the
+// liveness policy this is applied only to blocks predicted dead/DoA; blocks with
+// no liveness signal (unguided) follow the baseline rule (skip for all weak hits).
+bool promote_weak_hits()
+{
+  static const bool v = [] {
+    const char* s = std::getenv("PROMOTE_WEAK");
+    return !(s && std::string_view(s) == "0");
+  }();
+  return v;
+}
+inline bool is_weak_hit(uint32_t type) { return type == WRITE || type == PREFETCH; }
 
 } // namespace
 
@@ -128,9 +143,13 @@ void CACHE::update_replacement_state(uint32_t triggering_cpu, uint32_t set, uint
       // Re-classifying allows a block inserted as alive to lose full promotion if
       // its PC accumulates DoA history while the block sits in the cache, which
       // causes live blocks to be evicted prematurely.
+      // For blocks predicted dead/DoA, a weak hit (writeback/prefetch) is not
+      // accepted as reuse evidence when PROMOTE_WEAK=0: we count it but do not
+      // promote, so the dead prediction must be overturned by a demand hit.
+      const bool deny = !promote_weak_hits() && is_weak_hit(type) && (cls == 1 || cls == 2);
       switch (cls) {
-        case 1:  rrpv = ::maxRRPV - 1; st.hit_doa++;   break;  // DoA: partial
-        case 2:  rrpv = ::maxRRPV - 2; st.hit_dead++;  break;  // mostly-dead: moderate
+        case 1:  if (!deny) rrpv = ::maxRRPV - 1; st.hit_doa++;   break;  // DoA: partial
+        case 2:  if (!deny) rrpv = ::maxRRPV - 2; st.hit_dead++;  break;  // mostly-dead: moderate
         default: rrpv = 0;             st.hit_alive++;  break;  // alive or unguided: full
       }
     } else {
@@ -140,7 +159,9 @@ void CACHE::update_replacement_state(uint32_t triggering_cpu, uint32_t set, uint
       else                                         { rrpv = ::maxRRPV - 1; cls = 3; st.ins_alive++;}
     }
   } else {
-    if (hit) { rrpv = 0;             st.hit_unguided++; }
+    // No liveness signal: behave like baseline SRRIP under the same flag —
+    // skip promotion on weak hits for all blocks when PROMOTE_WEAK=0.
+    if (hit) { if (promote_weak_hits() || !is_weak_hit(type)) rrpv = 0; st.hit_unguided++; }
     else     { rrpv = ::maxRRPV - 1; cls = 0; st.ins_unguided++; }
   }
 }
