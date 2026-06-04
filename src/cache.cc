@@ -293,6 +293,11 @@ void CACHE::load_predictor_settings()
   if (const char* v = std::getenv("LIVENESS_CHAR"); v && std::stoull(v))
     liveness_char_enable = true;
 
+  // Liveness labeling: exclude writeback hits from setting the Accessed bit
+  // (ACCESSED_ON_WRITE=0). Default keeps original behavior (set on all hits).
+  if (const char* v = std::getenv("ACCESSED_ON_WRITE"); v && !std::stoull(v))
+    accessed_on_write = false;
+
   // Unbounded characterization: track all (PC, address) pairs to measure actual demand.
   if (const char* v = std::getenv("CHARACTERIZATION"); v && std::stoull(v))
     characterization_enable = true;
@@ -604,7 +609,12 @@ bool CACHE::try_hit(const PACKET& handle_pkt)
       ret->return_data(copy);
 
     way->dirty = (handle_pkt.type == WRITE);
-    if (NAME == "cpu0_STLB" || NAME == "LLC")
+    // Set the Accessed bit (liveness training signal) only for hit types that
+    // indicate genuine reuse. Writeback hits are dirty data landing from L2,
+    // not reads of the block, so when accessed_on_write=false they do not mark
+    // the block alive — letting write-back-only blocks be labeled DoA.
+    if ((NAME == "cpu0_STLB" || NAME == "LLC") &&
+        (accessed_on_write || handle_pkt.type != WRITE))
       way->accessed = true;
     way->last_hit_cycle = current_cycle;
 

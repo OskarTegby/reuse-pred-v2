@@ -321,91 +321,113 @@ for LFU-DoA replacement). This two-level design acts as a quality gate: weak
 entries spend time in the buffer proving their importance before displacing
 established entries in the main table.
 
-\subsection{Validation: Why small tables work}
+\subsection{Measurement methodology: the correct baseline}
+\label{sec:baseline}
 
-To understand the effectiveness of bounded tables, we performed a detailed
-analysis on a single trace using shadow instrumentation. With an unbounded
-table, the LLC tracks \emph{24,933 unique PCs} over a 50M warmup + 100M
-simulation run. A bounded table with 256 main entries + 128 buffer entries
-(384 total) covers only 1.5\% of the PC space --- yet maintains 88\% DoA
-insertion rate, nearly identical to the unbounded case.
+Measuring the benefit of liveness guidance requires care in the choice of
+baseline. A liveness-guided policy with an \emph{empty} history table
+classifies every block as mostly-alive and therefore reduces exactly to its
+underlying base policy (SRRIP-Live $\to$ SRRIP, IPV-Live $\to$ IPV). The base
+policy is thus the true zero point of the liveness axis, and the honest
+measure of liveness benefit is the speedup of the guided policy over the
+\emph{same base policy with liveness disabled} --- not over \lru.
 
-The key insight comes from analysing what happens to the missing PCs:
-of 230K classification queries, 54.4\% are \emph{warm misses} (PCs seen
-before but currently evicted). However, an oracle buffer (infinite
-non-evicting) reveals that only 65\% of warm misses would be resolved by
-larger capacity. More importantly, the warm misses being lost are
-predominantly \emph{mostly-alive blocks} (78.3\% in simulation) --- blocks
-that would be correctly inserted at high priority even if their PC history
-were unknown.
+This distinction is not cosmetic. Comparing a liveness-guided policy against
+\lru folds in the (often larger) base-policy-over-\lru gain, which has nothing
+to do with liveness. On our QMM workloads, plain SRRIP already beats \lru by
++1.35\%; quoting SRRIP-Live versus \lru therefore overstates the liveness
+contribution by that constant. We report all liveness speedups versus the base
+policy, with \lru shown only as a secondary reference.
 
-The flat performance curve across table sizes is thus explained by a
-Pareto effect: the DoA-producing PCs are concentrated in the head (top
-$\sim$380 PCs generate the bulk of DoA insertions), and the promotion buffer
-successfully retains and filters this critical set. The PCs that spill out
-to warm-miss status are mostly-alive producers that do not require precise
-liveness guidance to be placed well.
+A subtle corollary is that the guided and base implementations must be
+\emph{identical} when liveness is off. We verify this directly: with the
+history table set to zero capacity, SRRIP-Live reproduces plain SRRIP's IPC
+exactly. Any deviation indicates an implementation difference being
+misattributed to liveness (Section~\ref{sec:accesstype}).
 
-\subsection{LLC size study results}
+\subsection{LLC size study}
+\label{sec:llcsize}
 
-We swept the LLC main table capacity from 4096 down to 128 entries, holding
-the promotion buffer at 128 entries and leaving the STLB unbounded. The
-results (Table~\ref{tab:llc_size_buf128}) show that performance remains
-remarkably flat: shrinking from 4096 to 256 entries costs only 0.375~pp,
-and even 128 entries retains 7.274\% speedup (a loss of just 0.815~pp
-from the 4096-entry baseline). This validates the design: the promotion
-buffer's quality gate ensures that the small table focuses on DoA producers,
-not on maintaining a complete PC directory.
-
-\begin{table}[t!]
-\centering
-\small
-\caption{LLC history table size study (buf=128, STLB unbounded, IPV-Live)}
-\label{tab:llc_size_buf128}
-\begin{tabular}{lrr}
-\toprule
-\textbf{LLC capacity} & \textbf{Speedup vs \lru} & \textbf{Loss vs 4096} \\
-\midrule
-4096 & +8.089\% & --- \\
-2048 & +7.966\% & -0.123~pp \\
-1024 & +7.887\% & -0.202~pp \\
-512  & +7.742\% & -0.347~pp \\
-256  & +7.714\% & -0.375~pp \\
-128  & +7.274\% & -0.815~pp \\
-\bottomrule
-\end{tabular}
-\end{table}
-
-\subsection{STLB size study results}
-
-In contrast, the STLB history table shows significantly steeper degradation
-with size reduction (Table~\ref{tab:stlb_size_buf128}). Shrinking from 1024
-to 512 entries costs 1.667~pp --- more than four times the LLC degradation
-from 4096 to 256. This reflects a key difference: the STLB operates on a
-much smaller PC space (6,214 unique PCs vs 24,933 for LLC) and exhibits a
-sharper Pareto concentration. Halving the STLB table size evicts more of the
-critical DoA-producing PCs, whereas LLC's DoA producers are so concentrated
-that a table of 256 entries still captures the majority.
+Holding the promotion buffer at 128 entries, we sweep the LLC history table
+capacity and measure SRRIP-Live against plain SRRIP (the honest baseline) on
+the 45 QMM traces. Table~\ref{tab:llc_size} shows the liveness contribution
+grows monotonically with capacity: a small table provides little benefit, and
+the gain roughly doubles from a 512-entry table to an unbounded one. This is
+the opposite of a ``flat'' curve --- history capacity genuinely matters, and
+at the smallest sizes the few low-confidence predictions a tiny table makes
+can even be net-neutral. The optimal classification threshold is
+$\text{thd}=4$ (Table~\ref{tab:llc_thd}); aggressive thresholds
+($\text{thd}\le 1$) provide no benefit once measured against the correct
+baseline.
 
 \begin{table}[t!]
 \centering
 \small
-\caption{STLB history table size study (buf=128, LLC unbounded, IPV-Live)}
-\label{tab:stlb_size_buf128}
+\caption{LLC history table size study (buf=128, SRRIP-Live vs SRRIP, QMM).}
+\label{tab:llc_size}
 \begin{tabular}{lrr}
 \toprule
-\textbf{STLB capacity} & \textbf{Speedup vs \lru} & \textbf{Loss vs 1024} \\
+\textbf{LLC capacity} & \textbf{vs SRRIP} & \textbf{vs \lru} \\
 \midrule
-1024 & +7.835\% & --- \\
-512  & +6.168\% & -1.667~pp \\
+256       & +0.05\% & +1.40\% \\
+512       & +0.58\% & +1.93\% \\
+1024      & +0.72\% & +2.08\% \\
+2048      & +0.82\% & +2.18\% \\
+4096      & +0.94\% & +2.30\% \\
+unbounded & +1.40\% & +2.77\% \\
 \bottomrule
 \end{tabular}
 \end{table}
 
-These asymmetric curves indicate that LLC and STLB history tables should be
-sized differently in hardware: LLC can be shrunk to 256 entries with minimal
-loss, while STLB requires closer to its full capacity to maintain most of
-the guidance benefit.
+\begin{table}[t!]
+\centering
+\small
+\caption{LLC threshold sweep (unbounded, SRRIP-Live vs SRRIP, QMM).}
+\label{tab:llc_thd}
+\begin{tabular}{lrr}
+\toprule
+\textbf{MID\_THD} & \textbf{vs SRRIP} & \textbf{vs \lru} \\
+\midrule
+1  & $-0.04$\% & +1.31\% \\
+2  & +0.92\% & +2.28\% \\
+4  & \textbf{+1.40\%} & \textbf{+2.77\%} \\
+8  & +1.31\% & +2.67\% \\
+16 & +0.97\% & +2.33\% \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{Not all hits are equal: access-type-aware liveness}
+\label{sec:accesstype}
+
+Both the liveness predictor and the replacement policy implicitly treat every
+cache hit as equal evidence of reuse. This assumption is wrong. An \llc hit
+can be a demand load or RFO (the core is actively using the line), a prefetch
+hit (speculative), or a \emph{writeback} hit --- a dirty line evicted from the
+L2 landing on the \llc copy. A writeback is not a read of the block and is
+therefore weak evidence that the block will be reused; it merely records where
+dirty data was deposited.
+
+This matters in two distinct places. First, in \textbf{predictor labeling}: the
+Accessed bit that decides whether an evicted block was dead-on-arrival is, by
+default, set on \emph{every} hit. A block that is only ever written back (never
+read) is thus mislabeled as live, and the PC that fetched it is taught it
+produces live blocks --- diluting the very DoA signal the predictor learns. We
+add a configuration (\texttt{ACCESSED\_ON\_WRITE}) that restricts the Accessed
+bit to reuse-indicating accesses, so write-back-only blocks are correctly
+labeled DoA. Second, in \textbf{promotion}: once a block has been predicted
+mostly-dead or DoA, weak hits (writebacks, and optionally prefetches) should
+not rescue it. The bar for overturning a dead prediction should scale with the
+predictor's confidence --- a predicted-dead block must earn its rescue through
+genuine demand reuse.
+
+We note that this access-type distinction is absent from prior dead-page /
+dead-block predictors~\cite{mazumdar2021}, which set their Accessed bit on any
+hit and apply the prediction to \emph{bypass} rather than to replacement
+promotion. Treating the hit type as a first-class input to both the predictor's
+training signal and the promotion decision is, to our knowledge, novel, and we
+evaluate it as a separable optimization that is folded into the baseline so
+that liveness benefit is never miscredited to it.
 
 % ─────────────────────────────────────────────────────────────────────────────
 \section{Results}
