@@ -250,8 +250,8 @@ void CACHE::load_predictor_settings()
   const char* level_low = (NAME == "LLC")       ? std::getenv("LLC_LOW_THD")
                         : (NAME == "cpu0_STLB")  ? std::getenv("STLB_LOW_THD")
                         : nullptr;
-  mid_thd = level_mid ? std::stoull(level_mid) : getenv_uint64("MID_THD", 1);
-  low_thd = level_low ? std::stoull(level_low) : getenv_uint64("LOW_THD", 0);
+  mid_thd = (level_mid && *level_mid) ? std::stoull(level_mid) : getenv_uint64("MID_THD", 1);
+  low_thd = (level_low && *level_low) ? std::stoull(level_low) : getenv_uint64("LOW_THD", 0);
 
   // Bounded repl_hist_pc: 0 = unbounded (default, backward compatible).
   // REPL_HIST_REPL controls table management policy (same options as HIST_REPL).
