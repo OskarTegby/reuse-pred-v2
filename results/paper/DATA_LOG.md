@@ -432,3 +432,62 @@ signal for the liveness predictor. Under evaluation.
 liveness disabled (cap=0 / TARGET=none), never vs plain srrip/lru, so write-hit
 handling is held constant. cap=0 must equal the plain baseline exactly — verify
 on one trace before trusting any number.
+
+## 2026-06-05 — Threshold rerun after writeback fixes (qmm_thd_rebaseline_20260604_2307)
+
+Unbounded history. All fixes applied: baseline SRRIP/IPV skip writeback-hit
+promotion (match LRU); liveness labels exclude writebacks (Accessed bit +
+last_hit_cycle gated on type!=WRITE). 45 QMM traces, warmup 50M / sim 100M.
+IPC parsed from final `CPU 0 cumulative IPC:` line.
+
+Baselines (geomean vs LRU): SRRIP +2.63%, IPV +2.63% (IPV unguided == SRRIP).
+
+SRRIP-Live LLC (vs SRRIP / vs LRU):
+  thd1 -0.09/+2.54  thd2 +0.65/+3.30  thd4 +0.90/+3.56  thd8 +0.82/+3.48  thd16 +0.58/+3.23
+SRRIP-Live STLB (vs SRRIP / vs LRU):
+  thd1 +2.44/+5.13  thd2 +1.93/+4.61  thd4 +1.13/+3.79  thd8 +0.29/+2.92  thd16 -0.58/+2.04
+IPV-Live LLC (vs IPV / vs LRU):
+  thd1 -0.07/+2.56  thd2 +1.55/+4.22  thd4 +1.83/+4.51  thd8 +1.48/+4.15  thd16 +0.86/+3.52
+IPV-Live STLB (vs IPV / vs LRU):
+  thd1 +2.54/+5.24  thd2 +2.46/+5.16  thd4 +1.82/+4.50  thd8 +0.85/+3.51  thd16 -0.18/+2.45
+
+Per-level optima: LLC thd=4, STLB thd=1 (both policies). IPV-Live > SRRIP-Live
+at LLC (+1.83 vs +0.90); roughly tied at STLB (+2.54 vs +2.44). STLB is the
+bigger lever. Honest LLC gains ~half the old textbook-baseline figures
+(+1.40/+2.18) as expected post writeback-skip correction.
+
+NOTE: tab:llc_size rerun complete (qmm_size_combined_20260605_0757); paper updated
+2026-06-05 with new both-guided methodology and correct post-fix numbers.
+
+## 2026-06-05 — Combined + size studies (qmm_size_combined_20260605_0757)
+
+Both levels guided (LLC thd=4, STLB thd=1) via champsim_both_{srrip,ipv}_live.
+Requires per-level-cap-independence fix (cache.cc ~278). Baselines reuse
+qmm_thd_rebaseline (lru/srrip/ipv; ipv==srrip byte-identical per trace).
+
+COMBINED (both unbounded), apples-to-apples vs OWN base / vs LRU:
+  SRRIP-Live vs SRRIP: +5.59% / +8.37%   (n=45)  -> SUPER-additive (parts sum ~+3.3%)
+  IPV-Live   vs IPV:   +4.47% / +7.22%   (n=45)  -> additive (parts sum ~+4.4%)
+Synergy reverses per-level ranking: IPV-Live leads each level alone but
+SRRIP-Live wins combined.
+
+LLC size study (SRRIP-Live both-guided, STLB unbounded, buf=128) vs SRRIP / vs LRU:
+  256  +4.85% / +7.61%   (n=45)
+  512  +5.01% / +7.77%   (n=45)
+  1024 +5.13% / +7.89%   (n=45)
+  2048 +5.31% / +8.08%   (n=45)
+  4096 +5.46% / +8.24%   (n=45)
+  unbounded +5.59% / +8.37%  (= combined srrip_live)
+  Key finding: remarkably FLAT. 256 entries = 87% of combined gain.
+
+STLB size study (SRRIP-Live both-guided, LLC unbounded, buf=128) vs SRRIP / vs LRU:
+  256  +3.35% / +6.07%   (n=45)   [60% of combined gain]
+  512  +4.04% / +6.77%   (n=45)   [72%]
+  1024 +5.06% / +7.82%   (n=45)   [90%]
+  unbounded +5.59% / +8.37%  (= combined srrip_live)
+  Key finding: STEEP. STLB needs ~1024 entries for near-full gain.
+
+COMPLETE as of 2026-06-05. Paper updated: tab:llc_size rewritten (new methodology,
+new numbers), tab:stlb_size added, sec:llcsize narrative updated (flat vs steep
+asymmetry, both-guided methodology). combined paragraph: "remaining suites" note
+removed, IPV baseline clarified to SRRIP.

@@ -358,36 +358,57 @@ rose from 24\% to 43\%). This mirrors the replacement policies, which likewise
 do not promote on writeback hits; we keep both consistent so the base policy
 and the guided policy differ only in their use of the liveness signal.
 
-\subsection{LLC size study}
+\subsection{History table size sensitivity}
 \label{sec:llcsize}
 
-Holding the promotion buffer at 128 entries, we sweep the LLC history table
-capacity and measure SRRIP-Live against plain SRRIP (the honest baseline) on
-the 45 QMM traces. Table~\ref{tab:llc_size} shows the liveness contribution
-grows monotonically with capacity: a small table provides little benefit, and
-the gain roughly doubles from a 512-entry table to an unbounded one. This is
-the opposite of a ``flat'' curve --- history capacity genuinely matters, and
-at the smallest sizes the few low-confidence predictions a tiny table makes
-can even be net-neutral. The optimal classification threshold is
-$\text{thd}=4$ (Table~\ref{tab:llc_thd}); aggressive thresholds
-($\text{thd}\le 1$) provide no benefit once measured against the correct
-baseline.
+We sweep each level's history table capacity independently while holding the
+other level unbounded (promotion buffer fixed at 128 entries, both levels guided
+by \srrip-Live with $\theta_\text{LLC}{=}4$, $\theta_\text{STLB}{=}1$). The
+unbounded reference is the combined run at +5.59\% over \srrip.
+
+Tables~\ref{tab:llc_size} and~\ref{tab:stlb_size} reveal an asymmetry: the
+\llc curve is remarkably flat --- a 256-entry table already captures 87\% of the
+combined gain (+4.85\%), and diminishing returns set in quickly. The \stlb
+curve is far steeper: 256 entries yields only 60\% of the gain (+3.35\%), and
+1024 entries is needed to recover 90\% (+5.06\%). This contrast makes sense
+structurally: \stlb entries represent full virtual pages and their translation
+histories are inherently higher-dimensional, so a richer table is necessary to
+accurately classify page-level liveness. The \llc table, indexing by \textsc{PC},
+achieves saturation earlier because many PCs are either consistently dead-on-arrival
+or consistently alive, and even a small sample captures that pattern.
 
 \begin{table}[t!]
 \centering
 \small
-\caption{LLC history table size study (buf=128, SRRIP-Live vs SRRIP, QMM).}
+\caption{\llc history table size study (buf=128, \srrip-Live, \stlb unbounded, QMM).}
 \label{tab:llc_size}
 \begin{tabular}{lrr}
 \toprule
-\textbf{LLC capacity} & \textbf{vs SRRIP} & \textbf{vs \lru} \\
+\textbf{LLC cap.} & \textbf{vs \srrip} & \textbf{vs \lru} \\
 \midrule
-256       & +0.05\% & +1.40\% \\
-512       & +0.58\% & +1.93\% \\
-1024      & +0.72\% & +2.08\% \\
-2048      & +0.82\% & +2.18\% \\
-4096      & +0.94\% & +2.30\% \\
-unbounded & +1.40\% & +2.77\% \\
+256       & +4.85\% & +7.61\% \\
+512       & +5.01\% & +7.77\% \\
+1024      & +5.13\% & +7.89\% \\
+2048      & +5.31\% & +8.08\% \\
+4096      & +5.46\% & +8.24\% \\
+unbounded & +5.59\% & +8.37\% \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\begin{table}[t!]
+\centering
+\small
+\caption{\stlb history table size study (buf=128, \srrip-Live, \llc unbounded, QMM).}
+\label{tab:stlb_size}
+\begin{tabular}{lrr}
+\toprule
+\textbf{STLB cap.} & \textbf{vs \srrip} & \textbf{vs \lru} \\
+\midrule
+256       & +3.35\% & +6.07\% \\
+512       & +4.04\% & +6.77\% \\
+1024      & +5.06\% & +7.82\% \\
+unbounded & +5.59\% & +8.37\% \\
 \bottomrule
 \end{tabular}
 \end{table}
@@ -401,11 +422,11 @@ unbounded & +1.40\% & +2.77\% \\
 \toprule
 \textbf{MID\_THD} & \textbf{vs SRRIP} & \textbf{vs \lru} \\
 \midrule
-1  & $-0.04$\% & +1.31\% \\
-2  & +0.92\% & +2.28\% \\
-4  & \textbf{+1.40\%} & \textbf{+2.77\%} \\
-8  & +1.31\% & +2.67\% \\
-16 & +0.97\% & +2.33\% \\
+1  & $-0.09$\% & +2.54\% \\
+2  & +0.65\% & +3.30\% \\
+4  & \textbf{+0.90\%} & \textbf{+3.56\%} \\
+8  & +0.82\% & +3.48\% \\
+16 & +0.58\% & +3.23\% \\
 \bottomrule
 \end{tabular}
 \end{table}
@@ -471,13 +492,16 @@ consistent with its near-total lack of mostly-alive blocks in Figure~\ref{fig:li
 \end{figure*}
 
 When both cache levels are guided simultaneously
-(Figure~\ref{fig:combined}), QMM's gains are near-additive: LLC (+3.8\%) and
-\stlb (+5.5\%) combine to +8.1\%, consistent with the two levels identifying
-independent sets of \doa blocks. Google's gain is entirely LLC-driven
-(+4.2\%); the \stlb adds nothing, which matches its high LLC MPKI dominating
-performance. DPC3 shows unexpected synergy: +0.5\% and +0.1\% individually,
-yet +2.6\% combined. \ipv-Live gives a marginal extra gain on QMM (+8.2\%) but
-not on DPC3 or Google.
+(Figure~\ref{fig:combined}), the per-level gains reinforce one another. On QMM,
+measuring each guided policy against its own \srrip baseline, \srrip-Live's
+individual contributions of +0.90\% (LLC, $\theta{=}4$) and +2.44\% (\stlb,
+$\theta{=}1$) combine to +5.59\% over \srrip (+8.37\% over \lru) ---
+well above the +3.3\% one would expect from the parts, i.e.\ the two levels are
+\emph{super-additive}. \ipv-Live instead combines additively: its +1.83\% (LLC)
+and +2.54\% (\stlb) gains over \srrip reach +4.47\% combined (+7.22\% over \lru),
+close to the expected sum. This synergy reverses the per-level ranking: although
+\ipv-Live leads at each level in isolation, \srrip-Live wins once both levels
+are guided (+5.59\% vs +4.47\% over \srrip).
 
 \begin{figure*}[t!]
 \centering

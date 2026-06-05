@@ -22,9 +22,10 @@ RUN_LABEL="$label",BINARY="$binary",$* \
 }
 
 echo "=== Baselines (unbounded, recomputed with all fixes) ==="
-submit "$LABEL/lru"   champsim_lru      "rb_lru"
-submit "$LABEL/srrip" champsim_srrip    "rb_srrip"
-submit "$LABEL/ipv"   champsim_ipv_live "rb_ipv" "SRRIP_LIVE_TARGET=none"
+submit "$LABEL/lru"   champsim_lru   "rb_lru"
+submit "$LABEL/srrip" champsim_srrip "rb_srrip"
+# IPV baseline omitted: IPV unguided (SRRIP_LIVE_TARGET=none) is byte-identical
+# to SRRIP because g_ipv_mostly_alive = {0,0,0,0,2} = SRRIP. Use srrip/ for both.
 
 echo "--- SRRIP-Live LLC (unbounded) ---"
 for thd in 1 2 4 8 16; do
@@ -48,5 +49,5 @@ for thd in 1 2 4 8 16; do
 done
 
 echo ""
-echo "Submitted: 23 arrays x 45 traces = 1035 jobs"
+echo "Submitted: 22 arrays x 45 traces = 990 jobs"
 echo "Label: $LABEL"
