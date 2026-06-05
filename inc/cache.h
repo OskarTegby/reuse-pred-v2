@@ -251,8 +251,8 @@ public:
 
   void update(uint64_t key, liveness_class lv) {
     if (!unbounded_ && cap_ == 0 && buf_cap_ == 0) return;  // truly empty — nothing to store
+    seen_pcs_.insert(key);  // always track seen PCs for warm/cold miss split
     if (shadow_cap_ > 0) {
-      seen_pcs_.insert(key);
       // Oracle: if this key was evicted from the promo buffer at some point,
       // keep its evidence accumulating as if it had never been evicted.
       if (lv == liveness_class::doa) {
