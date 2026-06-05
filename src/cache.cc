@@ -275,11 +275,15 @@ void CACHE::load_predictor_settings()
       const uint64_t rh_ckpt = getenv_uint64("REPL_HIST_CHECKPOINT", 0);
       if (rh_ckpt > 0)
         repl_hist_pc.set_checkpoint(rh_ckpt, NAME);
-    } else if (std::getenv("REPL_HIST_LLC_CAP") || std::getenv("REPL_HIST_STLB_CAP")) {
-      // Explicitly set to 0: zero-capacity bounded table — classify() always returns mostly_alive.
+    } else if ((NAME == "LLC"       && std::getenv("REPL_HIST_LLC_CAP")) ||
+               (NAME == "cpu0_STLB" && std::getenv("REPL_HIST_STLB_CAP"))) {
+      // This level's own cap var is explicitly set to 0: zero-capacity bounded
+      // table — classify() always returns mostly_alive. Keyed on the level's OWN
+      // var so that bounding one level (e.g. LLC) leaves the other unbounded
+      // rather than forcing it empty.
       repl_hist_pc = HistTable(0, HistTable::Policy::LRU, 0, 0);
     }
-    // else (env var absent entirely): keep default-constructed HistTable (unbounded mode)
+    // else (this level's env var absent): keep default-constructed HistTable (unbounded mode)
   }
   if (const char* v = std::getenv("MID_PROMOTE"); v && std::stoull(v))
     mid_promote = true;
