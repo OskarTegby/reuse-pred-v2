@@ -18,16 +18,65 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdio>
 #include <cstdlib>
 #include <iomanip>
 #include <iostream>
 #include <iterator>
 #include <numeric>
+#include <unordered_set>
 
 #include "champsim.h"
 #include "champsim_constants.h"
 #include "instruction.h"
 #include "util.h"
+
+// ──────────────────────────────────────────────
+// Shared replacement-history infrastructure
+// ──────────────────────────────────────────────
+
+namespace {
+
+// PC subset tracker (REPL_HIST_PC_SUBSET=1).
+// Collects unique fill-PCs per cache level and reports at program exit whether
+// the LLC PC set is a subset of the STLB PC set. If it isn't, something is
+// wrong: every LLC fill must have gone through address translation first.
+struct PCSubsetTracker {
+  std::unordered_set<uint64_t> llc_pcs, stlb_pcs;
+  bool enabled = false;
+  ~PCSubsetTracker() {
+    if (!enabled || (llc_pcs.empty() && stlb_pcs.empty()))
+      return;
+    const uint64_t n_llc  = static_cast<uint64_t>(llc_pcs.size());
+    const uint64_t n_stlb = static_cast<uint64_t>(stlb_pcs.size());
+    uint64_t in_both = 0;
+    for (auto ip : llc_pcs)
+      if (stlb_pcs.count(ip)) ++in_both;
+    const uint64_t llc_only = n_llc - in_both;
+    std::printf("\n=== PC subset analysis (REPL_HIST_PC_SUBSET) ===\n");
+    std::printf("  STLB unique PCs  : %lu\n", n_stlb);
+    std::printf("  LLC  unique PCs  : %lu\n", n_llc);
+    std::printf("  LLC ∩ STLB       : %lu\n", in_both);
+    std::printf("  LLC ⊆ STLB       : %s  (%.1f%% of LLC PCs appear in STLB)\n",
+                llc_only == 0 ? "YES" : "NO",
+                n_llc ? 100.0 * in_both / n_llc : 0.0);
+    if (llc_only > 0)
+      std::printf("  LLC-only PCs     : %lu  <-- these should not exist\n", llc_only);
+  }
+};
+PCSubsetTracker g_pc_subset;
+
+// Merged replacement history table (REPL_HIST_MERGED=1).
+// One HistTable shared by both LLC and cpu0_STLB. Both levels call update()
+// on the same object at eviction and classify() on it at fill time. Each
+// level still uses its own mid_thd/low_thd for the classify call, so the
+// per-level threshold tuning continues to apply.
+// ChampSim is single-threaded, so sharing the table is race-condition-free.
+HistTable g_merged_repl_hist;
+bool      g_merged_hist_ready = false;
+bool      g_use_merged_hist   = false;
+
+} // namespace
 
 // ──────────────────────────────────────────────
 // dpPred-cbPred helpers
@@ -152,8 +201,17 @@ void CACHE::update_eviction_counters(const BLOCK& victim, liveness_class lv)
   }
 
   // Replacement-guidance history: delegated to HistTable (bounded or unbounded).
-  if (NAME == "LLC" || NAME == "cpu0_STLB")
-    repl_hist_pc.update(victim.ip, lv);
+  if (NAME == "LLC" || NAME == "cpu0_STLB") {
+    if (::g_use_merged_hist)
+      ::g_merged_repl_hist.update(victim.ip, lv);
+    else
+      repl_hist_pc.update(victim.ip, lv);
+
+    if (::g_pc_subset.enabled && victim.ip != 0) {
+      if (NAME == "LLC")       ::g_pc_subset.llc_pcs.insert(victim.ip);
+      else                     ::g_pc_subset.stlb_pcs.insert(victim.ip);
+    }
+  }
 }
 
 // Reads environment variables to enable dpPred/cbPred and tune their
@@ -301,6 +359,26 @@ void CACHE::load_predictor_settings()
   // Unbounded characterization: track all (PC, address) pairs to measure actual demand.
   if (const char* v = std::getenv("CHARACTERIZATION"); v && std::stoull(v))
     characterization_enable = true;
+
+  // PC subset tracking: record unique fill-PCs per level (LLC and STLB) and
+  // report LLC⊆STLB at program exit. Activated by REPL_HIST_PC_SUBSET=1.
+  if (const char* v = std::getenv("REPL_HIST_PC_SUBSET"); v && std::stoull(v))
+    ::g_pc_subset.enabled = true;
+
+  // Merged replacement history table: one shared HistTable for both LLC and
+  // STLB. Capacity set by REPL_HIST_CAP (0 = unbounded). Activated by
+  // REPL_HIST_MERGED=1. Initialised only once (first CACHE constructor wins).
+  if (const char* v = std::getenv("REPL_HIST_MERGED"); v && std::stoull(v)) {
+    ::g_use_merged_hist = true;
+    if (!::g_merged_hist_ready) {
+      const uint64_t cap = getenv_uint64("REPL_HIST_CAP",     0);
+      const uint64_t buf = getenv_uint64("REPL_HIST_BUF_CAP", 0);
+      ::g_merged_repl_hist = HistTable(cap, HistTable::Policy::LRU, buf, 0);
+      ::g_merged_hist_ready = true;
+    }
+    // Per-instance repl_hist_pc is unused in merged mode; keep it default
+    // (unbounded, empty) so classify calls that somehow reach it are safe.
+  }
 }
 
 uint64_t CACHE::get_repl_guidance_score(uint64_t block_address, uint64_t dp_pc) const
@@ -320,6 +398,8 @@ uint64_t CACHE::get_repl_guidance_score(uint64_t block_address, uint64_t dp_pc) 
 
 liveness_class CACHE::classify_block_liveness(uint64_t /*block_address*/, uint64_t pc) const
 {
+  if (::g_use_merged_hist)
+    return ::g_merged_repl_hist.classify(pc, mid_thd, low_thd);
   return repl_hist_pc.classify(pc, mid_thd, low_thd);
 }
 
