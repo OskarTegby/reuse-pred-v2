@@ -3,8 +3,8 @@ set -euo pipefail
 # Post-fix size studies + combined run, both levels guided (LLC thd=4, STLB thd=1).
 # - Combined: both levels unbounded -> measures additive LLC+STLB liveness gain.
 # - LLC size study: scale LLC table {256..4096} w/ buf=128, STLB unbounded.
-# - STLB size study: scale STLB table {64..1024} w/ buf=128, LLC unbounded
-#   (smaller range than LLC: the STLB is a smaller structure).
+# - STLB size study: scale STLB table {256..1024} w/ buf=128, LLC unbounded
+#   (smaller top than LLC: the STLB is a smaller structure; floor at 256).
 # Baselines (LRU, SRRIP) are reused from qmm_thd_rebaseline_20260604_2307.
 # Requires the per-level-cap-independence fix (champsim_both_* rebuilt 2026-06-05).
 BASE=~/ChampSim-dev
@@ -37,7 +37,7 @@ for cap in 256 512 1024 2048 4096; do
 done
 
 echo "--- STLB size study (SRRIP-Live, buf=128, LLC unbounded) ---"
-for cap in 64 128 256 512 1024; do
+for cap in 256 512 1024; do
   submit "$LABEL/size_stlb/cap${cap}" champsim_both_srrip_live "ss_${cap}" \
     "REPL_HIST_STLB_CAP=${cap},REPL_HIST_BUF_CAP=128,$COMMON"
 done
