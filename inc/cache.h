@@ -872,6 +872,7 @@ class CACHE : public champsim::operable, public MemoryRequestConsumer, public Me
   // in load_predictor_settings(). Uses the same HistTable replacement policies
   // (lru/lfu/lfu_doa/srrip) and optional promotion buffer as phist/bhist.
   HistTable repl_hist_pc;
+  bool repl_hist_use_addr{false};  // REPL_HIST_MODE=addr: index by block addr (LLC) or VPN (STLB)
 
   // Classify block liveness based on repl_hist_pc counters for the fill PC.
   // Used by srrip_live and ipv_live replacement policies to guide insertion/promotion.

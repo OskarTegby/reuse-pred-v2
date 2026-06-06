@@ -202,10 +202,13 @@ void CACHE::update_eviction_counters(const BLOCK& victim, liveness_class lv)
 
   // Replacement-guidance history: delegated to HistTable (bounded or unbounded).
   if (NAME == "LLC" || NAME == "cpu0_STLB") {
+    const uint64_t repl_key = repl_hist_use_addr
+        ? ((NAME == "LLC") ? (victim.address >> OFFSET_BITS) : victim.address)
+        : victim.ip;
     if (::g_use_merged_hist)
-      ::g_merged_repl_hist.update(victim.ip, lv);
+      ::g_merged_repl_hist.update(repl_key, lv);
     else
-      repl_hist_pc.update(victim.ip, lv);
+      repl_hist_pc.update(repl_key, lv);
 
     if (::g_pc_subset.enabled && victim.ip != 0) {
       if (NAME == "LLC")       ::g_pc_subset.llc_pcs.insert(victim.ip);
@@ -365,6 +368,9 @@ void CACHE::load_predictor_settings()
   if (const char* v = std::getenv("REPL_HIST_PC_SUBSET"); v && std::stoull(v))
     ::g_pc_subset.enabled = true;
 
+  if (const char* v = std::getenv("REPL_HIST_MODE"); v && std::string_view(v) == "addr")
+    repl_hist_use_addr = true;
+
   // Merged replacement history table: one shared HistTable for both LLC and
   // STLB. Capacity set by REPL_HIST_CAP (0 = unbounded). Activated by
   // REPL_HIST_MERGED=1. Initialised only once (first CACHE constructor wins).
@@ -396,11 +402,14 @@ uint64_t CACHE::get_repl_guidance_score(uint64_t block_address, uint64_t dp_pc) 
   return dead_count;
 }
 
-liveness_class CACHE::classify_block_liveness(uint64_t /*block_address*/, uint64_t pc) const
+liveness_class CACHE::classify_block_liveness(uint64_t block_address, uint64_t pc) const
 {
+  const uint64_t key = repl_hist_use_addr
+      ? ((NAME == "LLC") ? (block_address >> OFFSET_BITS) : block_address)
+      : pc;
   if (::g_use_merged_hist)
-    return ::g_merged_repl_hist.classify(pc, mid_thd, low_thd);
-  return repl_hist_pc.classify(pc, mid_thd, low_thd);
+    return ::g_merged_repl_hist.classify(key, mid_thd, low_thd);
+  return repl_hist_pc.classify(key, mid_thd, low_thd);
 }
 
 void CACHE::record_characterization(uint64_t dp_pc, uint64_t block_address)
