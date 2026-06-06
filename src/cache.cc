@@ -370,6 +370,10 @@ void CACHE::load_predictor_settings()
 
   if (const char* v = std::getenv("REPL_HIST_MODE"); v && std::string_view(v) == "addr")
     repl_hist_use_addr = true;
+  if (NAME == "LLC") {
+    if (const char* v = std::getenv("LIVENESS_BYPASS"); v && std::stoull(v))
+      liveness_bypass = true;
+  }
 
   // Merged replacement history table: one shared HistTable for both LLC and
   // STLB. Capacity set by REPL_HIST_CAP (0 = unbounded). Activated by
@@ -521,9 +525,16 @@ bool CACHE::handle_fill(const PACKET& fill_mshr)
   // bypass in a flag and handle it directly below.
   bool predictor_bypassed = false;
   if (way != set_end && way->valid) {
+    const bool lv_bypass = liveness_bypass && NAME == "LLC"
+        && fill_mshr.type != TRANSLATION
+        && classify_block_liveness(fill_mshr.address, fill_mshr.ip) == liveness_class::doa;
+    if (lv_bypass)
+      sim_stats.back().liveness_bypasses++;
+
     const bool bypassed =
       (dppred && NAME == "cpu0_STLB" && dppred_bypass(fill_mshr)) ||
-      (cbpred && NAME == "LLC" && fill_mshr.type != TRANSLATION && cbpred_bypass(fill_mshr));
+      (cbpred && NAME == "LLC" && fill_mshr.type != TRANSLATION && cbpred_bypass(fill_mshr)) ||
+      lv_bypass;
 
     if (bypassed) {
       predictor_bypassed = true;
@@ -1085,6 +1096,7 @@ void CACHE::end_phase(unsigned finished_cpu)
   roi_stats.back().llc_bypasses            = sim_stats.back().llc_bypasses;
   roi_stats.back().pfq_hits                = sim_stats.back().pfq_hits;
   roi_stats.back().cbpred_nogate_bypasses  = sim_stats.back().cbpred_nogate_bypasses;
+  roi_stats.back().liveness_bypasses       = sim_stats.back().liveness_bypasses;
 
   roi_stats.back().evictions          = sim_stats.back().evictions;
   roi_stats.back().doa                = sim_stats.back().doa;

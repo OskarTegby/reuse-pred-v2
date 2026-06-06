@@ -746,6 +746,7 @@ struct cache_stats {
   uint64_t llc_bypasses = 0;
   uint64_t pfq_hits = 0;              // LLC fills where PFN was in PFQ (dp=true)
   uint64_t cbpred_nogate_bypasses = 0; // LLC bypasses that fired without a PFQ hit
+  uint64_t liveness_bypasses = 0;    // LLC bypasses from repl_hist DoA classification
 
   // DoA liveness stats.
   // For every cache: evictions = valid blocks displaced; doa = those never accessed.
@@ -873,6 +874,7 @@ class CACHE : public champsim::operable, public MemoryRequestConsumer, public Me
   // (lru/lfu/lfu_doa/srrip) and optional promotion buffer as phist/bhist.
   HistTable repl_hist_pc;
   bool repl_hist_use_addr{false};  // REPL_HIST_MODE=addr: index by block addr (LLC) or VPN (STLB)
+  bool liveness_bypass{false};     // LIVENESS_BYPASS=1: bypass DoA LLC fills using repl_hist
 
   // Classify block liveness based on repl_hist_pc counters for the fill PC.
   // Used by srrip_live and ipv_live replacement policies to guide insertion/promotion.

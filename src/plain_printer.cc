@@ -101,6 +101,8 @@ void champsim::plain_printer::print(CACHE::stats_type stats)
         stream << "  NOGATE_BYPASSES: " << stats.cbpred_nogate_bypasses;
       stream << std::endl;
     }
+    if (stats.liveness_bypasses > 0)
+      stream << stats.name << " LIVENESS_BYPASSES: " << stats.liveness_bypasses << std::endl;
     // History table utilisation (ROI only).
     auto print_hist = [&](const char* tag, uint64_t q, uint64_t h, uint64_t p, uint64_t ph) {
       if (q == 0) return;
