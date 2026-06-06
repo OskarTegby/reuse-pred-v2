@@ -875,6 +875,7 @@ class CACHE : public champsim::operable, public MemoryRequestConsumer, public Me
   HistTable repl_hist_pc;
   bool repl_hist_use_addr{false};  // REPL_HIST_MODE=addr: index by block addr (LLC) or VPN (STLB)
   bool liveness_bypass{false};     // LIVENESS_BYPASS=1: bypass DoA LLC fills using repl_hist
+  uint64_t bypass_thd{0};          // BYPASS_THD: dead_count >= bypass_thd → bypass (must be > mid_thd)
 
   // Classify block liveness based on repl_hist_pc counters for the fill PC.
   // Used by srrip_live and ipv_live replacement policies to guide insertion/promotion.

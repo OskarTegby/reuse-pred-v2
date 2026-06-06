@@ -373,6 +373,7 @@ void CACHE::load_predictor_settings()
   if (NAME == "LLC") {
     if (const char* v = std::getenv("LIVENESS_BYPASS"); v && std::stoull(v))
       liveness_bypass = true;
+    bypass_thd = getenv_uint64("BYPASS_THD", mid_thd);  // defaults to mid_thd if unset
   }
 
   // Merged replacement history table: one shared HistTable for both LLC and
@@ -525,9 +526,11 @@ bool CACHE::handle_fill(const PACKET& fill_mshr)
   // bypass in a flag and handle it directly below.
   bool predictor_bypassed = false;
   if (way != set_end && way->valid) {
+    const uint64_t bypass_key = repl_hist_use_addr
+        ? (fill_mshr.address >> OFFSET_BITS) : fill_mshr.ip;
     const bool lv_bypass = liveness_bypass && NAME == "LLC"
         && fill_mshr.type != TRANSLATION
-        && classify_block_liveness(fill_mshr.address, fill_mshr.ip) == liveness_class::doa;
+        && repl_hist_pc.classify(bypass_key, bypass_thd, 0) == liveness_class::doa;
     if (lv_bypass)
       sim_stats.back().liveness_bypasses++;
 
