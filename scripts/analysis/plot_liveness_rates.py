@@ -19,13 +19,13 @@ RESULTS = os.path.join(ROOT, "results")
 OUT = os.path.join(RESULTS, "plots", "liveness_rates.png")
 
 SUITES = {
-    "DPC3":   "dpc3_repl_pol_20260522_0722",
-    "GAP":    "gap_repl_pol_20260522_0722",
-    "GMS":    "gms_repl_pol_20260522_0722",
-    "Google": "google_repl_pol_20260522_0722",
-    "Ligra":  "ligra_repl_pol_20260522_0722",
-    "ML":     "ml_repl_pol_20260522_0722",
-    "QMM":    "qmm_repl_pol_20260522_0722",
+    "DPC3":   ("dpc3_repl_pol_20260522_0722",   "lru_baseline"),
+    "GAP":    ("gap_repl_pol_20260522_0722",    "lru_baseline"),
+    "GMS":    ("gms_repl_pol_20260522_0722",    "lru_baseline"),
+    "Google": ("google_repl_pol_20260522_0722", "lru_baseline"),
+    "Ligra":  ("ligra_repl_pol_20260522_0722",  "lru_baseline"),
+    "ML":     ("ml_repl_pol_20260522_0722",     "lru_baseline"),
+    "QMM":    ("qmm_repl_pol_20260522_0722",    "lru_baseline"),
 }
 
 LLC_PAT = re.compile(
@@ -49,11 +49,11 @@ def fractions(total, doa, dead, alive):
     return 100.0 * doa / total, 100.0 * dead / total, 100.0 * alive / total
 
 
-def collect(suite_dir):
+def collect(suite_dir, lru_subdir="lru_baseline"):
     """Sum raw counts across all traces, then compute fractions from totals."""
     llc  = {"total": 0, "doa": 0, "dead": 0, "alive": 0}
     stlb = {"total": 0, "doa": 0, "dead": 0, "alive": 0}
-    base = os.path.join(RESULTS, suite_dir, "lru_baseline")
+    base = os.path.join(RESULTS, suite_dir, lru_subdir)
     for trace_dir in sorted(os.listdir(base)):
         out = os.path.join(base, trace_dir, "champsim.out")
         if not os.path.isfile(out):
@@ -83,8 +83,8 @@ labels = list(SUITES.keys())
 llc_data  = {"doa": [], "dead": [], "alive": []}
 stlb_data = {"doa": [], "dead": [], "alive": []}
 
-for name, dirname in SUITES.items():
-    llc, stlb = collect(dirname)
+for name, (dirname, subdir) in SUITES.items():
+    llc, stlb = collect(dirname, subdir)
     for k in ("doa", "dead", "alive"):
         llc_data[k].append(llc[k])
         stlb_data[k].append(stlb[k])

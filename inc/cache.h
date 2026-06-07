@@ -68,6 +68,13 @@ public:
     mutable uint64_t classify_warm_miss        = 0;  // not in table or buf, but PC was seen before (fully evicted)
     mutable uint64_t classify_warm_oracle_hit  = 0;  // warm miss where oracle would have classified correctly (oracle dead_count >= mid_thd)
     mutable uint64_t classify_cold_miss        = 0;  // PC never seen before (no history — expected)
+    // Score tier transition counters (only meaningful when thd_dead/thd_doa are non-zero).
+    uint64_t cap_fires    = 0;  // MA→DoA jump intercepted and capped to mostly_dead
+    uint64_t trans_ma_md  = 0;  // score crossed thd_dead upward (mostly_alive → mostly_dead)
+    uint64_t trans_md_doa = 0;  // score crossed thd_doa  upward (mostly_dead  → DoA)
+    uint64_t trans_doa_md = 0;  // score dropped from DoA into mostly_dead (recovery)
+    uint64_t trans_md_ma  = 0;  // score dropped from mostly_dead into mostly_alive (recovery)
+    uint64_t trans_doa_ma = 0;  // score dropped from DoA past mostly_dead to mostly_alive
   };
 
   // Default: unbounded mode — backed by an unordered_map, no eviction.
@@ -215,6 +222,18 @@ public:
         printf("  misclass(score>=%lu)=%lu", thd_doa, misclass);
       printf("\n");
     }
+    if (thd_doa > 0) {
+      const uint64_t up   = stats_.trans_ma_md + stats_.trans_md_doa;
+      const uint64_t down = stats_.trans_doa_md + stats_.trans_md_ma + stats_.trans_doa_ma;
+      printf("%s repl_hist transitions:\n", prefix);
+      printf("  upward  : MA→MD=%lu  MD→DoA=%lu  (cap_fires=%lu)\n",
+             stats_.trans_ma_md, stats_.trans_md_doa, stats_.cap_fires);
+      printf("  downward: DoA→MD=%lu  MD→MA=%lu  DoA→MA=%lu\n",
+             stats_.trans_doa_md, stats_.trans_md_ma, stats_.trans_doa_ma);
+      if (up + down > 0)
+        printf("  up/down ratio: %.2f\n",
+               down > 0 ? static_cast<double>(up) / down : 99.0);
+    }
     (void)thd_dead;
   }
 
@@ -250,14 +269,33 @@ public:
     // Prevent skipping the mostly_dead band: a +3 jump from below thd_dead
     // must not land at or above thd_doa in one step.
     auto cap_score = [&](int64_t old_s, int64_t new_s) -> int64_t {
-      if (thd_dead > 0 && old_s < thd_dead && new_s >= thd_doa)
+      if (thd_dead > 0 && old_s < thd_dead && new_s >= thd_doa) {
+        ++stats_.cap_fires;
         return thd_doa - 1;
+      }
       return new_s;
+    };
+    // Record which tier boundary (if any) the score crossed after an update.
+    auto record_transition = [&](int64_t old_s, int64_t new_s) {
+      if (thd_doa == 0 || old_s == new_s) return;
+      auto tier = [&](int64_t s) -> int {
+        if (s >= thd_doa)                    return 2;
+        if (thd_dead > 0 && s >= thd_dead)   return 1;
+        return 0;
+      };
+      const int ot = tier(old_s), nt = tier(new_s);
+      if (ot == nt) return;
+      if      (ot == 0 && nt == 1) ++stats_.trans_ma_md;
+      else if (ot == 1 && nt == 2) ++stats_.trans_md_doa;
+      else if (ot == 2 && nt == 1) ++stats_.trans_doa_md;
+      else if (ot == 1 && nt == 0) ++stats_.trans_md_ma;
+      else if (ot == 2 && nt == 0) ++stats_.trans_doa_ma;
     };
     if (unbounded_) {
       int64_t& s = unmap_[key];
       const int64_t old_s = s;
       s = cap_score(old_s, std::max(int64_t{0}, old_s + d));
+      record_transition(old_s, s);
       return;
     }
     const bool accessed = (evict_class != liveness_class::doa);
@@ -266,6 +304,7 @@ public:
       if (e.valid && e.key == key) {
         const int64_t old_s = e.score;
         e.score = cap_score(old_s, std::max(int64_t{0}, old_s + d));
+        record_transition(old_s, e.score);
         on_hit(e, accessed);
         return;
       }
@@ -309,6 +348,7 @@ public:
       auto& slot   = victim_slot();
       slot.key     = key;
       slot.score   = cap_score(0, std::max(int64_t{0}, d));
+      record_transition(0, slot.score);
       slot.valid   = true;
       on_insert(slot, accessed);
     }
