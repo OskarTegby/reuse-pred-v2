@@ -19,13 +19,13 @@ RESULTS = os.path.join(ROOT, "results")
 OUT = os.path.join(RESULTS, "plots", "liveness_rates.png")
 
 SUITES = {
-    "DPC3":   ("dpc3_repl_pol_20260522_0722",   "lru_baseline"),
-    "GAP":    ("gap_repl_pol_20260522_0722",    "lru_baseline"),
-    "GMS":    ("gms_repl_pol_20260522_0722",    "lru_baseline"),
-    "Google": ("google_repl_pol_20260522_0722", "lru_baseline"),
-    "Ligra":  ("ligra_repl_pol_20260522_0722",  "lru_baseline"),
-    "ML":     ("ml_repl_pol_20260522_0722",     "lru_baseline"),
-    "QMM":    ("qmm_repl_pol_20260522_0722",    "lru_baseline"),
+    "DPC3":   ("dpc3_thd_rebaseline_20260605_2316",  "lru"),
+    "GAP":    ("gap_thd_rebaseline_20260605_2316",   "lru"),
+    "GMS":    ("gms_thd_rebaseline_20260605_2316",   "lru"),
+    "Google": ("google_repl_pol_20260522_0722",       "lru_baseline"),
+    "Ligra":  ("ligra_thd_rebaseline_20260605_2316", "lru"),
+    "ML":     ("ml_thd_rebaseline_20260605_2316",    "lru"),
+    "QMM":    ("qmm_thd_rebaseline_20260604_2307",   "lru"),
 }
 
 LLC_PAT = re.compile(

@@ -89,6 +89,14 @@ void champsim::plain_printer::print(CACHE::stats_type stats)
     if (stats.evictions > 0) {
       stream << stats.name << " DOA: " << stats.doa << " / " << stats.evictions
              << " (" << std::fixed << std::setprecision(2) << (100.0 * stats.doa / stats.evictions) << "%)" << std::endl;
+      stream << stats.name << " LIVENESS EVICTIONS: " << stats.evictions
+             << "  DOA: " << stats.doa
+             << " (" << std::fixed << std::setprecision(1) << (100.0 * stats.doa / stats.evictions) << "%)"
+             << "  MOSTLY_DEAD: " << stats.mostly_dead
+             << " (" << (100.0 * stats.mostly_dead / stats.evictions) << "%)"
+             << "  MOSTLY_ALIVE: " << stats.mostly_alive
+             << " (" << (100.0 * stats.mostly_alive / stats.evictions) << "%)"
+             << std::endl;
       if (stats.doa_stlb_found > 0)
         stream << stats.name << " DOA_STLB_CORR: " << stats.doa_stlb_also_doa << " / " << stats.doa_stlb_found
                << " (" << std::fixed << std::setprecision(2) << (100.0 * stats.doa_stlb_also_doa / stats.doa_stlb_found) << "%)" << std::endl;

@@ -620,6 +620,13 @@ bool CACHE::handle_fill(const PACKET& fill_mshr)
               }
             }
           }
+        } else {
+          const uint64_t lifetime     = current_cycle - way->install_cycle;
+          const uint64_t time_til_end = current_cycle - way->last_hit_cycle;
+          if (lifetime == 0 || time_til_end <= lifetime / 2)
+            sim_stats.back().mostly_alive++;
+          else
+            sim_stats.back().mostly_dead++;
         }
       }
 
@@ -720,7 +727,7 @@ bool CACHE::try_hit(const PACKET& handle_pkt)
     // the mostly-dead vs mostly-alive halflife split). This keeps the liveness
     // classification based on genuine reads only. Both fields are used solely
     // by the LLC/STLB liveness mechanism.
-    if (handle_pkt.type != WRITE) {
+    if (handle_pkt.type != WRITE && handle_pkt.type != PREFETCH) {
       if (NAME == "cpu0_STLB" || NAME == "LLC")
         way->accessed = true;
       way->last_hit_cycle = current_cycle;
@@ -1102,8 +1109,10 @@ void CACHE::end_phase(unsigned finished_cpu)
   roi_stats.back().cbpred_nogate_bypasses  = sim_stats.back().cbpred_nogate_bypasses;
   roi_stats.back().liveness_bypasses       = sim_stats.back().liveness_bypasses;
 
-  roi_stats.back().evictions          = sim_stats.back().evictions;
-  roi_stats.back().doa                = sim_stats.back().doa;
+  roi_stats.back().evictions    = sim_stats.back().evictions;
+  roi_stats.back().doa          = sim_stats.back().doa;
+  roi_stats.back().mostly_dead  = sim_stats.back().mostly_dead;
+  roi_stats.back().mostly_alive = sim_stats.back().mostly_alive;
   roi_stats.back().doa_stlb_found    = sim_stats.back().doa_stlb_found;
   roi_stats.back().doa_stlb_also_doa = sim_stats.back().doa_stlb_also_doa;
 
