@@ -69,7 +69,7 @@ PCSubsetTracker g_pc_subset;
 // Merged replacement history table (REPL_HIST_MERGED=1).
 // One HistTable shared by both LLC and cpu0_STLB. Both levels call update()
 // on the same object at eviction and classify() on it at fill time. Each
-// level still uses its own mid_thd/low_thd for the classify call, so the
+// level still uses its own thd_doa/thd_dead for the classify call, so the
 // per-level threshold tuning continues to apply.
 // ChampSim is single-threaded, so sharing the table is race-condition-free.
 HistTable g_merged_repl_hist;
@@ -127,7 +127,7 @@ bool CACHE::dppred_shadow_lookup(const PACKET& handle_pkt)
 // Only called when the set is full (otherwise there is nothing to bypass).
 bool CACHE::dppred_bypass(const PACKET& fill_mshr)
 {
-  if (phist.get(fill_mshr.ip) <= pconf_thd)
+  if (phist.get_score(fill_mshr.ip) <= (int64_t)pconf_thd)
     return false;
 
   if (pfq.size() >= pfq_cap)
@@ -168,7 +168,7 @@ bool CACHE::cbpred_bypass(const PACKET& fill_mshr)
     record_characterization(dp_pc, block_addr);
   } else {
     if (pfq_gate && !in_pfq) return false;
-    confidence = bhist_flat.get(block_addr);
+    confidence = (uint64_t)std::max(int64_t{0}, bhist_flat.get_score(block_addr));
     record_characterization(0, block_addr);
   }
 
@@ -185,7 +185,7 @@ bool CACHE::cbpred_bypass(const PACKET& fill_mshr)
 // translation entry evicted from the STLB, bhist for a cache block evicted
 // from the LLC.  Increments the confidence counter if the entry was never
 // accessed since insertion; resets it to zero otherwise.
-void CACHE::update_eviction_counters(const BLOCK& victim, liveness_class lv)
+void CACHE::update_eviction_counters(const BLOCK& victim, liveness_class evict_lv)
 {
   // cbpred / dppred bypass-predictor tables.
   // phist and bhist_flat are HistTable (take liveness_class); bhist_pc is
@@ -206,9 +206,9 @@ void CACHE::update_eviction_counters(const BLOCK& victim, liveness_class lv)
         ? ((NAME == "LLC") ? (victim.address >> OFFSET_BITS) : victim.address)
         : victim.ip;
     if (::g_use_merged_hist)
-      ::g_merged_repl_hist.update(repl_key, lv);
+      ::g_merged_repl_hist.update(repl_key, evict_lv, victim.ins_class, thd_dead, thd_doa);
     else
-      repl_hist_pc.update(repl_key, lv);
+      repl_hist_pc.update(repl_key, evict_lv, victim.ins_class, thd_dead, thd_doa);
 
     if (::g_pc_subset.enabled && victim.ip != 0) {
       if (NAME == "LLC")       ::g_pc_subset.llc_pcs.insert(victim.ip);
@@ -301,18 +301,18 @@ void CACHE::load_predictor_settings()
   pfq_ema_alpha = getenv_double("PFQ_EMA_ALPHA", pfq_ema_alpha);
   pfq_ema_thd   = getenv_double("PFQ_EMA_THD", 10.0) / 100.0;
 
-  // Liveness-guided replacement: two independent thresholds.
-  // Per-level thresholds: LLC_MID_THD / STLB_MID_THD override MID_THD for a
-  // specific cache level, allowing LLC and STLB to use different optimal thresholds
-  // in a combined run. Falls back to MID_THD if the level-specific var is unset.
-  const char* level_mid = (NAME == "LLC")       ? std::getenv("LLC_MID_THD")
-                        : (NAME == "cpu0_STLB")  ? std::getenv("STLB_MID_THD")
-                        : nullptr;
-  const char* level_low = (NAME == "LLC")       ? std::getenv("LLC_LOW_THD")
-                        : (NAME == "cpu0_STLB")  ? std::getenv("STLB_LOW_THD")
-                        : nullptr;
-  mid_thd = (level_mid && *level_mid) ? std::stoull(level_mid) : getenv_uint64("MID_THD", 1);
-  low_thd = (level_low && *level_low) ? std::stoull(level_low) : getenv_uint64("LOW_THD", 0);
+  // Liveness-guided replacement: score thresholds θ_doa and θ_dead.
+  // Per-level vars (LLC_THD_DOA / STLB_THD_DOA) override THD_DOA for a specific
+  // cache level, allowing LLC and STLB to use different optimal thresholds in a
+  // combined run. Falls back to THD_DOA / THD_DEAD if the level-specific var is unset.
+  const char* level_doa  = (NAME == "LLC")      ? std::getenv("LLC_THD_DOA")
+                         : (NAME == "cpu0_STLB") ? std::getenv("STLB_THD_DOA")
+                         : nullptr;
+  const char* level_dead = (NAME == "LLC")      ? std::getenv("LLC_THD_DEAD")
+                         : (NAME == "cpu0_STLB") ? std::getenv("STLB_THD_DEAD")
+                         : nullptr;
+  thd_doa  = (level_doa  && *level_doa)  ? std::stoull(level_doa)  : getenv_uint64("THD_DOA",  1);
+  thd_dead = (level_dead && *level_dead) ? std::stoull(level_dead) : getenv_uint64("THD_DEAD", 0);
 
   // Bounded repl_hist_pc: 0 = unbounded (default, backward compatible).
   // REPL_HIST_REPL controls table management policy (same options as HIST_REPL).
@@ -373,7 +373,7 @@ void CACHE::load_predictor_settings()
   if (NAME == "LLC") {
     if (const char* v = std::getenv("LIVENESS_BYPASS"); v && std::stoull(v))
       liveness_bypass = true;
-    bypass_thd = getenv_uint64("BYPASS_THD", mid_thd);  // defaults to mid_thd if unset
+    bypass_thd = getenv_uint64("BYPASS_THD", thd_doa);  // defaults to thd_doa if unset
   }
 
   // Merged replacement history table: one shared HistTable for both LLC and
@@ -401,7 +401,7 @@ uint64_t CACHE::get_repl_guidance_score(uint64_t block_address, uint64_t dp_pc) 
   if (use_pc_bhist) {
     dead_count = bhist_pc.get(dp_pc, block_address);
   } else {
-    dead_count = bhist_flat.get(block_address);
+    dead_count = (uint64_t)std::max(int64_t{0}, bhist_flat.get_score(block_address));
   }
 
   return dead_count;
@@ -413,8 +413,8 @@ liveness_class CACHE::classify_block_liveness(uint64_t block_address, uint64_t p
       ? ((NAME == "LLC") ? (block_address >> OFFSET_BITS) : block_address)
       : pc;
   if (::g_use_merged_hist)
-    return ::g_merged_repl_hist.classify(key, mid_thd, low_thd);
-  return repl_hist_pc.classify(key, mid_thd, low_thd);
+    return ::g_merged_repl_hist.classify(key, thd_doa, thd_dead);
+  return repl_hist_pc.classify(key, thd_doa, thd_dead);
 }
 
 void CACHE::record_characterization(uint64_t dp_pc, uint64_t block_address)
@@ -642,6 +642,7 @@ bool CACHE::handle_fill(const PACKET& fill_mshr)
       way->ip = fill_mshr.ip;
       way->install_cycle  = current_cycle;
       way->last_hit_cycle = current_cycle;
+      way->ins_class = classify_block_liveness(fill_mshr.address, fill_mshr.ip);
 
       metadata_thru =
           impl_prefetcher_cache_fill(pkt_address, get_set_index(fill_mshr.address), way_idx, fill_mshr.type == PREFETCH, evicting_address, metadata_thru);

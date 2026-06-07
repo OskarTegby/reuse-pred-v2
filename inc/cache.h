@@ -85,92 +85,61 @@ public:
     checkpoint_name_     = std::move(name);
   }
 
-  uint64_t get(uint64_t key) const {
+  int64_t get_score(uint64_t key) const {
     if (unbounded_) {
       auto it = unmap_.find(key);
-      return it != unmap_.end() ? it->second.first : 0;
+      return it != unmap_.end() ? it->second : 0;
     }
     stats_.queries++;
     for (const auto& e : entries_) {
       if (e.valid && e.key == key) {
-        if (e.doa > 0) {
+        if (e.score > 0) {
           stats_.table_hits++;
           if (e.promoted) { stats_.promoted_hits++; e.promoted = false; }
         }
-        return e.doa;
+        return e.score;
       }
     }
     return 0;
   }
 
-  uint64_t get_dead(uint64_t key) const {
-    if (unbounded_) {
-      auto it = unmap_.find(key);
-      return it != unmap_.end() ? it->second.second : 0;
-    }
-    for (const auto& e : entries_)
-      if (e.valid && e.key == key) return e.mostly_dead;
-    return 0;
-  }
-
-  // Returns {doa, mostly_dead} in one scan — use instead of separate get()+get_dead()
-  // calls when both values are needed (avoids scanning entries_ twice in bounded mode).
-  std::pair<uint64_t,uint64_t> get_both(uint64_t key) const {
-    if (unbounded_) {
-      auto it = unmap_.find(key);
-      return it != unmap_.end() ? it->second : std::pair<uint64_t,uint64_t>{0, 0};
-    }
-    for (const auto& e : entries_)
-      if (e.valid && e.key == key) return {e.doa, e.mostly_dead};
-    return {0, 0};
-  }
-
-  // Classify a PC against mid_thd / low_thd, consulting main table then promotion
-  // buffer. Tracks which structure resolved the classification in stats.
-  liveness_class classify(uint64_t key, uint64_t mid_thd, uint64_t low_thd) const {
+  // Classify a key against thd_doa / thd_dead, consulting main table then
+  // promotion buffer. Tracks which structure resolved the classification in stats.
+  liveness_class classify(uint64_t key, uint64_t thd_doa, uint64_t thd_dead) const {
     if (unbounded_) {
       auto it = unmap_.find(key);
       if (it != unmap_.end()) {
-        const auto [doa, dead] = it->second;
-        if (doa  >= mid_thd)                return liveness_class::doa;
-        if (low_thd > 0 && dead >= low_thd) return liveness_class::mostly_dead;
+        const int64_t s = it->second;
+        if (s >= (int64_t)thd_doa)                  return liveness_class::doa;
+        if (thd_dead > 0 && s >= (int64_t)thd_dead) return liveness_class::mostly_dead;
       }
       return liveness_class::mostly_alive;
     }
     // 1. Main table.
     for (const auto& e : entries_) {
       if (e.valid && e.key == key) {
-        if (e.doa >= mid_thd) {
-          ++stats_.classify_main;
-          return liveness_class::doa;
-        }
-        if (low_thd > 0 && e.mostly_dead >= low_thd) {
-          ++stats_.classify_main;
-          return liveness_class::mostly_dead;
-        }
-        // Found in table but below threshold — counts as main hit (evidence exists).
         ++stats_.classify_main;
+        if (e.score >= (int64_t)thd_doa)                  return liveness_class::doa;
+        if (thd_dead > 0 && e.score >= (int64_t)thd_dead) return liveness_class::mostly_dead;
         return liveness_class::mostly_alive;
       }
     }
-    // 2. Promotion buffer: can only signal DoA (buffer tracks dead_count only).
+    // 2. Promotion buffer: interprets dead_count as a score proxy.
     for (const auto& b : buffer_) {
       if (b.valid && b.key == key) {
-        if (b.dead_count >= mid_thd) {
-          ++stats_.classify_buf_guided;  // buffer has enough evidence — recovered classification
+        if (b.dead_count >= thd_doa) {
+          ++stats_.classify_buf_guided;
           return liveness_class::doa;
         }
-        ++stats_.classify_buf_weak;  // entry demoted here from main table, doa count was reset to 0
+        ++stats_.classify_buf_weak;
         return liveness_class::mostly_alive;
       }
     }
-    // 3. Not found anywhere. Warm miss: PC was seen before (entry evicted).
-    // Cold miss: PC has never generated an eviction — no history to lose.
+    // 3. Not found. Warm miss (entry evicted) or cold miss (never seen).
     if (!seen_pcs_.empty() && seen_pcs_.count(key)) {
       ++stats_.classify_warm_miss;
-      // Oracle check: would an infinite promotion buffer have classified this correctly?
       auto it = oracle_buf_.find(key);
-      if (it != oracle_buf_.end() && it->second >= mid_thd)
+      if (it != oracle_buf_.end() && it->second >= thd_doa)
         ++stats_.classify_warm_oracle_hit;
     } else {
       ++stats_.classify_cold_miss;
@@ -185,9 +154,9 @@ public:
   }
 
   // Print occupancy and shadow-buffer instrumentation to stdout.
-  // mid_thd: used to flag shadow hits where dead_count >= mid_thd, meaning the
-  // next block from that PC was misclassified (should have been DoA but was mostly_alive).
-  void print_stats(const char* prefix, uint64_t mid_thd = 0, uint64_t low_thd = 0) const {
+  // thd_doa: used to flag shadow hits where dead_count >= thd_doa — recovered
+  // classification that the bounded table missed.
+  void print_stats(const char* prefix, uint64_t thd_doa = 0, uint64_t thd_dead = 0) const {
     if (unbounded_) {
       printf("%s repl_hist: unbounded (%zu entries)\n", prefix, unmap_.size());
       return;
@@ -234,31 +203,32 @@ public:
       const double avg_doa  = stats_.shadow_hits
           ? static_cast<double>(stats_.shadow_hit_doa_sum) / stats_.shadow_hits : 0.0;
       uint64_t misclass = 0;
-      if (mid_thd > 0)
+      if (thd_doa > 0)
         misclass = std::count_if(shadow_.begin(), shadow_.end(),
-            [&](const ShadowEntry& s){ return s.valid && s.dead_count >= mid_thd; });
+            [&](const ShadowEntry& s){ return s.valid && s.dead_count >= thd_doa; });
       printf("%s repl_hist shadow    : evictions=%lu  shadow_hits=%lu (%.1f%%)  "
              "avg_doa@evict=%.2f  nonzero=%lu",
              prefix,
              stats_.buf_evictions, stats_.shadow_hits, hit_rate,
              avg_doa, stats_.shadow_hit_nonzero);
-      if (mid_thd > 0)
-        printf("  misclass(doa>=%lu)=%lu", mid_thd, misclass);
+      if (thd_doa > 0)
+        printf("  misclass(score>=%lu)=%lu", thd_doa, misclass);
       printf("\n");
     }
-    (void)low_thd;  // reserved for future mostly-dead misclassification tracking
+    (void)thd_dead;
   }
 
-  void update(uint64_t key, liveness_class lv) {
-    if (!unbounded_ && cap_ == 0 && buf_cap_ == 0) return;  // truly empty — nothing to store
-    seen_pcs_.insert(key);  // always track seen PCs for warm/cold miss split
-    if (shadow_cap_ > 0) {
-      // Oracle: if this key was evicted from the promo buffer at some point,
-      // keep its evidence accumulating as if it had never been evicted.
-      if (lv == liveness_class::doa) {
-        auto it = oracle_buf_.find(key);
-        if (it != oracle_buf_.end()) ++it->second;
-      }
+  // Update the history table with one (insertion-class, eviction-class) observation.
+  // ins_class defaults to mostly_alive — used by bypass/dead-page predictors that
+  // do not track insertion class explicitly.
+  void update(uint64_t key, liveness_class evict_class,
+              liveness_class ins_class = liveness_class::mostly_alive,
+              int64_t thd_dead = 0, int64_t thd_doa = 0) {
+    if (!unbounded_ && cap_ == 0 && buf_cap_ == 0) return;
+    seen_pcs_.insert(key);
+    if (shadow_cap_ > 0 && evict_class == liveness_class::doa) {
+      auto it = oracle_buf_.find(key);
+      if (it != oracle_buf_.end()) ++it->second;
     }
     if (!unbounded_ && checkpoint_interval_ > 0) {
       if (++update_count_ % checkpoint_interval_ == 0) {
@@ -276,41 +246,35 @@ public:
             stats_.buf_evictions, stats_.shadow_hits);
       }
     }
+    const int64_t d = score_delta(ins_class, evict_class);
+    // Prevent skipping the mostly_dead band: a +3 jump from below thd_dead
+    // must not land at or above thd_doa in one step.
+    auto cap_score = [&](int64_t old_s, int64_t new_s) -> int64_t {
+      if (thd_dead > 0 && old_s < thd_dead && new_s >= thd_doa)
+        return thd_doa - 1;
+      return new_s;
+    };
     if (unbounded_) {
-      auto& [doa, dead] = unmap_[key];
-      switch (lv) {
-        case liveness_class::doa:          doa++;              break;
-        case liveness_class::mostly_dead:  dead++; doa = 0;   break;
-        case liveness_class::mostly_alive: doa = 0; dead = 0; break;
-      }
+      int64_t& s = unmap_[key];
+      const int64_t old_s = s;
+      s = cap_score(old_s, std::max(int64_t{0}, old_s + d));
       return;
     }
-    const bool accessed = (lv != liveness_class::doa);
-    // 1. Main table hit.
+    const bool accessed = (evict_class != liveness_class::doa);
+    // 1. Main table hit: apply delta, floor at zero.
     for (auto& e : entries_) {
       if (e.valid && e.key == key) {
-        switch (lv) {
-          case liveness_class::doa:
-            e.doa = std::min(e.doa + 1, MAX_COUNTER);
-            break;
-          case liveness_class::mostly_dead:
-            e.mostly_dead = std::min(e.mostly_dead + 1, MAX_COUNTER);
-            e.doa = 0;
-            break;
-          case liveness_class::mostly_alive:
-            e.doa = 0;
-            e.mostly_dead = 0;
-            break;
-        }
+        const int64_t old_s = e.score;
+        e.score = cap_score(old_s, std::max(int64_t{0}, old_s + d));
         on_hit(e, accessed);
         return;
       }
     }
-    // 2. Promotion buffer: tracks DoA confirmations only.
+    // 2. Promotion buffer: tracks DoA confirmations until threshold is reached.
     if (buf_cap_ > 0) {
       for (auto& b : buffer_) {
         if (b.valid && b.key == key) {
-          if (lv == liveness_class::doa) {
+          if (evict_class == liveness_class::doa) {
             b.dead_count++;
             try_promote();
           } else {
@@ -319,21 +283,18 @@ public:
           return;
         }
       }
-      // Not in main table or buffer: check shadow before staging.
-      // A shadow hit means this PC was fully evicted but is still generating DoA events.
-      if (shadow_cap_ > 0 && lv == liveness_class::doa) {
+      if (shadow_cap_ > 0 && evict_class == liveness_class::doa) {
         for (auto& s : shadow_) {
           if (s.valid && s.key == key) {
             ++stats_.shadow_hits;
             stats_.shadow_hit_doa_sum += s.dead_count;
             if (s.dead_count > 0) ++stats_.shadow_hit_nonzero;
-            s.valid = false;  // consume: count first re-appearance only
+            s.valid = false;
             break;
           }
         }
       }
-      // Stage in buffer on DoA evictions only.
-      if (lv == liveness_class::doa) {
+      if (evict_class == liveness_class::doa) {
         auto& bslot      = buf_victim();
         bslot.key        = key;
         bslot.dead_count = 1;
@@ -343,34 +304,53 @@ public:
       }
       return;
     }
-    // 3. No buffer: insert on dead evictions; skip on mostly-alive.
-    if (lv != liveness_class::mostly_alive) {
-      auto& slot       = victim_slot();
-      slot.key         = key;
-      slot.doa         = (lv == liveness_class::doa) ? 1 : 0;
-      slot.mostly_dead = (lv == liveness_class::mostly_dead) ? 1 : 0;
-      slot.valid       = true;
+    // 3. No buffer: insert new entry on any non-zero-delta observation.
+    if (d != 0) {
+      auto& slot   = victim_slot();
+      slot.key     = key;
+      slot.score   = cap_score(0, std::max(int64_t{0}, d));
+      slot.valid   = true;
       on_insert(slot, accessed);
     }
   }
 
   void reset(uint64_t key) {
     for (auto& e : entries_)
-      if (e.valid && e.key == key) { e.doa = 0; e.mostly_dead = 0; return; }
+      if (e.valid && e.key == key) { e.score = 0; return; }
   }
 
 private:
-  static constexpr uint64_t MAX_COUNTER = 16;
   static constexpr uint32_t SRRIP_INS  = 2;
   static constexpr uint32_t SRRIP_MAX  = 3;
 
+  // Delta table: δ[ins_class][evict_class].
+  // Rows: mostly_alive=0, mostly_dead=1, doa=2.
+  // Columns: doa=0, mostly_dead=1, mostly_alive=2.
+  // Magnitude = disagreement distance (0→1, 1→2, 2→3); sign = direction.
+  static int8_t score_delta(liveness_class ins, liveness_class evict) {
+    static constexpr int8_t kDelta[3][3] = {
+      //              evict: doa  mostly_dead  mostly_alive
+      /* ins: mostly_alive */ { +3,     +2,         -1 },
+      /* ins: mostly_dead  */ { +2,     +1,         -2 },
+      /* ins: doa          */ { +1,     -2,         -3 },
+    };
+    auto idx = [](liveness_class c) -> int {
+      switch (c) {
+        case liveness_class::mostly_alive: return 0;
+        case liveness_class::mostly_dead:  return 1;
+        case liveness_class::doa:          return 2;
+      }
+      return 0;
+    };
+    return kDelta[idx(ins)][idx(evict)];
+  }
+
   struct Entry {
-    uint64_t key         = 0;
-    uint64_t doa         = 0;  // saturating count of consecutive DoA evictions
-    uint64_t mostly_dead = 0;  // saturating count of consecutive mostly-dead evictions
-    uint64_t freq        = 0;
-    uint64_t ts          = 0;
-    uint32_t rrpv        = 0;
+    uint64_t key    = 0;
+    int64_t  score  = 0;  // unified liveness score r; floored at 0, higher = deader
+    uint64_t freq   = 0;
+    uint64_t ts     = 0;
+    uint32_t rrpv   = 0;
     bool          valid    = false;
     mutable bool  promoted = false;  // set on buffer promotion; cleared on first hit
   };
@@ -395,7 +375,7 @@ private:
   uint64_t    checkpoint_interval_ = 0;
   uint64_t    update_count_        = 0;
   std::string checkpoint_name_;
-  mutable std::unordered_map<uint64_t, std::pair<uint64_t,uint64_t>> unmap_;
+  mutable std::unordered_map<uint64_t, int64_t> unmap_;
   uint64_t cap_          = 0;
   Policy   pol_          = Policy::LRU;
   std::vector<Entry>    entries_;
@@ -489,10 +469,9 @@ private:
     auto& slot = victim_slot();
     const bool has_victim = slot.valid;
     const uint64_t victim_key = has_victim ? slot.key : 0;
-    slot.key         = best->key;
-    slot.doa         = best->dead_count;
-    slot.mostly_dead = 0;
-    slot.valid       = true;
+    slot.key   = best->key;
+    slot.score = static_cast<int64_t>(best->dead_count);
+    slot.valid = true;
     on_promote(slot, best->dead_count);
     best->key        = has_victim ? victim_key : 0;
     best->dead_count = 0;
@@ -818,6 +797,7 @@ class CACHE : public champsim::operable, public MemoryRequestConsumer, public Me
 
     uint64_t install_cycle   = 0; // cycle when block was installed (for halflife classification)
     uint64_t last_hit_cycle  = 0; // cycle of most recent hit (0 = never hit)
+    liveness_class ins_class = liveness_class::mostly_alive; // class predicted at fill time
   };
   using set_type = std::vector<BLOCK>;
 
@@ -840,8 +820,8 @@ class CACHE : public champsim::operable, public MemoryRequestConsumer, public Me
   bool cbpred = false;
   uint64_t pconf_thd = 6; // phist confidence threshold
   uint64_t bconf_thd = 6; // bhist confidence threshold
-  uint64_t mid_thd = 1;   // repl_hist_pc: doa_count  >= mid_thd → DoA
-  uint64_t low_thd = 0;   // repl_hist_pc: dead_count >= low_thd → mostly-dead (0 = disabled)
+  uint64_t thd_doa  = 1;  // repl_hist_pc: score >= thd_doa  → DoA        (θ_doa)
+  uint64_t thd_dead = 0;  // repl_hist_pc: score >= thd_dead → mostly-dead (θ_dead, 0 = disabled)
   bool mid_promote = false; // promote DoA blocks to MRU on hit (srrip_live)
   uint64_t st_size = 2;   // shadow table capacity
 
@@ -875,7 +855,7 @@ class CACHE : public champsim::operable, public MemoryRequestConsumer, public Me
   HistTable repl_hist_pc;
   bool repl_hist_use_addr{false};  // REPL_HIST_MODE=addr: index by block addr (LLC) or VPN (STLB)
   bool liveness_bypass{false};     // LIVENESS_BYPASS=1: bypass DoA LLC fills using repl_hist
-  uint64_t bypass_thd{0};          // BYPASS_THD: dead_count >= bypass_thd → bypass (must be > mid_thd)
+  uint64_t bypass_thd{0};          // BYPASS_THD: score >= bypass_thd → bypass (must be >= thd_doa)
 
   // Classify block liveness based on repl_hist_pc counters for the fill PC.
   // Used by srrip_live and ipv_live replacement policies to guide insertion/promotion.
