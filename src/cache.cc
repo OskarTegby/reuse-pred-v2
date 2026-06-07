@@ -727,7 +727,7 @@ bool CACHE::try_hit(const PACKET& handle_pkt)
     // the mostly-dead vs mostly-alive halflife split). This keeps the liveness
     // classification based on genuine reads only. Both fields are used solely
     // by the LLC/STLB liveness mechanism.
-    if (handle_pkt.type != WRITE && handle_pkt.type != PREFETCH) {
+    if (handle_pkt.type != WRITE) {
       if (NAME == "cpu0_STLB" || NAME == "LLC")
         way->accessed = true;
       way->last_hit_cycle = current_cycle;
