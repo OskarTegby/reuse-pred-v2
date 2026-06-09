@@ -169,6 +169,12 @@ public:
     if (unbounded_) {
       printf("%s repl_hist: unbounded (%zu entries)  scoring_mode=%d\n",
              prefix, unmap_.size(), scoring_mode_);
+      if (scoring_mode_ == 6)
+        printf("%s repl_hist mode6    : delta=[%lu,%lu,%lu]  avg_life=[%.0f,%.0f,%.0f]cy"
+               "  samples=[%lu,%lu,%lu]\n",
+               prefix, delta_[0], delta_[1], delta_[2],
+               (double)avg_life_[0], (double)avg_life_[1], (double)avg_life_[2],
+               life_count_[0], life_count_[1], life_count_[2]);
       if (thd_doa > 0) {
         const uint64_t up   = stats_.trans_ma_md + stats_.trans_md_doa;
         const uint64_t down = stats_.trans_doa_md + stats_.trans_md_ma + stats_.trans_doa_ma;
@@ -253,11 +259,24 @@ public:
   }
 
   // Update the history table with one (insertion-class, eviction-class) observation.
+  // lifespan: cycles from block insertion to this eviction (0 = unknown). Used only
+  // by SCORING_MODE=6 to maintain per-class EMA and compute proportional deltas.
   void update(uint64_t key, liveness_class evict_class,
-              int64_t thd_dead = 0, int64_t thd_doa = 0) {
+              int64_t thd_dead = 0, int64_t thd_doa = 0,
+              uint64_t lifespan = 0) {
     if (!unbounded_ && cap_ == 0 && buf_cap_ == 0) return;
     seen_pcs_.insert(key);
     ++update_count_;
+    // Mode 6: update per-class lifespan EMA and recompute proportional deltas.
+    if (scoring_mode_ == 6 && lifespan > 0) {
+      const int ci = class_idx(evict_class);
+      const uint64_t n = ++life_count_[ci];
+      if (n <= 32)
+        avg_life_[ci] = (avg_life_[ci] * (n - 1) + lifespan) / n;  // warmup: simple mean
+      else
+        avg_life_[ci] = (7 * avg_life_[ci] + lifespan) >> 3;        // steady-state: EMA α=7/8
+      recompute_deltas_();
+    }
     if (shadow_cap_ > 0 && evict_class == liveness_class::doa) {
       auto it = oracle_buf_.find(key);
       if (it != oracle_buf_.end()) ++it->second;
@@ -278,7 +297,11 @@ public:
             stats_.buf_evictions, stats_.shadow_hits);
       }
     }
-    const int64_t d = score_delta(evict_class);
+    const int64_t d = (scoring_mode_ == 6)
+        ? ((evict_class == liveness_class::mostly_alive)
+           ? -(int64_t)delta_[2]
+           :  (int64_t)delta_[class_idx(evict_class)])
+        : score_delta(evict_class);
     auto cap_score = [&](int64_t old_s, int64_t new_s) -> int64_t {
       if (thd_dead > 0) {
         if (old_s < thd_dead && new_s >= thd_doa)  { ++stats_.cap_fires; return thd_doa - 1; }
@@ -338,6 +361,12 @@ public:
         } else {
           p = {0, 0};
         }
+      } else if (scoring_mode_ == 6) {
+        // Lifespan-proportional: delta_[ci] ∝ avg lifespan of class ci.
+        // Decoupled (same structure as modes 3-5): DoA→doa, MD→md+reset doa, MA→reset both.
+        if      (evict_class == liveness_class::doa)          p.second = old_doa + (int64_t)delta_[0];
+        else if (evict_class == liveness_class::mostly_dead)  { p.first = old_md + (int64_t)delta_[1]; p.second = 0; }
+        else                                                  p = {0, 0};
       } else {
         // Modes 3, 4, 5 — Approach B decoupled: DoA→doa only, MD→md only, MA→reset both
         // Mode 3: confirmatory δ (1/2/3 — deeper state = more weight)
@@ -415,8 +444,8 @@ public:
       }
       return;
     }
-    // 3. No buffer: insert new entry on any non-zero-delta observation.
-    if (d != 0) {
+    // 3. No buffer: insert new entry only when delta is positive (dead signal).
+    if (d > 0) {
       auto& slot   = victim_slot();
       slot.key     = key;
       slot.score   = cap_score(0, std::max(int64_t{0}, d));
@@ -492,7 +521,17 @@ private:
   // 5 = Approach B decoupled: lifespan-scaled δ (5/3/1 for MA/MD/DoA); wider spread than mode 4,
   //     proportional to observed MA/MD/DoA lifespan gaps. Calibrate with THD_DEAD=10, THD_DOA=6
   //     so that N=2 consecutive evictions from each state still saturates the respective counter.
+  // 6 = Adaptive lifespan-proportional: 10 points distributed across classes proportional to their
+  //     observed average lifespans. Longer-lived classes (MA) get a larger per-event δ because
+  //     they are evicted less frequently; shorter-lived classes (DoA) get a smaller δ. Deltas
+  //     adapt via EMA over block lifespans passed in the lifespan= arg of update(). Stability
+  //     property: at a 50/50 MA/DoA boundary the score is exactly stationary.
   int scoring_mode_ = 2;
+  // Mode 6: per-class EMA of observed block lifespans and resulting proportional deltas.
+  // Indexed: [0]=DoA  [1]=mostly_dead  [2]=mostly_alive
+  std::array<uint64_t, 3> avg_life_   = {};     // EMA of lifespan in cycles
+  std::array<uint64_t, 3> delta_      = {1, 3, 5}; // current 10-point proportional deltas
+  std::array<uint64_t, 3> life_count_ = {};     // samples seen (gates warmup vs EMA)
   // pair: {md_count, doa_count}
   mutable std::unordered_map<uint64_t, std::pair<int64_t,int64_t>> unmap_;
   uint64_t cap_          = 0;
@@ -515,6 +554,21 @@ private:
   // Only populated when shadow_cap_ > 0 (i.e. when instrumentation is active).
   std::unordered_map<uint64_t, uint64_t> oracle_buf_;
   mutable Stats stats_;
+
+  static int class_idx(liveness_class c) {
+    switch (c) {
+    case liveness_class::doa:         return 0;
+    case liveness_class::mostly_dead: return 1;
+    default:                          return 2;
+    }
+  }
+
+  void recompute_deltas_() {
+    const uint64_t S = avg_life_[0] + avg_life_[1] + avg_life_[2];
+    if (S == 0) return;
+    for (int i = 0; i < 3; ++i)
+      delta_[i] = std::max(uint64_t{1}, avg_life_[i] * 10 / S);
+  }
 
   void on_hit(Entry& e, liveness_class evict_class) {
     const bool is_doa = evict_class == liveness_class::doa;

@@ -205,10 +205,12 @@ void CACHE::update_eviction_counters(const BLOCK& victim, liveness_class evict_l
     const uint64_t repl_key = repl_hist_use_addr
         ? ((NAME == "LLC") ? (victim.address >> OFFSET_BITS) : victim.address)
         : victim.ip;
+    const uint64_t lifespan = (victim.install_cycle > 0 && current_cycle >= victim.install_cycle)
+                             ? current_cycle - victim.install_cycle : 0;
     if (::g_use_merged_hist)
-      ::g_merged_repl_hist.update(repl_key, evict_lv, thd_dead, thd_doa);
+      ::g_merged_repl_hist.update(repl_key, evict_lv, thd_dead, thd_doa, lifespan);
     else
-      repl_hist_pc.update(repl_key, evict_lv, thd_dead, thd_doa);
+      repl_hist_pc.update(repl_key, evict_lv, thd_dead, thd_doa, lifespan);
 
     if (::g_pc_subset.enabled && victim.ip != 0) {
       if (NAME == "LLC")       ::g_pc_subset.llc_pcs.insert(victim.ip);
