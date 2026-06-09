@@ -206,9 +206,9 @@ void CACHE::update_eviction_counters(const BLOCK& victim, liveness_class evict_l
         ? ((NAME == "LLC") ? (victim.address >> OFFSET_BITS) : victim.address)
         : victim.ip;
     if (::g_use_merged_hist)
-      ::g_merged_repl_hist.update(repl_key, evict_lv, victim.ins_class, thd_dead, thd_doa);
+      ::g_merged_repl_hist.update(repl_key, evict_lv, thd_dead, thd_doa);
     else
-      repl_hist_pc.update(repl_key, evict_lv, victim.ins_class, thd_dead, thd_doa);
+      repl_hist_pc.update(repl_key, evict_lv, thd_dead, thd_doa);
 
     if (::g_pc_subset.enabled && victim.ip != 0) {
       if (NAME == "LLC")       ::g_pc_subset.llc_pcs.insert(victim.ip);
@@ -313,6 +313,7 @@ void CACHE::load_predictor_settings()
                          : nullptr;
   thd_doa  = (level_doa  && *level_doa)  ? std::stoull(level_doa)  : getenv_uint64("THD_DOA",  1);
   thd_dead = (level_dead && *level_dead) ? std::stoull(level_dead) : getenv_uint64("THD_DEAD", 0);
+  repl_hist_pc.set_scoring_mode(static_cast<int>(getenv_uint64("SCORING_MODE", 2)));
 
   // Bounded repl_hist_pc: 0 = unbounded (default, backward compatible).
   // REPL_HIST_REPL controls table management policy (same options as HIST_REPL).

@@ -51,6 +51,10 @@ struct Stats {
     std::array<uint64_t, 4> evict_rrpv_alive     = {};
     std::array<uint64_t, 4> evict_rrpv_unguided  = {};
     uint64_t aging_loops = 0;
+    // Lifespan (cycles from insertion to eviction) per insertion class:
+    //   [0]=unguided  [1]=doa  [2]=mostly_dead  [3]=mostly_alive
+    std::array<uint64_t, 4> lifespan_sum   = {};
+    std::array<uint64_t, 4> lifespan_count = {};
 };
 std::unordered_map<CACHE*, Stats> stats;
 
@@ -92,6 +96,13 @@ uint32_t CACHE::find_victim(uint32_t triggering_cpu, uint64_t instr_id, uint32_t
     case 2: st.evict_rrpv_dead   [rrpv]++; break;
     case 3: st.evict_rrpv_alive  [rrpv]++; break;
     default:st.evict_rrpv_unguided[rrpv]++; break;
+  }
+
+  const uint64_t ins_cycle = current_set[way].install_cycle;
+  if (ins_cycle > 0 && current_cycle >= ins_cycle) {
+    const int ci = (cls >= 0 && cls <= 3) ? cls : 0;
+    st.lifespan_sum[ci]   += current_cycle - ins_cycle;
+    st.lifespan_count[ci] += 1;
   }
 
   return way;
@@ -192,6 +203,13 @@ void CACHE::replacement_final_stats()
          pct(st.evict_rrpv_alive[2],evict_alive), pct(st.evict_rrpv_alive[3],evict_alive));
   printf("  Aging loops      : %lu  (%.2f per eviction)\n",
          st.aging_loops, pct(st.aging_loops, evict_total) / 100.0);
-  repl_hist_pc.print_stats(NAME.c_str(), mid_thd, low_thd);
+
+  auto avg_life = [&](int ci) -> double {
+    return st.lifespan_count[ci] ? static_cast<double>(st.lifespan_sum[ci]) / st.lifespan_count[ci] : 0.0;
+  };
+  printf("  Avg lifespan(cy) : DoA=%.0f  Dead=%.0f  Alive=%.0f  Unguided=%.0f\n",
+         avg_life(1), avg_life(2), avg_life(3), avg_life(0));
+
+  repl_hist_pc.print_stats(NAME.c_str(), thd_doa, thd_dead);
   printf("\n");
 }

@@ -186,6 +186,6 @@ void CACHE::replacement_final_stats()
     printf("  Evict class mix  : DoA=%.1f%%  Dead=%.1f%%  Alive=%.1f%%  Unguided=%.1f%%\n",
            pct(st.evict_doa,total_evict), pct(st.evict_dead,total_evict),
            pct(st.evict_alive,total_evict), pct(st.evict_unguided,total_evict));
-    repl_hist_pc.print_stats(NAME.c_str(), mid_thd, low_thd);
+    repl_hist_pc.print_stats(NAME.c_str(), thd_doa, thd_dead);
     printf("\n");
 }

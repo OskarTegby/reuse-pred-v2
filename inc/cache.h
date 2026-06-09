@@ -87,6 +87,8 @@ public:
 
   // Enable periodic occupancy checkpoints to stderr every `interval` update() calls.
   // Call after construction; name labels the output lines.
+  void set_scoring_mode(int m) { scoring_mode_ = m; }
+
   void set_checkpoint(uint64_t interval, std::string name) {
     checkpoint_interval_ = interval;
     checkpoint_name_     = std::move(name);
@@ -95,7 +97,7 @@ public:
   int64_t get_score(uint64_t key) const {
     if (unbounded_) {
       auto it = unmap_.find(key);
-      return it != unmap_.end() ? it->second : 0;
+      return it != unmap_.end() ? it->second.second : 0;  // doa_count used for bypass
     }
     stats_.queries++;
     for (const auto& e : entries_) {
@@ -116,9 +118,9 @@ public:
     if (unbounded_) {
       auto it = unmap_.find(key);
       if (it != unmap_.end()) {
-        const int64_t s = it->second;
-        if (s >= (int64_t)thd_doa)                  return liveness_class::doa;
-        if (thd_dead > 0 && s >= (int64_t)thd_dead) return liveness_class::mostly_dead;
+        const int64_t md = it->second.first, doa = it->second.second;
+        if (doa >= (int64_t)thd_doa)                  return liveness_class::doa;
+        if (thd_dead > 0 && md >= (int64_t)thd_dead)  return liveness_class::mostly_dead;
       }
       return liveness_class::mostly_alive;
     }
@@ -165,7 +167,20 @@ public:
   // classification that the bounded table missed.
   void print_stats(const char* prefix, uint64_t thd_doa = 0, uint64_t thd_dead = 0) const {
     if (unbounded_) {
-      printf("%s repl_hist: unbounded (%zu entries)\n", prefix, unmap_.size());
+      printf("%s repl_hist: unbounded (%zu entries)  scoring_mode=%d\n",
+             prefix, unmap_.size(), scoring_mode_);
+      if (thd_doa > 0) {
+        const uint64_t up   = stats_.trans_ma_md + stats_.trans_md_doa;
+        const uint64_t down = stats_.trans_doa_md + stats_.trans_md_ma + stats_.trans_doa_ma;
+        printf("%s repl_hist transitions:\n", prefix);
+        printf("  upward  : MA→MD=%lu  MD→DoA=%lu\n",
+               stats_.trans_ma_md, stats_.trans_md_doa);
+        printf("  downward: DoA→MD=%lu  MD→MA=%lu  DoA→MA=%lu\n",
+               stats_.trans_doa_md, stats_.trans_md_ma, stats_.trans_doa_ma);
+        if (up + down > 0)
+          printf("  up/down ratio: %.2f\n",
+                 down > 0 ? static_cast<double>(up) / down : 99.0);
+      }
       return;
     }
     const uint64_t main_occ = static_cast<uint64_t>(
@@ -238,19 +253,17 @@ public:
   }
 
   // Update the history table with one (insertion-class, eviction-class) observation.
-  // ins_class defaults to mostly_alive — used by bypass/dead-page predictors that
-  // do not track insertion class explicitly.
   void update(uint64_t key, liveness_class evict_class,
-              liveness_class ins_class = liveness_class::mostly_alive,
               int64_t thd_dead = 0, int64_t thd_doa = 0) {
     if (!unbounded_ && cap_ == 0 && buf_cap_ == 0) return;
     seen_pcs_.insert(key);
+    ++update_count_;
     if (shadow_cap_ > 0 && evict_class == liveness_class::doa) {
       auto it = oracle_buf_.find(key);
       if (it != oracle_buf_.end()) ++it->second;
     }
     if (!unbounded_ && checkpoint_interval_ > 0) {
-      if (++update_count_ % checkpoint_interval_ == 0) {
+      if (update_count_ % checkpoint_interval_ == 0) {
         const uint64_t main_occ = static_cast<uint64_t>(
             std::count_if(entries_.begin(), entries_.end(),
                           [](const Entry& e){ return e.valid; }));
@@ -265,17 +278,14 @@ public:
             stats_.buf_evictions, stats_.shadow_hits);
       }
     }
-    const int64_t d = score_delta(ins_class, evict_class);
-    // Prevent skipping the mostly_dead band: a +3 jump from below thd_dead
-    // must not land at or above thd_doa in one step.
+    const int64_t d = score_delta(evict_class);
     auto cap_score = [&](int64_t old_s, int64_t new_s) -> int64_t {
-      if (thd_dead > 0 && old_s < thd_dead && new_s >= thd_doa) {
-        ++stats_.cap_fires;
-        return thd_doa - 1;
+      if (thd_dead > 0) {
+        if (old_s < thd_dead && new_s >= thd_doa)  { ++stats_.cap_fires; return thd_doa - 1; }
+        if (old_s >= thd_doa && new_s < thd_dead)  return thd_dead;
       }
       return new_s;
     };
-    // Record which tier boundary (if any) the score crossed after an update.
     auto record_transition = [&](int64_t old_s, int64_t new_s) {
       if (thd_doa == 0 || old_s == new_s) return;
       auto tier = [&](int64_t s) -> int {
@@ -292,20 +302,82 @@ public:
       else if (ot == 2 && nt == 0) ++stats_.trans_doa_ma;
     };
     if (unbounded_) {
-      int64_t& s = unmap_[key];
-      const int64_t old_s = s;
-      s = cap_score(old_s, std::max(int64_t{0}, old_s + d));
-      record_transition(old_s, s);
+      auto& p = unmap_[key];
+      const int64_t old_md = p.first, old_doa = p.second;
+
+      // depth multiplier: 1 in MA, 2 in MD, 3 in DoA
+      int64_t delta = 1;
+      if (thd_doa > 0 && old_doa >= thd_doa)          delta = 3;
+      else if (thd_dead > 0 && old_md >= thd_dead)     delta = 2;
+
+      if (scoring_mode_ == 0) {
+        // Two-counter baseline: DoA→doa++, MD→md++, MA→reset both; no coupling
+        if      (evict_class == liveness_class::doa)          p.second = old_doa + 1;
+        else if (evict_class == liveness_class::mostly_dead)  p.first  = old_md  + 1;
+        else                                                  p = {0, 0};
+      } else if (scoring_mode_ == 1) {
+        // Approach A: symmetric state-dependent ±, no hard resets
+        if      (evict_class == liveness_class::doa) {
+          p.first  = std::max(int64_t{0}, old_md  + delta);
+          p.second = std::max(int64_t{0}, old_doa + delta);
+        } else if (evict_class == liveness_class::mostly_dead) {
+          p.first  = std::max(int64_t{0}, old_md  + delta);
+          p.second = std::max(int64_t{0}, old_doa - delta);
+        } else {
+          p.first  = std::max(int64_t{0}, old_md  - delta);
+          p.second = std::max(int64_t{0}, old_doa - delta);
+        }
+      } else if (scoring_mode_ == 2) {
+        // Approach B (coupled): hard resets, state-dependent increments; DoA eviction drives both
+        if      (evict_class == liveness_class::doa) {
+          p.first  = old_md  + delta;
+          p.second = old_doa + delta;
+        } else if (evict_class == liveness_class::mostly_dead) {
+          p.first  = old_md  + delta;
+          p.second = 0;
+        } else {
+          p = {0, 0};
+        }
+      } else {
+        // Modes 3, 4, 5 — Approach B decoupled: DoA→doa only, MD→md only, MA→reset both
+        // Mode 3: confirmatory δ (1/2/3 — deeper state = more weight)
+        // Mode 4: surprise-weighted δ (3/2/1 — shallower state = more weight, avoids self-fulfilling DoA)
+        // Mode 5: lifespan-scaled δ  (5/3/1 — wider spread, proportional to observed lifespan gaps)
+        const int64_t dd = (scoring_mode_ == 4 || scoring_mode_ == 5)
+            ? ((thd_doa > 0 && old_doa >= thd_doa) ? 1
+             : (thd_dead > 0 && old_md  >= thd_dead) ? (scoring_mode_ == 5 ? 3 : 2)
+             : (scoring_mode_ == 5 ? 5 : 3))
+            : delta;
+        if      (evict_class == liveness_class::doa)          p.second = old_doa + dd;
+        else if (evict_class == liveness_class::mostly_dead)  { p.first = old_md + dd; p.second = 0; }
+        else                                                  p = {0, 0};
+      }
+
+      // Record tier transitions for stats
+      if (thd_doa > 0) {
+        auto tier = [&](int64_t md, int64_t doa) -> int {
+          if (doa >= thd_doa)                   return 2;
+          if (thd_dead > 0 && md >= thd_dead)   return 1;
+          return 0;
+        };
+        const int ot = tier(old_md, old_doa), nt = tier(p.first, p.second);
+        if (ot != nt) {
+          if      (ot == 0 && nt == 1) ++stats_.trans_ma_md;
+          else if (ot == 1 && nt == 2) ++stats_.trans_md_doa;
+          else if (ot == 2 && nt == 1) ++stats_.trans_doa_md;
+          else if (ot == 1 && nt == 0) ++stats_.trans_md_ma;
+          else if (ot == 2 && nt == 0) ++stats_.trans_doa_ma;
+        }
+      }
       return;
     }
-    const bool accessed = (evict_class != liveness_class::doa);
     // 1. Main table hit: apply delta, floor at zero.
     for (auto& e : entries_) {
       if (e.valid && e.key == key) {
         const int64_t old_s = e.score;
         e.score = cap_score(old_s, std::max(int64_t{0}, old_s + d));
         record_transition(old_s, e.score);
-        on_hit(e, accessed);
+        on_hit(e, evict_class);
         return;
       }
     }
@@ -350,7 +422,7 @@ public:
       slot.score   = cap_score(0, std::max(int64_t{0}, d));
       record_transition(0, slot.score);
       slot.valid   = true;
-      on_insert(slot, accessed);
+      on_insert(slot, evict_class);
     }
   }
 
@@ -362,37 +434,30 @@ public:
 private:
   static constexpr uint32_t SRRIP_INS  = 2;
   static constexpr uint32_t SRRIP_MAX  = 3;
+  static constexpr uint64_t FREQ_CAP   = 64;
 
-  // Delta table: δ[ins_class][evict_class].
-  // Rows: mostly_alive=0, mostly_dead=1, doa=2.
-  // Columns: doa=0, mostly_dead=1, mostly_alive=2.
-  // Magnitude = disagreement distance (0→1, 1→2, 2→3); sign = direction.
-  static int8_t score_delta(liveness_class ins, liveness_class evict) {
-    static constexpr int8_t kDelta[3][3] = {
-      //              evict: doa  mostly_dead  mostly_alive
-      /* ins: mostly_alive */ { +3,     +2,         -1 },
-      /* ins: mostly_dead  */ { +2,     +1,         -2 },
-      /* ins: doa          */ { +1,     -2,         -3 },
-    };
-    auto idx = [](liveness_class c) -> int {
-      switch (c) {
-        case liveness_class::mostly_alive: return 0;
-        case liveness_class::mostly_dead:  return 1;
-        case liveness_class::doa:          return 2;
-      }
-      return 0;
-    };
-    return kDelta[idx(ins)][idx(evict)];
+  // DoA gate + tier continuity: only DoA evictions increase the score.
+  // Mostly-dead evictions are neutral (cannot drive the DoA transition).
+  // Alive evictions decay the score by 1. Symmetric caps in update() prevent
+  // skipping the mostly-dead band in either direction.
+  static int8_t score_delta(liveness_class evict) {
+    switch (evict) {
+      case liveness_class::doa:          return +1;
+      case liveness_class::mostly_dead:  return  0;
+      case liveness_class::mostly_alive: return -1;
+    }
+    return 0;
   }
 
   struct Entry {
-    uint64_t key    = 0;
-    int64_t  score  = 0;  // unified liveness score r; floored at 0, higher = deader
-    uint64_t freq   = 0;
-    uint64_t ts     = 0;
-    uint32_t rrpv   = 0;
+    uint64_t key              = 0;
+    int64_t  score            = 0;  // unified liveness score; floored at 0, higher = deader
+    uint64_t freq             = 0;
+    uint64_t ts               = 0;
+    uint64_t last_seen_update = 0;  // update_count_ at last on_hit/on_insert/on_promote
+    uint32_t rrpv             = 0;
     bool          valid    = false;
-    mutable bool  promoted = false;  // set on buffer promotion; cleared on first hit
+    mutable bool  promoted = false;
   };
 
   struct BufEntry {
@@ -415,7 +480,21 @@ private:
   uint64_t    checkpoint_interval_ = 0;
   uint64_t    update_count_        = 0;
   std::string checkpoint_name_;
-  mutable std::unordered_map<uint64_t, int64_t> unmap_;
+  // Scoring modes — select via SCORING_MODE env var (default 2).
+  // 0 = two-counter baseline: DoA→doa++, MD→md++, MA→reset both (flat, fully decoupled)
+  // 1 = Approach A (gradual): state-depth-scaled ±, no hard resets (coupled: DoA drives both)
+  // 2 = Approach B coupled:   state-depth-scaled +, hard resets; DoA evictions drive both md+doa
+  // 3 = Approach B decoupled: confirmatory δ (1/2/3 for MA/MD/DoA); DoA→doa only, MD→md only
+  // 4 = Approach B decoupled: surprise-weighted δ (3/2/1 for MA/MD/DoA); DoA→doa only, MD→md only
+  //     Rationale for mode 4: a DoA eviction while already in DoA is self-fulfilling (block was
+  //     inserted at maxRRPV so it will always be evicted early). A DoA eviction while in MA is
+  //     genuinely surprising and informative. Inverted δ weights evidence by its surprise value.
+  // 5 = Approach B decoupled: lifespan-scaled δ (5/3/1 for MA/MD/DoA); wider spread than mode 4,
+  //     proportional to observed MA/MD/DoA lifespan gaps. Calibrate with THD_DEAD=10, THD_DOA=6
+  //     so that N=2 consecutive evictions from each state still saturates the respective counter.
+  int scoring_mode_ = 2;
+  // pair: {md_count, doa_count}
+  mutable std::unordered_map<uint64_t, std::pair<int64_t,int64_t>> unmap_;
   uint64_t cap_          = 0;
   Policy   pol_          = Policy::LRU;
   std::vector<Entry>    entries_;
@@ -437,23 +516,36 @@ private:
   std::unordered_map<uint64_t, uint64_t> oracle_buf_;
   mutable Stats stats_;
 
-  void on_hit(Entry& e, bool accessed) {
+  void on_hit(Entry& e, liveness_class evict_class) {
+    const bool is_doa = evict_class == liveness_class::doa;
+    const bool is_md  = evict_class == liveness_class::mostly_dead;
+    e.last_seen_update = update_count_;
     switch (pol_) {
     case Policy::LRU:     e.ts = ++clock_;                                break;
     case Policy::LFU:     ++e.freq; e.ts = ++clock_;                      break;
-    case Policy::LFU_DOA: if (!accessed) ++e.freq; e.ts = ++clock_;       break;
-    // Dead → protect (rrpv=0). Live → demote to eviction target (rrpv=SRRIP_MAX);
-    // victim_slot() will then evict it and re-enter it into the buffer.
-    case Policy::SRRIP:   e.rrpv = accessed ? SRRIP_MAX : 0;              break;
+    case Policy::LFU_DOA:
+      if      (is_doa) e.freq = std::min(FREQ_CAP, e.freq + 3);
+      else if (is_md)  e.freq = std::min(FREQ_CAP, e.freq + 1);
+      else             e.freq = e.freq >= 2 ? e.freq - 2 : 0;
+      e.ts = ++clock_;
+      break;
+    // Dead → protect (rrpv=0). Live → demote to eviction target (rrpv=SRRIP_MAX).
+    case Policy::SRRIP:   e.rrpv = is_doa ? 0 : SRRIP_MAX;               break;
     }
   }
 
-  void on_insert(Entry& e, bool accessed) {
+  void on_insert(Entry& e, liveness_class evict_class) {
     e.promoted = false;
+    e.last_seen_update = update_count_;
+    const bool is_doa = evict_class == liveness_class::doa;
+    const bool is_md  = evict_class == liveness_class::mostly_dead;
     switch (pol_) {
-    case Policy::LRU:     e.ts = ++clock_; e.freq = 0; e.rrpv = 0;               break;
-    case Policy::LFU:     e.freq = 1; e.ts = ++clock_; e.rrpv = 0;               break;
-    case Policy::LFU_DOA: e.freq = accessed ? 0 : 1; e.ts = ++clock_; e.rrpv = 0; break;
+    case Policy::LRU:     e.ts = ++clock_; e.freq = 0; e.rrpv = 0;                break;
+    case Policy::LFU:     e.freq = 1; e.ts = ++clock_; e.rrpv = 0;                break;
+    case Policy::LFU_DOA:
+      e.freq = is_doa ? 3 : is_md ? 1 : 0;
+      e.ts = ++clock_; e.rrpv = 0;
+      break;
     case Policy::SRRIP:   e.rrpv = SRRIP_INS; e.freq = 0; e.ts = 0;              break;
     }
   }
@@ -461,11 +553,14 @@ private:
   // Promoted entries enter with higher priority than cold insertions.
   void on_promote(Entry& e, uint64_t dead_count) {
     e.promoted = true;
+    e.last_seen_update = update_count_;
     switch (pol_) {
-    case Policy::LRU:     e.ts = ++clock_; e.freq = 0; e.rrpv = 0;        break;
-    case Policy::LFU:
-    case Policy::LFU_DOA: e.freq = dead_count; e.ts = ++clock_; e.rrpv = 0; break;
-    case Policy::SRRIP:   e.rrpv = 0; e.freq = 0; e.ts = 0;               break;
+    case Policy::LRU:     e.ts = ++clock_; e.freq = 0; e.rrpv = 0;           break;
+    case Policy::LFU:     e.freq = dead_count; e.ts = ++clock_; e.rrpv = 0;  break;
+    // Buffer dead_count is in DoA units (1 per DoA hit); scale by 3 to match LFU_DOA freq units.
+    case Policy::LFU_DOA: e.freq = std::min(FREQ_CAP, dead_count * 3);
+                          e.ts = ++clock_; e.rrpv = 0;                        break;
+    case Policy::SRRIP:   e.rrpv = 0; e.freq = 0; e.ts = 0;                  break;
     }
   }
 
@@ -527,10 +622,22 @@ private:
       return *std::min_element(entries_.begin(), entries_.end(),
         [](const Entry& a, const Entry& b){ return a.ts < b.ts; });
     case Policy::LFU:
-    case Policy::LFU_DOA:
       return *std::min_element(entries_.begin(), entries_.end(),
         [](const Entry& a, const Entry& b){
           return a.freq < b.freq || (a.freq == b.freq && a.ts < b.ts); });
+    case Policy::LFU_DOA: {
+      // Aging: lose 1 unit of replacement priority per cap_ idle updates (one full round).
+      const uint64_t aging_rate = cap_ > 0 ? cap_ : 1;
+      auto eff = [&](const Entry& e) -> uint64_t {
+        const uint64_t idle    = update_count_ - e.last_seen_update;
+        const uint64_t penalty = idle / aging_rate;
+        return e.freq > penalty ? e.freq - penalty : 0;
+      };
+      return *std::min_element(entries_.begin(), entries_.end(),
+        [&](const Entry& a, const Entry& b){
+          const uint64_t fa = eff(a), fb = eff(b);
+          return fa < fb || (fa == fb && a.ts < b.ts); });
+    }
     case Policy::SRRIP:
       for (;;) {
         for (auto& e : entries_) if (e.rrpv == SRRIP_MAX) return e;
