@@ -1,10 +1,16 @@
 #!/usr/bin/env bash
-# test_hist_repl_targeted.sh — Compare old vs new history table replacement policy
-# on the high-spread targeted traces. Both run mode3_decoup to isolate the
-# replacement policy change from scoring mode effects.
+# test_hist_repl_targeted.sh — Compare history table replacement policy variants
+# on the high-spread targeted traces. All runs use SCORING_MODE=3 to isolate
+# the replacement policy change from scoring mode effects.
 #
-# Old policy: champsim_srrip_live     (DoA-only LFU, no aging)
-# New policy: champsim_srrip_live_hrp (DoA×3 + MD×1, MA−2, aging=cap_)
+# Configs compared:
+#   old_repl  : champsim_srrip_live     — DoA-only LFU, no aging (baseline)
+#   ma_neg2   : champsim_srrip_live_hrp — DoA×3 + MD×1, MA−2, aging (original new policy)
+#   ma_neg1   : champsim_srrip_live_hrp — DoA×3 + MD×1, MA−1, aging (softer MA penalty)
+#   ma_0      : champsim_srrip_live_hrp — DoA×3 + MD×1, MA=0, aging (neutral MA)
+#
+# evict_attr lines in champsim.out show: how much MA penalty and aging each
+# contributed to the score reduction on every evicted history-table entry.
 #
 # Usage: $0 <targeted_DATE_dir> [cap]
 #   targeted_DATE_dir : symlink dir under trace-files/ (e.g. targeted_20260609_1058)
@@ -38,6 +44,7 @@ total=0
 
 echo "=== History table replacement policy comparison ==="
 echo "Symlink dir: $SYMLINK_BASE"
+echo "Cap:         $CAP"
 echo "Label:       $LABEL"
 echo ""
 
@@ -50,10 +57,19 @@ for suite in dpc3 gap gms ligra ml qmm; do
   echo "--- $suite ($n traces) ---"
   mkdir -p "$BASE/logs/$LABEL"
 
+  # cfg format: "label:binary:ma_penalty"  (ma_penalty empty → no HIST_MA_PENALTY set)
   for cfg in \
-    "old_repl:champsim_srrip_live" \
-    "new_repl:champsim_srrip_live_hrp"; do
-    name="${cfg%%:*}"; binary="${cfg#*:}"
+      "old_repl:champsim_srrip_live:" \
+      "ma_neg2:champsim_srrip_live_hrp:-2" \
+      "ma_neg1:champsim_srrip_live_hrp:-1" \
+      "ma_0:champsim_srrip_live_hrp:0"; do
+    name=$(echo "$cfg"   | cut -d: -f1)
+    binary=$(echo "$cfg" | cut -d: -f2)
+    ma_pen=$(echo "$cfg" | cut -d: -f3)
+
+    ma_extra=""
+    [[ -n "$ma_pen" ]] && ma_extra=",HIST_MA_PENALTY=${ma_pen}"
+
     runlabel="$LABEL/${suite}_${name}"
     mkdir -p "$BASE/results/$runlabel"
     raw=$(qsub -t "1-${n}" \
@@ -66,7 +82,7 @@ for suite in dpc3 gap gms ligra ml qmm; do
                -v WARMUP=$W,SIM=$S,TRACE_DIR="$symdir",TRACE_EXT="$ext",\
 RUN_LABEL="$runlabel",BINARY="$binary",\
 BHIST_MODE=pc,SRRIP_LIVE_TARGET=llc,SCORING_MODE=3,THD_DEAD=2,THD_DOA=4,\
-REPL_HIST_LLC_CAP=${CAP},REPL_HIST_REPL=lfu_doa \
+REPL_HIST_LLC_CAP=${CAP},REPL_HIST_REPL=lfu_doa${ma_extra} \
                "$BASE/scripts/submit/run_cs.sh")
     jid=$(echo "$raw" | awk '/Your job/ {print $3}' | cut -d. -f1)
     echo "  [jid=$jid]  ${suite}/${name}  (n=$n)"

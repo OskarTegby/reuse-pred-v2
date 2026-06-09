@@ -20,6 +20,7 @@
 #include <array>
 #include <bitset>
 #include <cassert>
+#include <cstdlib>
 #include <deque>
 #include <functional>
 #include <list>
@@ -83,7 +84,12 @@ public:
   HistTable() : unbounded_(true) {}
   HistTable(uint64_t cap, Policy pol, uint64_t buf_cap = 0, uint64_t shadow_cap = 0)
     : unbounded_(false), cap_(cap), pol_(pol), entries_(cap), buf_cap_(buf_cap), buffer_(buf_cap),
-      shadow_cap_(shadow_cap), shadow_(shadow_cap) {}
+      shadow_cap_(shadow_cap), shadow_(shadow_cap) {
+    if (pol_ == Policy::LFU_DOA) {
+      if (const char* ev = std::getenv("HIST_MA_PENALTY"))
+        ma_penalty_ = std::atoi(ev);
+    }
+  }
 
   // Enable periodic occupancy checkpoints to stderr every `interval` update() calls.
   // Call after construction; name labels the output lines.
@@ -224,6 +230,19 @@ public:
                stats_.classify_warm_miss ? 100.0 * stats_.classify_warm_oracle_hit / stats_.classify_warm_miss : 0.0,
                oracle_buf_.size());
       }
+    }
+    if (pol_ == Policy::LFU_DOA && evict_count_ > 0) {
+      auto pct = [](uint64_t n, uint64_t d) { return d ? 100.0 * n / d : 0.0; };
+      printf("%s repl_hist evict_attr: total=%lu  ma_penalty=%d  "
+             "ma_loss: %.1f%% of evictions  avg_loss=%.2f  decisive=%.1f%%  |  "
+             "aging: %.1f%% of evictions  avg_penalty=%.2f  decisive=%.1f%%\n",
+             prefix, evict_count_, ma_penalty_,
+             pct(evict_ma_nonzero_,    evict_count_),
+             (double)evict_ma_loss_sum_    / evict_count_,
+             pct(evict_ma_decisive_,   evict_count_),
+             pct(evict_aging_nonzero_, evict_count_),
+             (double)evict_aging_loss_sum_ / evict_count_,
+             pct(evict_aging_decisive_, evict_count_));
     }
     if (shadow_cap_ > 0) {
       const double hit_rate = stats_.buf_evictions
@@ -464,6 +483,9 @@ private:
   static constexpr uint32_t SRRIP_INS  = 2;
   static constexpr uint32_t SRRIP_MAX  = 3;
   static constexpr uint64_t FREQ_CAP   = 64;
+  // Configurable MA eviction penalty for LFU_DOA (read from HIST_MA_PENALTY env var).
+  // Default -2: each MA eviction subtracts 2 from freq. Use -1 or 0 to reduce/remove penalty.
+  int ma_penalty_ = -2;
 
   // DoA gate + tier continuity: only DoA evictions increase the score.
   // Mostly-dead evictions are neutral (cannot drive the DoA transition).
@@ -484,6 +506,7 @@ private:
     uint64_t freq             = 0;
     uint64_t ts               = 0;
     uint64_t last_seen_update = 0;  // update_count_ at last on_hit/on_insert/on_promote
+    uint64_t ma_loss          = 0;  // cumulative freq reduction from MA eviction penalties
     uint32_t rrpv             = 0;
     bool          valid    = false;
     mutable bool  promoted = false;
@@ -554,6 +577,16 @@ private:
   // Only populated when shadow_cap_ > 0 (i.e. when instrumentation is active).
   std::unordered_map<uint64_t, uint64_t> oracle_buf_;
   mutable Stats stats_;
+  // Eviction attribution counters (LFU_DOA bounded only, not reset with stats_).
+  // At each hist-table eviction: record how much MA penalty and aging contributed
+  // to the evicted entry's score reduction, and whether they drove it to zero.
+  uint64_t evict_count_          = 0;
+  uint64_t evict_ma_nonzero_     = 0;  // evictions where ma_loss > 0
+  uint64_t evict_ma_loss_sum_    = 0;  // sum of ma_loss across all evicted entries
+  uint64_t evict_ma_decisive_    = 0;  // evictions where eff_freq==0 AND ma_loss > 0
+  uint64_t evict_aging_nonzero_  = 0;  // evictions where aging penalty > 0
+  uint64_t evict_aging_loss_sum_ = 0;  // sum of aging penalties on evicted entries
+  uint64_t evict_aging_decisive_ = 0;  // evictions where eff_freq==0 AND aging_penalty > 0
 
   static int class_idx(liveness_class c) {
     switch (c) {
@@ -578,9 +611,14 @@ private:
     case Policy::LRU:     e.ts = ++clock_;                                break;
     case Policy::LFU:     ++e.freq; e.ts = ++clock_;                      break;
     case Policy::LFU_DOA:
-      if      (is_doa) e.freq = std::min(FREQ_CAP, e.freq + 3);
+      if (is_doa)      e.freq = std::min(FREQ_CAP, e.freq + 3);
       else if (is_md)  e.freq = std::min(FREQ_CAP, e.freq + 1);
-      else             e.freq = e.freq >= 2 ? e.freq - 2 : 0;
+      else if (ma_penalty_ < 0) {
+        const uint64_t loss   = static_cast<uint64_t>(-ma_penalty_);
+        const uint64_t actual = std::min(e.freq, loss);
+        e.ma_loss += actual;
+        e.freq    -= actual;
+      }
       e.ts = ++clock_;
       break;
     // Dead → protect (rrpv=0). Live → demote to eviction target (rrpv=SRRIP_MAX).
@@ -597,7 +635,8 @@ private:
     case Policy::LRU:     e.ts = ++clock_; e.freq = 0; e.rrpv = 0;                break;
     case Policy::LFU:     e.freq = 1; e.ts = ++clock_; e.rrpv = 0;                break;
     case Policy::LFU_DOA:
-      e.freq = is_doa ? 3 : is_md ? 1 : 0;
+      e.freq    = is_doa ? 3 : is_md ? 1 : 0;
+      e.ma_loss = 0;
       e.ts = ++clock_; e.rrpv = 0;
       break;
     case Policy::SRRIP:   e.rrpv = SRRIP_INS; e.freq = 0; e.ts = 0;              break;
@@ -612,7 +651,8 @@ private:
     case Policy::LRU:     e.ts = ++clock_; e.freq = 0; e.rrpv = 0;           break;
     case Policy::LFU:     e.freq = dead_count; e.ts = ++clock_; e.rrpv = 0;  break;
     // Buffer dead_count is in DoA units (1 per DoA hit); scale by 3 to match LFU_DOA freq units.
-    case Policy::LFU_DOA: e.freq = std::min(FREQ_CAP, dead_count * 3);
+    case Policy::LFU_DOA: e.freq    = std::min(FREQ_CAP, dead_count * 3);
+                          e.ma_loss = 0;
                           e.ts = ++clock_; e.rrpv = 0;                        break;
     case Policy::SRRIP:   e.rrpv = 0; e.freq = 0; e.ts = 0;                  break;
     }
@@ -687,10 +727,22 @@ private:
         const uint64_t penalty = idle / aging_rate;
         return e.freq > penalty ? e.freq - penalty : 0;
       };
-      return *std::min_element(entries_.begin(), entries_.end(),
+      Entry& victim = *std::min_element(entries_.begin(), entries_.end(),
         [&](const Entry& a, const Entry& b){
           const uint64_t fa = eff(a), fb = eff(b);
           return fa < fb || (fa == fb && a.ts < b.ts); });
+      // Attribution: record how much MA penalty and aging contributed to this eviction.
+      ++evict_count_;
+      const uint64_t idle          = update_count_ - victim.last_seen_update;
+      const uint64_t aging_penalty = std::min(victim.freq, idle / aging_rate);
+      const uint64_t eff_freq      = eff(victim);
+      if (victim.ma_loss > 0)   { ++evict_ma_nonzero_;    evict_ma_loss_sum_    += victim.ma_loss;    }
+      if (aging_penalty  > 0)   { ++evict_aging_nonzero_; evict_aging_loss_sum_ += aging_penalty;     }
+      if (eff_freq == 0) {
+        if (victim.ma_loss   > 0) ++evict_ma_decisive_;
+        if (aging_penalty    > 0) ++evict_aging_decisive_;
+      }
+      return victim;
     }
     case Policy::SRRIP:
       for (;;) {
