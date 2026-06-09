@@ -6,19 +6,24 @@
 # Old policy: champsim_srrip_live     (DoA-only LFU, no aging)
 # New policy: champsim_srrip_live_hrp (DoA×3 + MD×1, MA−2, aging=cap_)
 #
-# Pass the targeted_<DATE> symlink directory as $1, e.g.:
-#   bash test_hist_repl_targeted.sh targeted_20260609_1058
+# Usage: $0 <targeted_DATE_dir> [cap]
+#   targeted_DATE_dir : symlink dir under trace-files/ (e.g. targeted_20260609_1058)
+#   cap               : REPL_HIST_LLC_CAP (default 64)
+#
+# Example:
+#   bash test_hist_repl_targeted.sh targeted_20260609_1058 64
 set -euo pipefail
 
 if [[ $# -lt 1 ]]; then
-  echo "Usage: $0 <targeted_DATE_dir>"
+  echo "Usage: $0 <targeted_DATE_dir> [cap]"
   exit 1
 fi
 
 BASE=~/ChampSim-dev
 W=50000000; S=100000000
 DATE=$(date +%Y%m%d_%H%M)
-LABEL=hist_repl_targeted_${DATE}
+CAP=${2:-64}
+LABEL=hist_repl_targeted_cap${CAP}_${DATE}
 SYMLINK_BASE="$BASE/trace-files/$1"
 
 declare -A EXT
@@ -61,7 +66,7 @@ for suite in dpc3 gap gms ligra ml qmm; do
                -v WARMUP=$W,SIM=$S,TRACE_DIR="$symdir",TRACE_EXT="$ext",\
 RUN_LABEL="$runlabel",BINARY="$binary",\
 BHIST_MODE=pc,SRRIP_LIVE_TARGET=llc,SCORING_MODE=3,THD_DEAD=2,THD_DOA=4,\
-REPL_HIST_LLC_CAP=512,REPL_HIST_REPL=lfu_doa \
+REPL_HIST_LLC_CAP=${CAP},REPL_HIST_REPL=lfu_doa \
                "$BASE/scripts/submit/run_cs.sh")
     jid=$(echo "$raw" | awk '/Your job/ {print $3}' | cut -d. -f1)
     echo "  [jid=$jid]  ${suite}/${name}  (n=$n)"
