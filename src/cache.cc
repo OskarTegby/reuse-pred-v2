@@ -270,6 +270,7 @@ void CACHE::load_predictor_settings()
       if (std::string_view(v) == "lfu")     return HistTable::Policy::LFU;
       if (std::string_view(v) == "lfu_doa") return HistTable::Policy::LFU_DOA;
       if (std::string_view(v) == "srrip")   return HistTable::Policy::SRRIP;
+      if (std::string_view(v) == "tiered")  return HistTable::Policy::TIERED;
       return HistTable::Policy::LRU;
     };
     // PHIST_REPL and BHIST_REPL override HIST_REPL for their respective table.
@@ -333,6 +334,7 @@ void CACHE::load_predictor_settings()
         if (std::string_view(v) == "lfu")     return HistTable::Policy::LFU;
         if (std::string_view(v) == "lfu_doa") return HistTable::Policy::LFU_DOA;
         if (std::string_view(v) == "srrip")   return HistTable::Policy::SRRIP;
+        if (std::string_view(v) == "tiered")  return HistTable::Policy::TIERED;
         return HistTable::Policy::LRU;
       };
       repl_hist_pc = HistTable(rh_cap, parse_rh_policy(rh_repl), rh_buf, rh_shadow);
@@ -377,6 +379,7 @@ void CACHE::load_predictor_settings()
     if (const char* v = std::getenv("LIVENESS_BYPASS"); v && std::stoull(v))
       liveness_bypass = true;
     bypass_thd = getenv_uint64("BYPASS_THD", thd_doa);  // defaults to thd_doa if unset
+    bypass_k   = getenv_uint64("BYPASS_K",   0);        // 0 = no probing (always bypass when DoA)
   }
 
   // Merged replacement history table: one shared HistTable for both LLC and
@@ -533,7 +536,7 @@ bool CACHE::handle_fill(const PACKET& fill_mshr)
         ? (fill_mshr.address >> OFFSET_BITS) : fill_mshr.ip;
     const bool lv_bypass = liveness_bypass && NAME == "LLC"
         && fill_mshr.type != TRANSLATION
-        && repl_hist_pc.classify(bypass_key, bypass_thd, 0) == liveness_class::doa;
+        && repl_hist_pc.classify_bypass(bypass_key, bypass_thd, bypass_k);
     if (lv_bypass)
       sim_stats.back().liveness_bypasses++;
 
