@@ -82,9 +82,6 @@ public:
     uint64_t trans_doa_md = 0;  // score dropped from DoA into mostly_dead (recovery)
     uint64_t trans_md_ma  = 0;  // score dropped from mostly_dead into mostly_alive (recovery)
     uint64_t trans_doa_ma = 0;  // score dropped from DoA past mostly_dead to mostly_alive
-    // Bypass probe stats (only meaningful when BYPASS_K > 0).
-    uint64_t bypass_taken     = 0;  // fills bypassed by liveness predictor
-    uint64_t probe_insertions = 0;  // fills forced through as probes (bypass_cnt saturated)
   };
 
   // Default: unbounded mode — backed by an unordered_map, no eviction.
@@ -193,43 +190,6 @@ public:
     return liveness_class::mostly_alive;
   }
 
-  // Bypass decision with K-probe safeguard.
-  // Returns true  → bypass (DoA classified, probe budget not exhausted).
-  // Returns false → insert (not DoA, or forced probe to refresh eviction feedback).
-  // k_bypass=0 disables probing: always bypass when DoA (original behavior).
-  bool classify_bypass(uint64_t key, uint64_t bypass_thd, uint64_t k_bypass) {
-    if (classify(key, bypass_thd, 0) != liveness_class::doa) return false;
-    if (unbounded_) {
-      auto& cnt = bypass_cnts_[key];
-      if (k_bypass > 0 && cnt >= static_cast<uint8_t>(k_bypass)) {
-        cnt = 0;
-        ++stats_.probe_insertions;
-        return false;
-      }
-      cnt++;
-      ++stats_.bypass_taken;
-      return true;
-    }
-    // Bounded mode: probe counter lives in the main-table Entry.
-    for (auto& e : entries_) {
-      if (e.valid && e.key == key) {
-        if (k_bypass > 0 && e.bypass_cnt >= static_cast<uint8_t>(k_bypass)) {
-          e.bypass_cnt = 0;
-          ++stats_.probe_insertions;
-          return false;
-        }
-        e.bypass_cnt++;
-        ++stats_.bypass_taken;
-        return true;
-      }
-    }
-    // Entry found only in buffer (dead_count below thd_doa would have returned false
-    // from classify(); reaching here means buffer-classified DoA). No bypass_cnt
-    // tracking for buffer entries — just bypass.
-    ++stats_.bypass_taken;
-    return true;
-  }
-
   const Stats& get_stats() const { return stats_; }
   void reset_stats() {
     stats_ = Stats{};
@@ -260,12 +220,6 @@ public:
         if (up + down > 0)
           printf("  up/down ratio: %.2f\n",
                  down > 0 ? static_cast<double>(up) / down : 99.0);
-      }
-      if (stats_.bypass_taken + stats_.probe_insertions > 0) {
-        const uint64_t total = stats_.bypass_taken + stats_.probe_insertions;
-        printf("%s repl_hist bypass    : taken=%lu  probes=%lu  probe_rate=%.1f%%\n",
-               prefix, stats_.bypass_taken, stats_.probe_insertions,
-               total ? 100.0 * stats_.probe_insertions / total : 0.0);
       }
       return;
     }
@@ -386,12 +340,6 @@ public:
       if (up + down > 0)
         printf("  up/down ratio: %.2f\n",
                down > 0 ? static_cast<double>(up) / down : 99.0);
-    }
-    if (stats_.bypass_taken + stats_.probe_insertions > 0) {
-      const uint64_t total = stats_.bypass_taken + stats_.probe_insertions;
-      printf("%s repl_hist bypass    : taken=%lu  probes=%lu  probe_rate=%.1f%%\n",
-             prefix, stats_.bypass_taken, stats_.probe_insertions,
-             total ? 100.0 * stats_.probe_insertions / total : 0.0);
     }
     (void)thd_dead;
   }
@@ -630,7 +578,6 @@ private:
     uint64_t ma_loss          = 0;  // cumulative freq reduction from MA eviction penalties
     uint64_t hit_count        = 0;  // number of on_hit() calls since last insertion/promotion
     uint32_t rrpv             = 0;
-    uint8_t  bypass_cnt       = 0;  // consecutive bypasses since last eviction feedback
     bool          valid    = false;
     mutable bool  promoted = false;
   };
@@ -680,9 +627,6 @@ private:
   std::array<uint64_t, 3> life_count_ = {};     // samples seen (gates warmup vs EMA)
   // pair: {md_count, doa_count}
   mutable std::unordered_map<uint64_t, std::pair<int64_t,int64_t>> unmap_;
-  // K-probe bypass counters (unbounded mode only; bounded mode uses Entry::bypass_cnt).
-  // Keyed by PC/address; value = consecutive bypasses since last eviction feedback.
-  std::unordered_map<uint64_t, uint8_t> bypass_cnts_;
   uint64_t cap_          = 0;
   Policy   pol_          = Policy::LRU;
   std::vector<Entry>    entries_;
@@ -1311,7 +1255,6 @@ class CACHE : public champsim::operable, public MemoryRequestConsumer, public Me
   bool repl_hist_use_addr{false};  // REPL_HIST_MODE=addr: index by block addr (LLC) or VPN (STLB)
   bool liveness_bypass{false};     // LIVENESS_BYPASS=1: bypass DoA LLC fills using repl_hist
   uint64_t bypass_thd{0};          // BYPASS_THD: score >= bypass_thd → bypass (must be >= thd_doa)
-  uint64_t bypass_k{0};            // BYPASS_K: probe every K-th bypass (0=disabled, no probing)
 
   // Classify block liveness based on repl_hist_pc counters for the fill PC.
   // Used by srrip_live and ipv_live replacement policies to guide insertion/promotion.

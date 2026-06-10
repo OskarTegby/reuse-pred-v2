@@ -1,21 +1,19 @@
 #!/usr/bin/env bash
 set -euo pipefail
-# test_bypass_debug.sh — Bypass probe debug run on 5 QMM traces.
+# test_bypass_debug.sh — Bypass debug run on 5 QMM traces.
 #
-# Tests bypass with K-probe mechanism on top of SRRIP-Live (LLC only, unbounded).
-# Scoring mode: SCORING_MODE=3, THD_DEAD=2, THD_DOA=4 (same as size study).
-# K-bypass probe: BYPASS_K=0 (always bypass), 4, 8, 16, 32.
+# The DoA score IS the bypass confidence counter. Bypass fires when score >= BYPASS_THD.
+# Setting BYPASS_THD > THD_DOA means a PC must accumulate more evidence before bypassing
+# starts; it cannot bypass on its first DoA classification.
 #
 # Configs:
-#   repl_only  : SRRIP-Live, no bypass (replacement benefit only, reference)
-#   bypass_k0  : LIVENESS_BYPASS=1, BYPASS_K=0 (no probe — starvation risk)
-#   bypass_k4  : LIVENESS_BYPASS=1, BYPASS_K=4
-#   bypass_k8  : LIVENESS_BYPASS=1, BYPASS_K=8
-#   bypass_k16 : LIVENESS_BYPASS=1, BYPASS_K=16
-#   bypass_k32 : LIVENESS_BYPASS=1, BYPASS_K=32
+#   repl_only     : SRRIP-Live, no bypass (replacement benefit only, reference)
+#   bypass_thd4   : BYPASS_THD=4  (same as THD_DOA — bypass on first DoA classification)
+#   bypass_thd8   : BYPASS_THD=8  (2× THD_DOA — need 2 consecutive DoA confirmations)
+#   bypass_thd16  : BYPASS_THD=16 (4× THD_DOA)
+#   bypass_thd32  : BYPASS_THD=32 (8× THD_DOA)
 #
-# SRRIP baseline (REPL_HIST_LLC_CAP=0) already in:
-#   qmm_thd_rebaseline_20260605_2316/srrip  (45 traces)
+# SRRIP baseline already in: qmm_thd_rebaseline_20260605_2316/srrip
 #
 # Usage: bash test_bypass_debug.sh
 BASE=~/ChampSim-dev
@@ -40,7 +38,7 @@ RUN_LABEL="$label",BINARY="$binary",$* \
   echo "  [jid=$jid] $label"
 }
 
-echo "=== Bypass probe debug: QMM ${N} traces ==="
+echo "=== Bypass debug: QMM ${N} traces ==="
 echo "Label: $LABEL"
 echo ""
 
@@ -48,28 +46,24 @@ echo "--- Replacement only (no bypass, reference) ---"
 submit "$LABEL/repl_only" champsim_srrip_live_hrp "bp_ref" \
   "$COMMON"
 
-echo "--- Bypass K=0 (always bypass when DoA, no probe) ---"
-submit "$LABEL/bypass_k0" champsim_srrip_live_hrp "bp_k0" \
-  "$COMMON,LIVENESS_BYPASS=1,BYPASS_K=0"
+echo "--- Bypass BYPASS_THD=4 (= THD_DOA, bypass on first DoA classification) ---"
+submit "$LABEL/bypass_thd4" champsim_srrip_live_hrp "bp_t4" \
+  "$COMMON,LIVENESS_BYPASS=1,BYPASS_THD=4"
 
-echo "--- Bypass K=4 ---"
-submit "$LABEL/bypass_k4" champsim_srrip_live_hrp "bp_k4" \
-  "$COMMON,LIVENESS_BYPASS=1,BYPASS_K=4"
+echo "--- Bypass BYPASS_THD=8 ---"
+submit "$LABEL/bypass_thd8" champsim_srrip_live_hrp "bp_t8" \
+  "$COMMON,LIVENESS_BYPASS=1,BYPASS_THD=8"
 
-echo "--- Bypass K=8 ---"
-submit "$LABEL/bypass_k8" champsim_srrip_live_hrp "bp_k8" \
-  "$COMMON,LIVENESS_BYPASS=1,BYPASS_K=8"
+echo "--- Bypass BYPASS_THD=16 ---"
+submit "$LABEL/bypass_thd16" champsim_srrip_live_hrp "bp_t16" \
+  "$COMMON,LIVENESS_BYPASS=1,BYPASS_THD=16"
 
-echo "--- Bypass K=16 ---"
-submit "$LABEL/bypass_k16" champsim_srrip_live_hrp "bp_k16" \
-  "$COMMON,LIVENESS_BYPASS=1,BYPASS_K=16"
-
-echo "--- Bypass K=32 ---"
-submit "$LABEL/bypass_k32" champsim_srrip_live_hrp "bp_k32" \
-  "$COMMON,LIVENESS_BYPASS=1,BYPASS_K=32"
+echo "--- Bypass BYPASS_THD=32 ---"
+submit "$LABEL/bypass_thd32" champsim_srrip_live_hrp "bp_t32" \
+  "$COMMON,LIVENESS_BYPASS=1,BYPASS_THD=32"
 
 echo ""
-echo "Submitted: 6 configs x ${N} traces = $((6 * N)) tasks"
+echo "Submitted: 5 configs x ${N} traces = $((5 * N)) tasks"
 echo "Results:   $BASE/results/$LABEL/"
 echo ""
-echo "SRRIP baseline: qmm_thd_rebaseline_20260605_2316/srrip (45 traces, use first 5)"
+echo "SRRIP baseline: qmm_thd_rebaseline_20260605_2316/srrip"
