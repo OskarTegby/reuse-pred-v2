@@ -338,6 +338,7 @@ void CACHE::load_predictor_settings()
         return HistTable::Policy::LRU;
       };
       repl_hist_pc = HistTable(rh_cap, parse_rh_policy(rh_repl), rh_buf, rh_shadow);
+      repl_hist_pc.set_scoring_mode(static_cast<int>(getenv_uint64("SCORING_MODE", 2)));
       const uint64_t rh_ckpt = getenv_uint64("REPL_HIST_CHECKPOINT", 0);
       if (rh_ckpt > 0)
         repl_hist_pc.set_checkpoint(rh_ckpt, NAME);
@@ -375,10 +376,40 @@ void CACHE::load_predictor_settings()
 
   if (const char* v = std::getenv("REPL_HIST_MODE"); v && std::string_view(v) == "addr")
     repl_hist_use_addr = true;
+  // Periodic bypass recheck (probe): shared by LLC and STLB. Default off.
+  //   BYPASS_RECHECK_MODE     = off | fixed | backoff
+  //   BYPASS_RECHECK_INTERVAL = base interval (bypasses between probes, default 32)
+  //   BYPASS_RECHECK_CAP      = max interval for backoff (default 256)
+  auto apply_recheck = [&](HistTable& tbl) {
+    const char* m = std::getenv("BYPASS_RECHECK_MODE");
+    if (!m) return;
+    const std::string_view sv(m);
+    HistTable::RecheckMode mode = HistTable::RecheckMode::Off;
+    if      (sv == "fixed")   mode = HistTable::RecheckMode::Fixed;
+    else if (sv == "backoff") mode = HistTable::RecheckMode::Backoff;
+    else return;  // "off" or unrecognised → leave disabled
+    const uint64_t base = getenv_uint64("BYPASS_RECHECK_INTERVAL", 32);
+    const uint64_t cap  = getenv_uint64("BYPASS_RECHECK_CAP",     256);
+    tbl.set_recheck(mode, base, cap);
+  };
   if (NAME == "LLC") {
     if (const char* v = std::getenv("LIVENESS_BYPASS"); v && std::stoull(v))
       liveness_bypass = true;
-    bypass_thd = getenv_uint64("BYPASS_THD", thd_doa);  // defaults to thd_doa if unset
+    bypass_thd = getenv_uint64("BYPASS_THD", thd_doa);
+    if (const uint64_t rp = getenv_uint64("BYPASS_RESET_PERIOD", 0); rp > 0)
+      repl_hist_pc.set_reset_period(rp);
+    bypass_fire_reset_period_ = getenv_uint64("BYPASS_FIRE_RESET_PERIOD", 0);
+    if (const uint64_t rp = getenv_uint64("BYPASS_PC_RESET_PERIOD", 0); rp > 0)
+      repl_hist_pc.set_bypass_pc_reset(rp);
+    apply_recheck(repl_hist_pc);
+  }
+  if (NAME == "cpu0_STLB") {
+    if (const char* v = std::getenv("STLB_LIVENESS_BYPASS"); v && std::stoull(v))
+      stlb_liveness_bypass = true;
+    stlb_bypass_thd = getenv_uint64("STLB_BYPASS_THD", getenv_uint64("BYPASS_THD", thd_doa));
+    if (const uint64_t rp = getenv_uint64("BYPASS_PC_RESET_PERIOD", 0); rp > 0)
+      repl_hist_pc.set_bypass_pc_reset(rp);
+    apply_recheck(repl_hist_pc);
   }
 
   // Merged replacement history table: one shared HistTable for both LLC and
@@ -533,16 +564,36 @@ bool CACHE::handle_fill(const PACKET& fill_mshr)
   if (way != set_end && way->valid) {
     const uint64_t bypass_key = repl_hist_use_addr
         ? (fill_mshr.address >> OFFSET_BITS) : fill_mshr.ip;
-    const bool lv_bypass = liveness_bypass && NAME == "LLC"
+    // DoA classification first; then, if a periodic recheck is due, suppress the
+    // bypass so this fill is inserted as a probe and yields fresh eviction data.
+    const bool lv_doa = liveness_bypass && NAME == "LLC"
         && fill_mshr.type != TRANSLATION
         && repl_hist_pc.classify(bypass_key, bypass_thd, 0) == liveness_class::doa;
-    if (lv_bypass)
+    const bool lv_probe  = lv_doa && repl_hist_pc.should_probe(bypass_key);
+    const bool lv_bypass = lv_doa && !lv_probe;
+    if (lv_probe) sim_stats.back().liveness_probes++;
+    if (lv_bypass) {
       sim_stats.back().liveness_bypasses++;
+      if (bypass_fire_reset_period_ > 0 &&
+          ++bypass_fire_count_ % bypass_fire_reset_period_ == 0)
+        repl_hist_pc.reset_scores();
+      repl_hist_pc.record_bypass(bypass_key);
+    }
+
+    const bool stlb_lv_doa = stlb_liveness_bypass && NAME == "cpu0_STLB"
+        && repl_hist_pc.classify(fill_mshr.ip, stlb_bypass_thd, 0) == liveness_class::doa;
+    const bool stlb_lv_probe  = stlb_lv_doa && repl_hist_pc.should_probe(fill_mshr.ip);
+    const bool stlb_lv_bypass = stlb_lv_doa && !stlb_lv_probe;
+    if (stlb_lv_probe) sim_stats.back().liveness_probes++;
+    if (stlb_lv_bypass) {
+      sim_stats.back().liveness_bypasses++;
+      repl_hist_pc.record_bypass(fill_mshr.ip);
+    }
 
     const bool bypassed =
       (dppred && NAME == "cpu0_STLB" && dppred_bypass(fill_mshr)) ||
       (cbpred && NAME == "LLC" && fill_mshr.type != TRANSLATION && cbpred_bypass(fill_mshr)) ||
-      lv_bypass;
+      lv_bypass || stlb_lv_bypass;
 
     if (bypassed) {
       predictor_bypassed = true;
@@ -1113,6 +1164,7 @@ void CACHE::end_phase(unsigned finished_cpu)
   roi_stats.back().pfq_hits                = sim_stats.back().pfq_hits;
   roi_stats.back().cbpred_nogate_bypasses  = sim_stats.back().cbpred_nogate_bypasses;
   roi_stats.back().liveness_bypasses       = sim_stats.back().liveness_bypasses;
+  roi_stats.back().liveness_probes         = sim_stats.back().liveness_probes;
 
   roi_stats.back().evictions    = sim_stats.back().evictions;
   roi_stats.back().doa          = sim_stats.back().doa;

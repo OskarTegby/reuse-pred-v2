@@ -110,6 +110,66 @@ public:
     checkpoint_name_     = std::move(name);
   }
 
+  void set_reset_period(uint64_t period) { reset_period_ = period; }
+  void set_bypass_pc_reset(uint64_t period) { bypass_pc_reset_period_ = period; }
+
+  // Call on each bypass fire for a key. If the key has bypassed bypass_pc_reset_period_
+  // times without receiving an eviction update, its scores are zeroed so it must
+  // re-earn its DoA classification (breaks per-PC lock-in).
+  void record_bypass(uint64_t key) {
+    if (bypass_pc_reset_period_ == 0) return;
+    auto& cnt = bypass_since_update_[key];
+    if (++cnt >= bypass_pc_reset_period_) {
+      if (unbounded_) {
+        auto it = unmap_.find(key);
+        if (it != unmap_.end()) it->second = {0, 0};
+      } else {
+        for (auto& e : entries_)
+          if (e.valid && e.key == key) { e.score = 0; break; }
+      }
+      cnt = 0;
+    }
+  }
+
+  void reset_scores() {
+    if (unbounded_) { for (auto& [k, v] : unmap_) v = {0, 0}; }
+    else            { for (auto& e : entries_) e.score = 0; }
+  }
+
+  // Periodic bypass recheck (probe): instead of bypassing every DoA fill for a
+  // locked-in PC forever, occasionally let one fill THROUGH so it generates a
+  // fresh eviction observation. If the probe still evicts as DoA, the PC is
+  // confirmed dead; if it shows life (MA/MD), its score decays and bypass stops.
+  //   Off     : disabled — never force a probe (classic always-bypass).
+  //   Fixed   : probe every recheck_base_ bypasses for a PC.
+  //   Backoff : probe every recheck_interval_[key] bypasses; on a DoA probe the
+  //             interval doubles (capped at recheck_cap_), on a non-DoA probe it
+  //             resets to recheck_base_. Frequent early checks, rare late checks.
+  enum class RecheckMode { Off, Fixed, Backoff };
+  void set_recheck(RecheckMode mode, uint64_t base, uint64_t cap) {
+    recheck_mode_ = mode; recheck_base_ = base ? base : 1;
+    recheck_cap_  = cap   ? cap  : recheck_base_;
+  }
+
+  // Called at fill time when a key has classified as DoA and would be bypassed.
+  // Returns true if this fill should instead be INSERTED as a probe (caller must
+  // not bypass it); false to bypass as usual. Advances the per-key schedule.
+  bool should_probe(uint64_t key) {
+    if (recheck_mode_ == RecheckMode::Off) return false;
+    uint64_t& cnt = recheck_count_[key];
+    uint64_t  iv  = recheck_interval_[key];
+    if (iv == 0) iv = recheck_base_;
+    if (++cnt >= iv) {
+      cnt = 0;
+      recheck_probing_[key] = true;  // next eviction for this key is the probe result
+      ++recheck_probes_;
+      return true;
+    }
+    return false;
+  }
+
+  uint64_t recheck_probes() const { return recheck_probes_; }
+
   int64_t get_score(uint64_t key) const {
     if (unbounded_) {
       auto it = unmap_.find(key);
@@ -355,6 +415,20 @@ public:
     ++update_count_;
     if (thd_dead > 0) thd_dead_cache_ = thd_dead;
     if (thd_doa  > 0) thd_doa_cache_  = thd_doa;
+    // Recheck backoff: if this eviction is the outcome of a forced probe, adjust
+    // the per-key probe interval. DoA → confirmed dead, probe less often (double,
+    // capped). Non-DoA → showed life, reset to the base interval.
+    if (recheck_mode_ == RecheckMode::Backoff) {
+      auto pit = recheck_probing_.find(key);
+      if (pit != recheck_probing_.end() && pit->second) {
+        pit->second = false;
+        uint64_t& iv  = recheck_interval_[key];
+        const uint64_t cur = iv ? iv : recheck_base_;
+        iv = (evict_class == liveness_class::doa)
+                 ? std::min(cur * 2, recheck_cap_)
+                 : recheck_base_;
+      }
+    }
     // Mode 6: update per-class lifespan EMA and recompute proportional deltas.
     if (scoring_mode_ == 6 && lifespan > 0) {
       const int ci = class_idx(evict_class);
@@ -413,6 +487,7 @@ public:
       else if (ot == 2 && nt == 0) ++stats_.trans_doa_ma;
     };
     if (unbounded_) {
+      bypass_since_update_[key] = 0;  // eviction feedback arrived: no longer locked in
       auto& p = unmap_[key];
       const int64_t old_md = p.first, old_doa = p.second;
 
@@ -486,8 +561,13 @@ public:
           else if (ot == 2 && nt == 0) ++stats_.trans_doa_ma;
         }
       }
+      // Periodic reset: break DoA lock-in by zeroing all scores every N updates.
+      if (reset_period_ > 0 && update_count_ % reset_period_ == 0) {
+        for (auto& [k, v] : unmap_) v = {0, 0};
+      }
       return;
     }
+    bypass_since_update_[key] = 0;
     // 1. Main table hit: apply delta, floor at zero.
     for (auto& e : entries_) {
       if (e.valid && e.key == key) {
@@ -600,7 +680,22 @@ private:
 
   bool        unbounded_           = false;
   uint64_t    checkpoint_interval_ = 0;
+  uint64_t    reset_period_        = 0;  // 0 = disabled; reset all scores every N updates
   uint64_t    update_count_        = 0;
+  // Per-PC lock-in detection: counts bypass fires per key since the last eviction
+  // update for that key. When the count reaches bypass_pc_reset_period_, the
+  // entry's scores are zeroed so the PC must re-earn its DoA classification.
+  // Cleared to 0 by update() whenever eviction feedback arrives for a key.
+  uint64_t bypass_pc_reset_period_{0};
+  mutable std::unordered_map<uint64_t, uint64_t> bypass_since_update_;
+  // Periodic bypass recheck (probe) state — see set_recheck()/should_probe().
+  RecheckMode recheck_mode_     = RecheckMode::Off;
+  uint64_t    recheck_base_     = 0;  // base probe interval (bypasses between probes)
+  uint64_t    recheck_cap_      = 0;  // max interval for Backoff mode
+  uint64_t    recheck_probes_   = 0;  // total probes forced (instrumentation)
+  std::unordered_map<uint64_t, uint64_t> recheck_count_;     // bypasses since last probe
+  std::unordered_map<uint64_t, uint64_t> recheck_interval_;  // current interval (0 = base)
+  std::unordered_map<uint64_t, bool>     recheck_probing_;   // awaiting probe eviction outcome
   std::string checkpoint_name_;
   // Scoring modes — select via SCORING_MODE env var (default 2).
   // 0 = two-counter baseline: DoA→doa++, MD→md++, MA→reset both (flat, fully decoupled)
@@ -1123,6 +1218,7 @@ struct cache_stats {
   uint64_t pfq_hits = 0;              // LLC fills where PFN was in PFQ (dp=true)
   uint64_t cbpred_nogate_bypasses = 0; // LLC bypasses that fired without a PFQ hit
   uint64_t liveness_bypasses = 0;    // LLC bypasses from repl_hist DoA classification
+  uint64_t liveness_probes   = 0;    // DoA fills inserted as probes instead of bypassed (recheck)
 
   // DoA liveness stats.
   // For every cache: evictions = valid blocks displaced; doa = those never accessed.
@@ -1253,8 +1349,12 @@ class CACHE : public champsim::operable, public MemoryRequestConsumer, public Me
   // (lru/lfu/lfu_doa/srrip) and optional promotion buffer as phist/bhist.
   HistTable repl_hist_pc;
   bool repl_hist_use_addr{false};  // REPL_HIST_MODE=addr: index by block addr (LLC) or VPN (STLB)
-  bool liveness_bypass{false};     // LIVENESS_BYPASS=1: bypass DoA LLC fills using repl_hist
-  uint64_t bypass_thd{0};          // BYPASS_THD: score >= bypass_thd → bypass (must be >= thd_doa)
+  bool liveness_bypass{false};      // LIVENESS_BYPASS=1: bypass DoA LLC fills using repl_hist
+  uint64_t bypass_thd{0};           // BYPASS_THD: score >= bypass_thd → bypass (must be >= thd_doa)
+  bool stlb_liveness_bypass{false}; // STLB_LIVENESS_BYPASS=1: bypass DoA STLB fills using repl_hist
+  uint64_t stlb_bypass_thd{0};      // STLB_BYPASS_THD: threshold for STLB bypass
+  uint64_t bypass_fire_reset_period_{0}; // BYPASS_FIRE_RESET_PERIOD: reset scores every N bypass fires (global, legacy)
+  uint64_t bypass_fire_count_{0};        // running count of bypass fires (for fire-based reset)
 
   // Classify block liveness based on repl_hist_pc counters for the fill PC.
   // Used by srrip_live and ipv_live replacement policies to guide insertion/promotion.
