@@ -629,9 +629,16 @@ bool CACHE::handle_fill(const PACKET& fill_mshr)
   if (way != set_end && way->valid) {
     const uint64_t bypass_key = repl_hist_use_addr
         ? (fill_mshr.address >> OFFSET_BITS) : fill_mshr.ip;
+    // Set-sampled training: sampler sets are policy-FREE — they always insert and
+    // observe the full eviction stream to train the predictor cleanly. Bypass (and
+    // its probe) apply only to NON-sampler sets. period==1 → no sampling, bypass
+    // everywhere (default). Training (update) is gated to the same sampler sets, so
+    // training and prediction operate on disjoint sets.
+    const bool sampler_set = (sample_period_ > 1)
+        && (get_set_index(fill_mshr.address) % sample_period_ == 0);
     // DoA classification first; then, if a periodic recheck is due, suppress the
     // bypass so this fill is inserted as a probe and yields fresh eviction data.
-    const bool lv_doa = liveness_bypass && NAME == "LLC"
+    const bool lv_doa = liveness_bypass && NAME == "LLC" && !sampler_set
         && fill_mshr.type != TRANSLATION
         && repl_hist_pc.classify(bypass_key, bypass_thd, 0) == liveness_class::doa;
     const bool lv_probe  = lv_doa && repl_hist_pc.should_probe(bypass_key);
@@ -646,7 +653,7 @@ bool CACHE::handle_fill(const PACKET& fill_mshr)
       shadow_record_bypass(fill_mshr.address >> OFFSET_BITS, fill_mshr.ip, fill_mshr.data);
     }
 
-    const bool stlb_lv_doa = stlb_liveness_bypass && NAME == "cpu0_STLB"
+    const bool stlb_lv_doa = stlb_liveness_bypass && NAME == "cpu0_STLB" && !sampler_set
         && repl_hist_pc.classify(fill_mshr.ip, stlb_bypass_thd, 0) == liveness_class::doa;
     const bool stlb_lv_probe  = stlb_lv_doa && repl_hist_pc.should_probe(fill_mshr.ip);
     const bool stlb_lv_bypass = stlb_lv_doa && !stlb_lv_probe;
