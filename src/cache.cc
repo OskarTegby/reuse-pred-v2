@@ -252,10 +252,17 @@ void CACHE::update_eviction_counters(const BLOCK& victim, liveness_class evict_l
         : victim.ip;
     const uint64_t lifespan = (victim.install_cycle > 0 && current_cycle >= victim.install_cycle)
                              ? current_cycle - victim.install_cycle : 0;
-    if (::g_use_merged_hist)
-      ::g_merged_repl_hist.update(repl_key, evict_lv, thd_dead, thd_doa, lifespan);
-    else
-      repl_hist_pc.update(repl_key, evict_lv, thd_dead, thd_doa, lifespan);
+    // Set-sampled training: only sampled sets feed the history table. Prediction
+    // (classify/bypass) and replacement guidance below/elsewhere still consult the
+    // table for every set — only this update() is restricted.
+    const bool train = (sample_period_ <= 1)
+                     || (get_set_index(victim.address) % sample_period_ == 0);
+    if (train) {
+      if (::g_use_merged_hist)
+        ::g_merged_repl_hist.update(repl_key, evict_lv, thd_dead, thd_doa, lifespan);
+      else
+        repl_hist_pc.update(repl_key, evict_lv, thd_dead, thd_doa, lifespan);
+    }
 
     if (::g_pc_subset.enabled && victim.ip != 0) {
       if (NAME == "LLC")       ::g_pc_subset.llc_pcs.insert(victim.ip);
@@ -448,6 +455,9 @@ void CACHE::load_predictor_settings()
       repl_hist_pc.set_bypass_pc_reset(rp);
     apply_recheck(repl_hist_pc);
     bypass_shadow_cap_ = getenv_uint64("LLC_BYPASS_SHADOW_SIZE", getenv_uint64("BYPASS_SHADOW_SIZE", 0));
+    if (uint64_t ns = getenv_uint64("LLC_SAMPLE_SETS", getenv_uint64("SAMPLE_SETS", 0));
+        ns > 0 && ns < NUM_SET)
+      sample_period_ = NUM_SET / ns;  // ~ns evenly-spaced sampler sets train continuously
   }
   if (NAME == "cpu0_STLB") {
     if (const char* v = std::getenv("STLB_LIVENESS_BYPASS"); v && std::stoull(v))
@@ -462,6 +472,9 @@ void CACHE::load_predictor_settings()
     // are genuine "needed that page now" bypass mistakes. A bit larger than the
     // LLC's may be needed since translation working sets are coarser.
     bypass_shadow_cap_ = getenv_uint64("STLB_BYPASS_SHADOW_SIZE", getenv_uint64("BYPASS_SHADOW_SIZE", 0));
+    if (uint64_t ns = getenv_uint64("STLB_SAMPLE_SETS", getenv_uint64("SAMPLE_SETS", 0));
+        ns > 0 && ns < NUM_SET)
+      sample_period_ = NUM_SET / ns;  // ~ns evenly-spaced sampler sets train continuously
   }
 
   // Merged replacement history table: one shared HistTable for both LLC and

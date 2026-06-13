@@ -1371,6 +1371,13 @@ class CACHE : public champsim::operable, public MemoryRequestConsumer, public Me
   uint64_t bypass_thd{0};           // BYPASS_THD: score >= bypass_thd → bypass (must be >= thd_doa)
   bool stlb_liveness_bypass{false}; // STLB_LIVENESS_BYPASS=1: bypass DoA STLB fills using repl_hist
   uint64_t stlb_bypass_thd{0};      // STLB_BYPASS_THD: threshold for STLB bypass
+  // Set-sampled training: only a few fixed "sampler" sets (set_index % period == 0)
+  // continuously update the per-PC history table; prediction (bypass) and replacement
+  // guidance still use the table for EVERY fill/set. Configured by a small SET COUNT
+  // (LLC_SAMPLE_SETS / STLB_SAMPLE_SETS): period = NUM_SET / count, so ~count evenly
+  // spaced sets always train. period=1 → all sets (default). Measures how much we lose
+  // by training on a small sampler instead of every set.
+  uint64_t sample_period_{1};
   uint64_t bypass_fire_reset_period_{0}; // BYPASS_FIRE_RESET_PERIOD: reset scores every N bypass fires (global, legacy)
   uint64_t bypass_fire_count_{0};        // running count of bypass fires (for fire-based reset)
 
