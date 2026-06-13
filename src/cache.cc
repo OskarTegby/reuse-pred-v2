@@ -474,6 +474,8 @@ void CACHE::load_predictor_settings()
       prop_hybrid_ = true;
     if (const char* v = std::getenv("STLB_LLC_PROP_OWNPC"); v && std::stoull(v))
       prop_ownpc_ = true;
+    if (const char* v = std::getenv("PROP_GATE"); v && std::string_view(v) == "pc")
+      prop_gate_pc_ = true;
   }
   if (NAME == "cpu0_STLB") {
     if (const char* v = std::getenv("STLB_LIVENESS_BYPASS"); v && std::stoull(v))
@@ -488,6 +490,8 @@ void CACHE::load_predictor_settings()
       prop_hybrid_ = true;
     if (const char* v = std::getenv("STLB_LLC_PROP_OWNPC"); v && std::stoull(v))
       prop_ownpc_ = true;
+    if (const char* v = std::getenv("PROP_GATE"); v && std::string_view(v) == "pc")
+      prop_gate_pc_ = true;
     // STLB bypass shadow (our predictor's own — distinct from Mazumdar's dpPred
     // shadow_table). On the STLB, long-range translation re-reference is normal
     // page re-use, so the shadow must be SMALL: only near-immediate re-references
@@ -653,12 +657,20 @@ bool CACHE::handle_fill(const PACKET& fill_mshr)
     // never STLB-bypassed, the LLC predictor does not act on it.
     bool prop_ok = true;
     if (stlb_llc_prop_ && NAME == "LLC") {
-      const auto pfn = fill_mshr.address >> LOG2_PAGE_SIZE;
-      const auto mit = prop_map.find(pfn);
-      if (mit != prop_map.end()) {
-        if (!prop_ownpc_) bypass_key = mit->second;  // A/B: STLB PC; D: keep own PC
-      } else if (!prop_hybrid_) {
-        prop_ok = false;                             // A/D: gate on miss; B: keep own PC
+      if (prop_gate_pc_) {
+        // PC-gate: gate by the block's own PC being STLB-dead; index by own PC.
+        if (!stlb_dead_pcs.count(fill_mshr.ip) && !prop_hybrid_)
+          prop_ok = false;                           // not STLB-dead PC → don't predict (unless hybrid)
+        // bypass_key stays own PC (fill_mshr.ip)
+      } else {
+        // PFN-gate (page-granular): index by the propagated STLB PC.
+        const auto pfn = fill_mshr.address >> LOG2_PAGE_SIZE;
+        const auto mit = prop_map.find(pfn);
+        if (mit != prop_map.end()) {
+          if (!prop_ownpc_) bypass_key = mit->second;  // A/B: STLB PC; D: keep own PC
+        } else if (!prop_hybrid_) {
+          prop_ok = false;                             // A/D: gate on miss; B: keep own PC
+        }
       }
     }
     // DoA classification first; then, if a periodic recheck is due, suppress the
@@ -687,8 +699,10 @@ bool CACHE::handle_fill(const PACKET& fill_mshr)
       sim_stats.back().liveness_bypasses++;
       repl_hist_pc.record_bypass(fill_mshr.ip);
       shadow_record_bypass(fill_mshr.address >> OFFSET_BITS, fill_mshr.ip, fill_mshr.data);
-      if (stlb_llc_prop_)  // propagate PFN→(STLB PC) via the idealized unbounded map
-        prop_map[fill_mshr.data >> LOG2_PAGE_SIZE] = fill_mshr.ip;
+      if (stlb_llc_prop_) {  // propagate to the LLC: PFN→(STLB PC) for the PFN-gate,
+        prop_map[fill_mshr.data >> LOG2_PAGE_SIZE] = fill_mshr.ip;  // and the PC itself
+        stlb_dead_pcs.insert(fill_mshr.ip);                          // for the PC-gate
+      }
     }
 
     const bool bypassed =
@@ -803,8 +817,13 @@ bool CACHE::handle_fill(const PACKET& fill_mshr)
         // update indexes repl_hist by the same key used for the fill-time decision.
         way->prop_pc = 0;
         if (stlb_llc_prop_ && NAME == "LLC" && fill_mshr.type != TRANSLATION) {
-          const auto mit = prop_map.find(pfn_fill);
-          if (mit != prop_map.end()) way->prop_pc = mit->second;
+          if (prop_gate_pc_) {
+            // PC-gate: gated-in (and indexed) by own PC if it is STLB-dead.
+            if (stlb_dead_pcs.count(fill_mshr.ip)) way->prop_pc = fill_mshr.ip;
+          } else {
+            const auto mit = prop_map.find(pfn_fill);
+            if (mit != prop_map.end()) way->prop_pc = mit->second;
+          }
         }
       }
       way->address = fill_mshr.address;

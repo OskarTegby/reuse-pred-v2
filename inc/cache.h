@@ -1323,6 +1323,11 @@ class CACHE : public champsim::operable, public MemoryRequestConsumer, public Me
   // aging). This is the "magic" oracle store to evaluate whether the cross-level
   // signal helps at all — a realistic bounded structure comes later if it does.
   inline static std::unordered_map<uint64_t, uint64_t> prop_map{};
+  // STLB→LLC propagation, PC-gate variant (PROP_GATE=pc): the set of PCs whose
+  // translations the STLB bypassed. An LLC block is gated-in iff its own loading PC
+  // is in this set (instruction-granular cross-level signal), vs the PFN-gate above
+  // (page-granular). Idealized/unbounded, like prop_map.
+  inline static std::unordered_set<uint64_t> stlb_dead_pcs{};
   inline static uint64_t pfq_cap = 8;
 
   // Set by cpu0_STLB during initialize(); read by LLC for reverse STLB DoA lookup.
@@ -1391,6 +1396,11 @@ class CACHE : public champsim::operable, public MemoryRequestConsumer, public Me
                                     // dead-page GATE (require a prop_map hit) but index repl_hist by
                                     // the LLC's OWN PC, not the propagated STLB PC. Isolates the gate
                                     // from the index.
+  bool prop_gate_pc_{false};        // PROP_GATE=pc: gate the LLC predictor by the block's own PC being
+                                    // in the STLB-dead-PC set (instruction-granular), indexing by own
+                                    // PC — vs the default PFN-gate (page-granular, index by propagated
+                                    // STLB PC). Tests whether the cross-level signal transfers better
+                                    // at page or PC granularity.
   uint64_t bypass_fire_reset_period_{0}; // BYPASS_FIRE_RESET_PERIOD: reset scores every N bypass fires (global, legacy)
   uint64_t bypass_fire_count_{0};        // running count of bypass fires (for fire-based reset)
 
