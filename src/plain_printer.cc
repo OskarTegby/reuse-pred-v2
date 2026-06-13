@@ -113,6 +113,8 @@ void champsim::plain_printer::print(CACHE::stats_type stats)
       stream << stats.name << " LIVENESS_BYPASSES: " << stats.liveness_bypasses << std::endl;
     if (stats.liveness_probes > 0)
       stream << stats.name << " LIVENESS_PROBES: " << stats.liveness_probes << std::endl;
+    if (stats.liveness_bypass_shadow_hits > 0)
+      stream << stats.name << " LIVENESS_BYPASS_SHADOW_HITS: " << stats.liveness_bypass_shadow_hits << std::endl;
     // History table utilisation (ROI only).
     auto print_hist = [&](const char* tag, uint64_t q, uint64_t h, uint64_t p, uint64_t ph) {
       if (q == 0) return;

@@ -143,6 +143,32 @@ bool CACHE::dppred_bypass(const PACKET& fill_mshr)
   return true;
 }
 
+// Record a block our liveness predictor just bypassed, so a later re-reference
+// can be detected as a bypass mistake. Tags only (no data) — FIFO eviction.
+void CACHE::shadow_record_bypass(uint64_t block_addr, uint64_t pc)
+{
+  if (bypass_shadow_cap_ == 0) return;
+  if (bypass_shadow_.count(block_addr)) return;  // already tracked
+  while (bypass_shadow_fifo_.size() >= bypass_shadow_cap_) {
+    bypass_shadow_.erase(bypass_shadow_fifo_.front());  // no-op if already removed by a hit
+    bypass_shadow_fifo_.pop_front();
+  }
+  bypass_shadow_[block_addr] = pc;
+  bypass_shadow_fifo_.push_back(block_addr);
+}
+
+// True if block_addr was previously bypassed (a re-reference = bypass mistake).
+// Removes the entry and returns the bypassing PC so the caller can penalize it.
+bool CACHE::shadow_check_bypass(uint64_t block_addr, uint64_t& pc_out)
+{
+  if (bypass_shadow_cap_ == 0) return false;
+  auto it = bypass_shadow_.find(block_addr);
+  if (it == bypass_shadow_.end()) return false;
+  pc_out = it->second;
+  bypass_shadow_.erase(it);  // stale fifo slot is cleaned on later eviction
+  return true;
+}
+
 // Returns true when cbPred predicts this cache block is dead
 // (its page was previously bypassed by dpPred and its block counter is high).
 bool CACHE::cbpred_bypass(const PACKET& fill_mshr)
@@ -402,6 +428,7 @@ void CACHE::load_predictor_settings()
     if (const uint64_t rp = getenv_uint64("BYPASS_PC_RESET_PERIOD", 0); rp > 0)
       repl_hist_pc.set_bypass_pc_reset(rp);
     apply_recheck(repl_hist_pc);
+    bypass_shadow_cap_ = getenv_uint64("BYPASS_SHADOW_SIZE", 0);
   }
   if (NAME == "cpu0_STLB") {
     if (const char* v = std::getenv("STLB_LIVENESS_BYPASS"); v && std::stoull(v))
@@ -410,6 +437,7 @@ void CACHE::load_predictor_settings()
     if (const uint64_t rp = getenv_uint64("BYPASS_PC_RESET_PERIOD", 0); rp > 0)
       repl_hist_pc.set_bypass_pc_reset(rp);
     apply_recheck(repl_hist_pc);
+    bypass_shadow_cap_ = getenv_uint64("BYPASS_SHADOW_SIZE", 0);
   }
 
   // Merged replacement history table: one shared HistTable for both LLC and
@@ -578,6 +606,7 @@ bool CACHE::handle_fill(const PACKET& fill_mshr)
           ++bypass_fire_count_ % bypass_fire_reset_period_ == 0)
         repl_hist_pc.reset_scores();
       repl_hist_pc.record_bypass(bypass_key);
+      shadow_record_bypass(fill_mshr.address >> OFFSET_BITS, fill_mshr.ip);
     }
 
     const bool stlb_lv_doa = stlb_liveness_bypass && NAME == "cpu0_STLB"
@@ -588,6 +617,7 @@ bool CACHE::handle_fill(const PACKET& fill_mshr)
     if (stlb_lv_bypass) {
       sim_stats.back().liveness_bypasses++;
       repl_hist_pc.record_bypass(fill_mshr.ip);
+      shadow_record_bypass(fill_mshr.address >> OFFSET_BITS, fill_mshr.ip);
     }
 
     const bool bypassed =
@@ -848,6 +878,18 @@ bool CACHE::handle_miss(const PACKET& handle_pkt)
     // stored translation and re-insert it into the STLB (PTW skipped).
     if (dppred && NAME == "cpu0_STLB" && dppred_shadow_lookup(handle_pkt))
       return true;
+
+    // Liveness-bypass shadow: a re-reference to a block our predictor bypassed
+    // is a confirmed mistake. Feed mostly_alive for that PC (zeroes its score in
+    // mode 5) so it stops bypassing. The miss proceeds normally (fetch from DRAM).
+    if (bypass_shadow_cap_ > 0) {
+      uint64_t shadow_pc;
+      if (shadow_check_bypass(handle_pkt.address >> OFFSET_BITS, shadow_pc)) {
+        repl_hist_pc.update(shadow_pc, liveness_class::mostly_alive,
+                            static_cast<int64_t>(thd_dead), static_cast<int64_t>(thd_doa));
+        sim_stats.back().liveness_bypass_shadow_hits++;
+      }
+    }
 
     if (mshr_full)  // not enough MSHR resource
       return false; // TODO should we allow prefetches anyway if they will not be filled to this level?
@@ -1165,6 +1207,7 @@ void CACHE::end_phase(unsigned finished_cpu)
   roi_stats.back().cbpred_nogate_bypasses  = sim_stats.back().cbpred_nogate_bypasses;
   roi_stats.back().liveness_bypasses       = sim_stats.back().liveness_bypasses;
   roi_stats.back().liveness_probes         = sim_stats.back().liveness_probes;
+  roi_stats.back().liveness_bypass_shadow_hits = sim_stats.back().liveness_bypass_shadow_hits;
 
   roi_stats.back().evictions    = sim_stats.back().evictions;
   roi_stats.back().doa          = sim_stats.back().doa;

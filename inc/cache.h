@@ -1219,6 +1219,7 @@ struct cache_stats {
   uint64_t cbpred_nogate_bypasses = 0; // LLC bypasses that fired without a PFQ hit
   uint64_t liveness_bypasses = 0;    // LLC bypasses from repl_hist DoA classification
   uint64_t liveness_probes   = 0;    // DoA fills inserted as probes instead of bypassed (recheck)
+  uint64_t liveness_bypass_shadow_hits = 0;  // re-references to bypassed blocks (confirmed bypass mistakes)
 
   // DoA liveness stats.
   // For every cache: evictions = valid blocks displaced; doa = those never accessed.
@@ -1329,6 +1330,15 @@ class CACHE : public champsim::operable, public MemoryRequestConsumer, public Me
   PCPartitionedTable bhist_pc;    // used when use_pc_bhist=true
   std::deque<std::tuple<uint64_t, uint64_t, uint64_t>> shadow_table; // (VPN, data, PC)
 
+  // Liveness-bypass shadow: block addresses our own predictor bypassed. A later
+  // re-reference to one is a confirmed bypass mistake → we feed a mostly_alive
+  // observation for that PC (which zeroes its score in mode 5), so it stops
+  // bypassing. Self-calibrating: silent when bypass is correct (no re-refs → no
+  // cost). Enabled by BYPASS_SHADOW_SIZE (0 = disabled). Tags only, no data.
+  uint64_t bypass_shadow_cap_ = 0;
+  std::unordered_map<uint64_t, uint64_t> bypass_shadow_;  // block_addr → pc
+  std::deque<uint64_t> bypass_shadow_fifo_;               // FIFO eviction order
+
   // Replacement guidance: use bHIST dead_count signals to guide cache replacement.
   // High dead_count → entry is often dead → better eviction target (prioritize eviction).
   // Used to integrate bypass predictor signals into replacement decisions.
@@ -1395,6 +1405,8 @@ class CACHE : public champsim::operable, public MemoryRequestConsumer, public Me
   void load_predictor_settings();                          // reads env vars to configure dpPred/cbPred at construction
   bool dppred_shadow_lookup(const PACKET& handle_pkt);     // true → shadow hit: history reset, data served, entry re-inserted into STLB, PTW skipped
   bool dppred_bypass(const PACKET& fill_mshr);             // true → skip STLB fill
+  void shadow_record_bypass(uint64_t block_addr, uint64_t pc);          // record a block our predictor bypassed
+  bool shadow_check_bypass(uint64_t block_addr, uint64_t& pc_out);      // true → re-reference of a bypassed block (removes it); pc_out = bypassing PC
   bool cbpred_bypass(const PACKET& fill_mshr);             // true → skip LLC fill
   void update_eviction_counters(const BLOCK& victim, liveness_class lv);  // update history tables at eviction
 
