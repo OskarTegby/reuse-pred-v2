@@ -428,7 +428,7 @@ void CACHE::load_predictor_settings()
     if (const uint64_t rp = getenv_uint64("BYPASS_PC_RESET_PERIOD", 0); rp > 0)
       repl_hist_pc.set_bypass_pc_reset(rp);
     apply_recheck(repl_hist_pc);
-    bypass_shadow_cap_ = getenv_uint64("BYPASS_SHADOW_SIZE", 0);
+    bypass_shadow_cap_ = getenv_uint64("LLC_BYPASS_SHADOW_SIZE", getenv_uint64("BYPASS_SHADOW_SIZE", 0));
   }
   if (NAME == "cpu0_STLB") {
     if (const char* v = std::getenv("STLB_LIVENESS_BYPASS"); v && std::stoull(v))
@@ -437,9 +437,12 @@ void CACHE::load_predictor_settings()
     if (const uint64_t rp = getenv_uint64("BYPASS_PC_RESET_PERIOD", 0); rp > 0)
       repl_hist_pc.set_bypass_pc_reset(rp);
     apply_recheck(repl_hist_pc);
-    // No bypass shadow on the STLB: the dpPred shadow_table already covers the
-    // STLB, and a re-reference to a bypassed *translation* is normal (pages get
-    // re-touched) so it does not signal a bypass mistake there.
+    // STLB bypass shadow (our predictor's own — distinct from Mazumdar's dpPred
+    // shadow_table). On the STLB, long-range translation re-reference is normal
+    // page re-use, so the shadow must be SMALL: only near-immediate re-references
+    // are genuine "needed that page now" bypass mistakes. A bit larger than the
+    // LLC's may be needed since translation working sets are coarser.
+    bypass_shadow_cap_ = getenv_uint64("STLB_BYPASS_SHADOW_SIZE", getenv_uint64("BYPASS_SHADOW_SIZE", 0));
   }
 
   // Merged replacement history table: one shared HistTable for both LLC and
