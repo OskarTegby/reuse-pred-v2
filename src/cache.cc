@@ -437,7 +437,9 @@ void CACHE::load_predictor_settings()
     if (const uint64_t rp = getenv_uint64("BYPASS_PC_RESET_PERIOD", 0); rp > 0)
       repl_hist_pc.set_bypass_pc_reset(rp);
     apply_recheck(repl_hist_pc);
-    bypass_shadow_cap_ = getenv_uint64("BYPASS_SHADOW_SIZE", 0);
+    // No bypass shadow on the STLB: the dpPred shadow_table already covers the
+    // STLB, and a re-reference to a bypassed *translation* is normal (pages get
+    // re-touched) so it does not signal a bypass mistake there.
   }
 
   // Merged replacement history table: one shared HistTable for both LLC and
