@@ -250,11 +250,11 @@ void CACHE::update_eviction_counters(const BLOCK& victim, liveness_class evict_l
     bool do_update = true;
     uint64_t repl_key = 0;
     if (stlb_llc_prop_ && NAME == "LLC") {
-      // Cross-level (option a): index by the propagated STLB PC carried on the
-      // block. Blocks whose page the STLB never bypassed (prop_pc==0) are not part
-      // of this index, so they do not update the LLC liveness history.
-      if (victim.prop_pc == 0) do_update = false;
-      else                     repl_key = victim.prop_pc;
+      // Cross-level: index by the propagated STLB PC carried on the block.
+      if (victim.prop_pc != 0)   repl_key = victim.prop_pc;     // propagated → STLB PC
+      else if (prop_hybrid_)     repl_key = repl_hist_use_addr  // version B: own PC on miss
+                                     ? (victim.address >> OFFSET_BITS) : victim.ip;
+      else                       do_update = false;             // version A: no update on miss
     } else {
       repl_key = repl_hist_use_addr
           ? ((NAME == "LLC") ? (victim.address >> OFFSET_BITS) : victim.address)
@@ -462,6 +462,8 @@ void CACHE::load_predictor_settings()
     bypass_shadow_cap_ = getenv_uint64("LLC_BYPASS_SHADOW_SIZE", getenv_uint64("BYPASS_SHADOW_SIZE", 0));
     if (const char* v = std::getenv("STLB_LLC_PROP"); v && std::stoull(v))
       stlb_llc_prop_ = true;
+    if (const char* v = std::getenv("STLB_LLC_PROP_HYBRID"); v && std::stoull(v))
+      prop_hybrid_ = true;
   }
   if (NAME == "cpu0_STLB") {
     if (const char* v = std::getenv("STLB_LIVENESS_BYPASS"); v && std::stoull(v))
@@ -472,6 +474,8 @@ void CACHE::load_predictor_settings()
     apply_recheck(repl_hist_pc);
     if (const char* v = std::getenv("STLB_LLC_PROP"); v && std::stoull(v))
       stlb_llc_prop_ = true;
+    if (const char* v = std::getenv("STLB_LLC_PROP_HYBRID"); v && std::stoull(v))
+      prop_hybrid_ = true;
     // STLB bypass shadow (our predictor's own — distinct from Mazumdar's dpPred
     // shadow_table). On the STLB, long-range translation re-reference is normal
     // page re-use, so the shadow must be SMALL: only near-immediate re-references
@@ -638,10 +642,10 @@ bool CACHE::handle_fill(const PACKET& fill_mshr)
     bool prop_ok = true;
     if (stlb_llc_prop_ && NAME == "LLC") {
       const auto pfn = fill_mshr.address >> LOG2_PAGE_SIZE;
-      const auto pit = std::find_if(pfq.begin(), pfq.end(),
-                                    [pfn](const auto& e){ return e.first == pfn; });
-      if (pit != pfq.end()) bypass_key = pit->second;  // propagated STLB PC
-      else                  prop_ok = false;           // no propagation → don't predict
+      const auto mit = prop_map.find(pfn);
+      if (mit != prop_map.end()) bypass_key = mit->second;  // propagated STLB PC
+      else if (!prop_hybrid_)    prop_ok = false;           // version A: no predict on miss
+      // version B (hybrid): leave bypass_key = own PC, keep predicting
     }
     // DoA classification first; then, if a periodic recheck is due, suppress the
     // bypass so this fill is inserted as a probe and yields fresh eviction data.
@@ -669,10 +673,8 @@ bool CACHE::handle_fill(const PACKET& fill_mshr)
       sim_stats.back().liveness_bypasses++;
       repl_hist_pc.record_bypass(fill_mshr.ip);
       shadow_record_bypass(fill_mshr.address >> OFFSET_BITS, fill_mshr.ip, fill_mshr.data);
-      if (stlb_llc_prop_) {  // propagate (PFN, STLB PC) to the LLC via the shared PFQ
-        if (pfq.size() >= pfq_cap) pfq.pop_front();
-        pfq.push_back({fill_mshr.data >> LOG2_PAGE_SIZE, fill_mshr.ip});
-      }
+      if (stlb_llc_prop_)  // propagate PFN→(STLB PC) via the idealized unbounded map
+        prop_map[fill_mshr.data >> LOG2_PAGE_SIZE] = fill_mshr.ip;
     }
 
     const bool bypassed =
@@ -785,8 +787,11 @@ bool CACHE::handle_fill(const PACKET& fill_mshr)
           sim_stats.back().pfq_hits++;
         // STLB→LLC propagation: remember the propagated STLB PC so the eviction
         // update indexes repl_hist by the same key used for the fill-time decision.
-        way->prop_pc = (stlb_llc_prop_ && NAME == "LLC" && fill_mshr.type != TRANSLATION
-                        && pit != pfq.end()) ? pit->second : 0;
+        way->prop_pc = 0;
+        if (stlb_llc_prop_ && NAME == "LLC" && fill_mshr.type != TRANSLATION) {
+          const auto mit = prop_map.find(pfn_fill);
+          if (mit != prop_map.end()) way->prop_pc = mit->second;
+        }
       }
       way->address = fill_mshr.address;
       way->v_address = fill_mshr.v_address;

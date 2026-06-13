@@ -1318,6 +1318,11 @@ class CACHE : public champsim::operable, public MemoryRequestConsumer, public Me
   // Shared physical-frame queue: dpPred fills it; cbPred reads it.
   // Each entry is (PFN, dpPred PC) so cbPred can use the PC as the bHIST key.
   inline static std::deque<std::pair<uint64_t, uint64_t>> pfq{};
+  // STLB→LLC propagation (STLB_LLC_PROP): idealized/unbounded PFN→PC map. The STLB
+  // bypass records PFN→(STLB PC); the LLC reads it at fill (always available, no
+  // aging). This is the "magic" oracle store to evaluate whether the cross-level
+  // signal helps at all — a realistic bounded structure comes later if it does.
+  inline static std::unordered_map<uint64_t, uint64_t> prop_map{};
   inline static uint64_t pfq_cap = 8;
 
   // Set by cpu0_STLB during initialize(); read by LLC for reverse STLB DoA lookup.
@@ -1375,9 +1380,13 @@ class CACHE : public champsim::operable, public MemoryRequestConsumer, public Me
   uint64_t bypass_thd{0};           // BYPASS_THD: score >= bypass_thd → bypass (must be >= thd_doa)
   bool stlb_liveness_bypass{false}; // STLB_LIVENESS_BYPASS=1: bypass DoA STLB fills using repl_hist
   uint64_t stlb_bypass_thd{0};      // STLB_BYPASS_THD: threshold for STLB bypass
-  bool stlb_llc_prop_{false};       // STLB_LLC_PROP=1: STLB bypass pushes (PFN,PC) to the shared
-                                    // PFQ; the LLC bypass predictor indexes repl_hist by that
-                                    // propagated STLB PC (cross-level, like Mazumdar's cbPred).
+  bool stlb_llc_prop_{false};       // STLB_LLC_PROP=1: STLB bypass records PFN→(STLB PC); the LLC
+                                    // bypass predictor indexes repl_hist by that propagated STLB PC
+                                    // for STLB-bypassed pages (cross-level, like Mazumdar's cbPred).
+  bool prop_hybrid_{false};         // STLB_LLC_PROP_HYBRID=1 (version B): on a prop_map MISS, fall
+                                    // back to the LLC's own PC for both predict and update. Off
+                                    // (version A): a miss means no predict and no update (pure
+                                    // cross-level / Mazumdar-like).
   uint64_t bypass_fire_reset_period_{0}; // BYPASS_FIRE_RESET_PERIOD: reset scores every N bypass fires (global, legacy)
   uint64_t bypass_fire_count_{0};        // running count of bypass fires (for fire-based reset)
 
