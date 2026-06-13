@@ -1291,6 +1291,10 @@ class CACHE : public champsim::operable, public MemoryRequestConsumer, public Me
     bool dp = false;       // dead-page bit: set on LLC fill when the block's PFN is in the PFQ;
                            // gates accessed tracking and bHIST updates (cbPred only)
     uint64_t dp_pc = 0;   // dpPred PC stored at fill time (valid when dp=true)
+    uint64_t prop_pc = 0; // STLB→LLC propagated PC (STLB_LLC_PROP): the STLB PC that
+                          // bypassed this block's page. 0 = none. Used to index the
+                          // LLC liveness history table on eviction (matches the fill-time
+                          // bypass decision). Kept separate from dp_pc/dp to avoid cbPred semantics.
 
     uint64_t address = 0;
     uint64_t v_address = 0;
@@ -1371,6 +1375,9 @@ class CACHE : public champsim::operable, public MemoryRequestConsumer, public Me
   uint64_t bypass_thd{0};           // BYPASS_THD: score >= bypass_thd → bypass (must be >= thd_doa)
   bool stlb_liveness_bypass{false}; // STLB_LIVENESS_BYPASS=1: bypass DoA STLB fills using repl_hist
   uint64_t stlb_bypass_thd{0};      // STLB_BYPASS_THD: threshold for STLB bypass
+  bool stlb_llc_prop_{false};       // STLB_LLC_PROP=1: STLB bypass pushes (PFN,PC) to the shared
+                                    // PFQ; the LLC bypass predictor indexes repl_hist by that
+                                    // propagated STLB PC (cross-level, like Mazumdar's cbPred).
   uint64_t bypass_fire_reset_period_{0}; // BYPASS_FIRE_RESET_PERIOD: reset scores every N bypass fires (global, legacy)
   uint64_t bypass_fire_count_{0};        // running count of bypass fires (for fire-based reset)
 

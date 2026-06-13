@@ -247,15 +247,27 @@ void CACHE::update_eviction_counters(const BLOCK& victim, liveness_class evict_l
 
   // Replacement-guidance history: delegated to HistTable (bounded or unbounded).
   if (NAME == "LLC" || NAME == "cpu0_STLB") {
-    const uint64_t repl_key = repl_hist_use_addr
-        ? ((NAME == "LLC") ? (victim.address >> OFFSET_BITS) : victim.address)
-        : victim.ip;
+    bool do_update = true;
+    uint64_t repl_key = 0;
+    if (stlb_llc_prop_ && NAME == "LLC") {
+      // Cross-level (option a): index by the propagated STLB PC carried on the
+      // block. Blocks whose page the STLB never bypassed (prop_pc==0) are not part
+      // of this index, so they do not update the LLC liveness history.
+      if (victim.prop_pc == 0) do_update = false;
+      else                     repl_key = victim.prop_pc;
+    } else {
+      repl_key = repl_hist_use_addr
+          ? ((NAME == "LLC") ? (victim.address >> OFFSET_BITS) : victim.address)
+          : victim.ip;
+    }
     const uint64_t lifespan = (victim.install_cycle > 0 && current_cycle >= victim.install_cycle)
                              ? current_cycle - victim.install_cycle : 0;
-    if (::g_use_merged_hist)
-      ::g_merged_repl_hist.update(repl_key, evict_lv, thd_dead, thd_doa, lifespan);
-    else
-      repl_hist_pc.update(repl_key, evict_lv, thd_dead, thd_doa, lifespan);
+    if (do_update) {
+      if (::g_use_merged_hist)
+        ::g_merged_repl_hist.update(repl_key, evict_lv, thd_dead, thd_doa, lifespan);
+      else
+        repl_hist_pc.update(repl_key, evict_lv, thd_dead, thd_doa, lifespan);
+    }
 
     if (::g_pc_subset.enabled && victim.ip != 0) {
       if (NAME == "LLC")       ::g_pc_subset.llc_pcs.insert(victim.ip);
@@ -448,6 +460,8 @@ void CACHE::load_predictor_settings()
       repl_hist_pc.set_bypass_pc_reset(rp);
     apply_recheck(repl_hist_pc);
     bypass_shadow_cap_ = getenv_uint64("LLC_BYPASS_SHADOW_SIZE", getenv_uint64("BYPASS_SHADOW_SIZE", 0));
+    if (const char* v = std::getenv("STLB_LLC_PROP"); v && std::stoull(v))
+      stlb_llc_prop_ = true;
   }
   if (NAME == "cpu0_STLB") {
     if (const char* v = std::getenv("STLB_LIVENESS_BYPASS"); v && std::stoull(v))
@@ -456,6 +470,8 @@ void CACHE::load_predictor_settings()
     if (const uint64_t rp = getenv_uint64("BYPASS_PC_RESET_PERIOD", 0); rp > 0)
       repl_hist_pc.set_bypass_pc_reset(rp);
     apply_recheck(repl_hist_pc);
+    if (const char* v = std::getenv("STLB_LLC_PROP"); v && std::stoull(v))
+      stlb_llc_prop_ = true;
     // STLB bypass shadow (our predictor's own — distinct from Mazumdar's dpPred
     // shadow_table). On the STLB, long-range translation re-reference is normal
     // page re-use, so the shadow must be SMALL: only near-immediate re-references
@@ -614,12 +630,23 @@ bool CACHE::handle_fill(const PACKET& fill_mshr)
   // bypass in a flag and handle it directly below.
   bool predictor_bypassed = false;
   if (way != set_end && way->valid) {
-    const uint64_t bypass_key = repl_hist_use_addr
+    uint64_t bypass_key = repl_hist_use_addr
         ? (fill_mshr.address >> OFFSET_BITS) : fill_mshr.ip;
+    // STLB→LLC propagation (option a, cross-level): index the LLC bypass by the
+    // STLB PC that bypassed this block's page. Require a PFQ hit — if the page was
+    // never STLB-bypassed, the LLC predictor does not act on it.
+    bool prop_ok = true;
+    if (stlb_llc_prop_ && NAME == "LLC") {
+      const auto pfn = fill_mshr.address >> LOG2_PAGE_SIZE;
+      const auto pit = std::find_if(pfq.begin(), pfq.end(),
+                                    [pfn](const auto& e){ return e.first == pfn; });
+      if (pit != pfq.end()) bypass_key = pit->second;  // propagated STLB PC
+      else                  prop_ok = false;           // no propagation → don't predict
+    }
     // DoA classification first; then, if a periodic recheck is due, suppress the
     // bypass so this fill is inserted as a probe and yields fresh eviction data.
     const bool lv_doa = liveness_bypass && NAME == "LLC"
-        && fill_mshr.type != TRANSLATION
+        && fill_mshr.type != TRANSLATION && prop_ok
         && repl_hist_pc.classify(bypass_key, bypass_thd, 0) == liveness_class::doa;
     const bool lv_probe  = lv_doa && repl_hist_pc.should_probe(bypass_key);
     const bool lv_bypass = lv_doa && !lv_probe;
@@ -642,6 +669,10 @@ bool CACHE::handle_fill(const PACKET& fill_mshr)
       sim_stats.back().liveness_bypasses++;
       repl_hist_pc.record_bypass(fill_mshr.ip);
       shadow_record_bypass(fill_mshr.address >> OFFSET_BITS, fill_mshr.ip, fill_mshr.data);
+      if (stlb_llc_prop_) {  // propagate (PFN, STLB PC) to the LLC via the shared PFQ
+        if (pfq.size() >= pfq_cap) pfq.pop_front();
+        pfq.push_back({fill_mshr.data >> LOG2_PAGE_SIZE, fill_mshr.ip});
+      }
     }
 
     const bool bypassed =
@@ -752,6 +783,10 @@ bool CACHE::handle_fill(const PACKET& fill_mshr)
         way->dp_pc = way->dp ? pit->second : 0;
         if (way->dp)
           sim_stats.back().pfq_hits++;
+        // STLB→LLC propagation: remember the propagated STLB PC so the eviction
+        // update indexes repl_hist by the same key used for the fill-time decision.
+        way->prop_pc = (stlb_llc_prop_ && NAME == "LLC" && fill_mshr.type != TRANSLATION
+                        && pit != pfq.end()) ? pit->second : 0;
       }
       way->address = fill_mshr.address;
       way->v_address = fill_mshr.v_address;
