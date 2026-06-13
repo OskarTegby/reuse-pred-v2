@@ -250,11 +250,19 @@ void CACHE::update_eviction_counters(const BLOCK& victim, liveness_class evict_l
     bool do_update = true;
     uint64_t repl_key = 0;
     if (stlb_llc_prop_ && NAME == "LLC") {
-      // Cross-level: index by the propagated STLB PC carried on the block.
-      if (victim.prop_pc != 0)   repl_key = victim.prop_pc;     // propagated → STLB PC
-      else if (prop_hybrid_)     repl_key = repl_hist_use_addr  // version B: own PC on miss
-                                     ? (victim.address >> OFFSET_BITS) : victim.ip;
-      else                       do_update = false;             // version A: no update on miss
+      const uint64_t own_key = repl_hist_use_addr ? (victim.address >> OFFSET_BITS) : victim.ip;
+      if (prop_ownpc_) {
+        // Version D: gate by the PFN match (prop_pc!=0 = page was STLB-bypassed),
+        // but index by the LLC's own PC.
+        if (victim.prop_pc != 0) repl_key = own_key;
+        else                     do_update = false;
+      } else if (victim.prop_pc != 0) {
+        repl_key = victim.prop_pc;   // A/B propagated → STLB PC
+      } else if (prop_hybrid_) {
+        repl_key = own_key;          // version B: own PC on miss
+      } else {
+        do_update = false;           // version A: no update on miss
+      }
     } else {
       repl_key = repl_hist_use_addr
           ? ((NAME == "LLC") ? (victim.address >> OFFSET_BITS) : victim.address)
@@ -464,6 +472,8 @@ void CACHE::load_predictor_settings()
       stlb_llc_prop_ = true;
     if (const char* v = std::getenv("STLB_LLC_PROP_HYBRID"); v && std::stoull(v))
       prop_hybrid_ = true;
+    if (const char* v = std::getenv("STLB_LLC_PROP_OWNPC"); v && std::stoull(v))
+      prop_ownpc_ = true;
   }
   if (NAME == "cpu0_STLB") {
     if (const char* v = std::getenv("STLB_LIVENESS_BYPASS"); v && std::stoull(v))
@@ -476,6 +486,8 @@ void CACHE::load_predictor_settings()
       stlb_llc_prop_ = true;
     if (const char* v = std::getenv("STLB_LLC_PROP_HYBRID"); v && std::stoull(v))
       prop_hybrid_ = true;
+    if (const char* v = std::getenv("STLB_LLC_PROP_OWNPC"); v && std::stoull(v))
+      prop_ownpc_ = true;
     // STLB bypass shadow (our predictor's own — distinct from Mazumdar's dpPred
     // shadow_table). On the STLB, long-range translation re-reference is normal
     // page re-use, so the shadow must be SMALL: only near-immediate re-references
@@ -643,9 +655,11 @@ bool CACHE::handle_fill(const PACKET& fill_mshr)
     if (stlb_llc_prop_ && NAME == "LLC") {
       const auto pfn = fill_mshr.address >> LOG2_PAGE_SIZE;
       const auto mit = prop_map.find(pfn);
-      if (mit != prop_map.end()) bypass_key = mit->second;  // propagated STLB PC
-      else if (!prop_hybrid_)    prop_ok = false;           // version A: no predict on miss
-      // version B (hybrid): leave bypass_key = own PC, keep predicting
+      if (mit != prop_map.end()) {
+        if (!prop_ownpc_) bypass_key = mit->second;  // A/B: STLB PC; D: keep own PC
+      } else if (!prop_hybrid_) {
+        prop_ok = false;                             // A/D: gate on miss; B: keep own PC
+      }
     }
     // DoA classification first; then, if a periodic recheck is due, suppress the
     // bypass so this fill is inserted as a probe and yields fresh eviction data.

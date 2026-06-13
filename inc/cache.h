@@ -1387,6 +1387,10 @@ class CACHE : public champsim::operable, public MemoryRequestConsumer, public Me
                                     // back to the LLC's own PC for both predict and update. Off
                                     // (version A): a miss means no predict and no update (pure
                                     // cross-level / Mazumdar-like).
+  bool prop_ownpc_{false};          // STLB_LLC_PROP_OWNPC=1 (version D): use the PFN match only as a
+                                    // dead-page GATE (require a prop_map hit) but index repl_hist by
+                                    // the LLC's OWN PC, not the propagated STLB PC. Isolates the gate
+                                    // from the index.
   uint64_t bypass_fire_reset_period_{0}; // BYPASS_FIRE_RESET_PERIOD: reset scores every N bypass fires (global, legacy)
   uint64_t bypass_fire_count_{0};        // running count of bypass fires (for fire-based reset)
 
