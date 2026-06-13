@@ -143,9 +143,9 @@ bool CACHE::dppred_bypass(const PACKET& fill_mshr)
   return true;
 }
 
-// Record a block our liveness predictor just bypassed, so a later re-reference
-// can be detected as a bypass mistake. Tags only (no data) — FIFO eviction.
-void CACHE::shadow_record_bypass(uint64_t block_addr, uint64_t pc)
+// Record a block our liveness predictor just bypassed, with its data, so a later
+// re-reference can be detected and recovered. FIFO eviction.
+void CACHE::shadow_record_bypass(uint64_t block_addr, uint64_t pc, uint64_t data)
 {
   if (bypass_shadow_cap_ == 0) return;
   if (bypass_shadow_.count(block_addr)) return;  // already tracked
@@ -153,20 +153,39 @@ void CACHE::shadow_record_bypass(uint64_t block_addr, uint64_t pc)
     bypass_shadow_.erase(bypass_shadow_fifo_.front());  // no-op if already removed by a hit
     bypass_shadow_fifo_.pop_front();
   }
-  bypass_shadow_[block_addr] = pc;
+  bypass_shadow_[block_addr] = {pc, data};
   bypass_shadow_fifo_.push_back(block_addr);
 }
 
-// True if block_addr was previously bypassed (a re-reference = bypass mistake).
-// Removes the entry and returns the bypassing PC so the caller can penalize it.
-bool CACHE::shadow_check_bypass(uint64_t block_addr, uint64_t& pc_out)
+// On a re-reference to a block we bypassed: a confirmed bypass mistake. Delete
+// the offending PC's history entry (so it must re-earn DoA) and reinsert the
+// block. STLB: serve the stored translation and re-insert, skipping the page
+// walk (translations are stable, so the stored mapping is safe to serve) →
+// returns true, miss satisfied. LLC: returns false so the miss refetches fresh
+// data and reinserts it normally (the erased history entry means it is no longer
+// bypassed) — avoids serving potentially-stale line data from a victim buffer.
+bool CACHE::liveness_bypass_shadow_hit(const PACKET& handle_pkt)
 {
   if (bypass_shadow_cap_ == 0) return false;
-  auto it = bypass_shadow_.find(block_addr);
+  const uint64_t addr = handle_pkt.address >> OFFSET_BITS;
+  auto it = bypass_shadow_.find(addr);
   if (it == bypass_shadow_.end()) return false;
-  pc_out = it->second;
-  bypass_shadow_.erase(it);  // stale fifo slot is cleaned on later eviction
-  return true;
+  const uint64_t pc = it->second.first, data = it->second.second;
+  bypass_shadow_.erase(it);            // stale fifo slot cleaned on later eviction
+  repl_hist_pc.erase_key(pc);          // delete the offending PC's history entry
+  sim_stats.back().liveness_bypass_shadow_hits++;
+  if (NAME == "cpu0_STLB") {
+    auto copy{handle_pkt};
+    copy.data = data;
+    for (auto ret : copy.to_return)
+      ret->return_data(copy);          // serve the recovered translation
+    PACKET fill_pkt = handle_pkt;
+    fill_pkt.data = data;
+    fill_pkt.to_return = {};
+    handle_fill(fill_pkt);             // re-insert into the STLB (PTW skipped)
+    return true;
+  }
+  return false;  // LLC: miss proceeds, refetches fresh data, reinserts (not bypassed)
 }
 
 // Returns true when cbPred predicts this cache block is dead
@@ -611,7 +630,7 @@ bool CACHE::handle_fill(const PACKET& fill_mshr)
           ++bypass_fire_count_ % bypass_fire_reset_period_ == 0)
         repl_hist_pc.reset_scores();
       repl_hist_pc.record_bypass(bypass_key);
-      shadow_record_bypass(fill_mshr.address >> OFFSET_BITS, fill_mshr.ip);
+      shadow_record_bypass(fill_mshr.address >> OFFSET_BITS, fill_mshr.ip, fill_mshr.data);
     }
 
     const bool stlb_lv_doa = stlb_liveness_bypass && NAME == "cpu0_STLB"
@@ -622,7 +641,7 @@ bool CACHE::handle_fill(const PACKET& fill_mshr)
     if (stlb_lv_bypass) {
       sim_stats.back().liveness_bypasses++;
       repl_hist_pc.record_bypass(fill_mshr.ip);
-      shadow_record_bypass(fill_mshr.address >> OFFSET_BITS, fill_mshr.ip);
+      shadow_record_bypass(fill_mshr.address >> OFFSET_BITS, fill_mshr.ip, fill_mshr.data);
     }
 
     const bool bypassed =
@@ -885,16 +904,10 @@ bool CACHE::handle_miss(const PACKET& handle_pkt)
       return true;
 
     // Liveness-bypass shadow: a re-reference to a block our predictor bypassed
-    // is a confirmed mistake. Feed mostly_alive for that PC (zeroes its score in
-    // mode 5) so it stops bypassing. The miss proceeds normally (fetch from DRAM).
-    if (bypass_shadow_cap_ > 0) {
-      uint64_t shadow_pc;
-      if (shadow_check_bypass(handle_pkt.address >> OFFSET_BITS, shadow_pc)) {
-        repl_hist_pc.update(shadow_pc, liveness_class::mostly_alive,
-                            static_cast<int64_t>(thd_dead), static_cast<int64_t>(thd_doa));
-        sim_stats.back().liveness_bypass_shadow_hits++;
-      }
-    }
+    // is a confirmed mistake. Delete the PC's history entry and reinsert the
+    // block (STLB: serve the stored translation, skipping the PTW → returns true).
+    if (liveness_bypass_shadow_hit(handle_pkt))
+      return true;
 
     if (mshr_full)  // not enough MSHR resource
       return false; // TODO should we allow prefetches anyway if they will not be filled to this level?
