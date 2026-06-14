@@ -1344,11 +1344,15 @@ class CACHE : public champsim::operable, public MemoryRequestConsumer, public Me
   uint64_t st_size = 2;   // shadow table capacity
 
   HistTable phist;           // PC → confidence (dpPred)
-  // cbPred bHIST: two modes selected by BHIST_MODE env var.
+  // cbPred bHIST: three modes selected by BHIST_MODE env var.
   //   "flat" (default): HistTable keyed by block address (addr-indexed, exp004 style)
-  //   "pc":  PCPartitionedTable keyed by (dpPred PC, block address) — requires PFQ hit
+  //   "pc":     PCPartitionedTable keyed by (dpPred PC, block address) — requires PFQ hit
+  //   "pconly": HistTable (bhist_flat) keyed by the dpPred PC ALONE — aggregates a PC's
+  //             deadness across all its addresses (like our repl_hist), to isolate the
+  //             per-PC-aggregate vs per-(PC,address) difference in the Mazumdar→ours bridge.
   bool use_pc_bhist = false;
-  HistTable          bhist_flat;  // used when use_pc_bhist=false
+  bool cbpred_pc_only_ = false;   // BHIST_MODE=pconly: bhist_flat keyed by dp_pc only
+  HistTable          bhist_flat;  // used when use_pc_bhist=false (keyed by address, or dp_pc if pc_only)
   PCPartitionedTable bhist_pc;    // used when use_pc_bhist=true
   std::deque<std::tuple<uint64_t, uint64_t, uint64_t>> shadow_table; // (VPN, data, PC)
 

@@ -205,7 +205,13 @@ bool CACHE::cbpred_bypass(const PACKET& fill_mshr)
   const uint64_t block_addr = fill_mshr.address >> OFFSET_BITS;
   uint64_t confidence;
   uint64_t dp_pc = 0;
-  if (use_pc_bhist) {
+  if (cbpred_pc_only_) {
+    // PC-only: aggregate per dpPred PC (needs a PFQ hit for the PC), keyed in bhist_flat.
+    if (!in_pfq) return false;
+    dp_pc = pfq_it->second;
+    confidence = (uint64_t)std::max(int64_t{0}, bhist_flat.get_score(dp_pc));
+    record_characterization(dp_pc, block_addr);
+  } else if (use_pc_bhist) {
     // PC-indexed mode requires a PFQ hit to obtain the dpPred PC.
     if (!in_pfq) return false;
     dp_pc = pfq_it->second;
@@ -239,7 +245,9 @@ void CACHE::update_eviction_counters(const BLOCK& victim, liveness_class evict_l
   if (dppred && NAME == "cpu0_STLB")
     phist.update(victim.ip, bypass_lv);
   else if (cbpred && NAME == "LLC" && victim.dp) {
-    if (use_pc_bhist)
+    if (cbpred_pc_only_)
+      bhist_flat.update(victim.dp_pc, bypass_lv);                 // PC-only: aggregate per dp_pc
+    else if (use_pc_bhist)
       bhist_pc.update(victim.dp_pc, victim.address >> OFFSET_BITS, bypass_lv);
     else
       bhist_flat.update(victim.address >> OFFSET_BITS, bypass_lv);
@@ -358,6 +366,9 @@ void CACHE::load_predictor_settings()
       const uint64_t bw      = getenv_uint64("BHIST_WAYS",    4096);
       const uint64_t buf_cap = getenv_uint64("BHIST_BUF_CAP",    0);
       bhist_flat = HistTable(bw, parse_policy(bhist_repl), buf_cap);
+      // pconly: same bhist_flat HistTable, but keyed by the dpPred PC alone (set below).
+      if (const char* m = std::getenv("BHIST_MODE"); m && std::string_view(m) == "pconly")
+        cbpred_pc_only_ = true;
     }
   }
 
