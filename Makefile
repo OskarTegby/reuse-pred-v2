@@ -42,6 +42,21 @@ configclean: clean
 $(filter-out test, $(sort $(build_dirs) $(module_dirs))): | $(dir $@)
 	-mkdir $@
 
+# Build provenance: regenerate inc/git_version.h every build, but rewrite it only
+# when the SHA/dirty state actually changes (cmp), so main.o recompiles just when
+# provenance changes. Core objects depend on it (order-only) so it exists first.
+.PHONY: FORCE
+$(ROOT_DIR)/inc/git_version.h: FORCE
+	@sha=$$(git -C $(ROOT_DIR) rev-parse --short=12 HEAD 2>/dev/null || echo unknown); \
+	dirty=$$(git -C $(ROOT_DIR) status --porcelain 2>/dev/null | grep -q . && echo dirty || echo clean); \
+	{ echo '#ifndef CHAMPSIM_GIT_VERSION_H'; echo '#define CHAMPSIM_GIT_VERSION_H'; \
+	  echo "#define CHAMPSIM_GIT_SHA \"$$sha\""; echo "#define CHAMPSIM_GIT_DIRTY \"$$dirty\""; \
+	  echo '#endif'; } > $@.tmp; \
+	cmp -s $@.tmp $@ 2>/dev/null && rm -f $@.tmp || mv $@.tmp $@
+FORCE:
+
+$(build_objs): | $(ROOT_DIR)/inc/git_version.h
+
 # All .o files should be made like .cc files
 $(build_objs) $(module_objs):
 	$(COMPILE.cc) $(OUTPUT_OPTION) $<

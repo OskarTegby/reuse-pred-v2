@@ -16,13 +16,27 @@
 
 #include <algorithm>
 #include <array>
+#include <cstdio>
+#include <cstdlib>
+#include <ctime>
 #include <fstream>
 #include <functional>
 #include <getopt.h>
 #include <iostream>
 #include <signal.h>
 #include <string>
+#include <unistd.h>
 #include <vector>
+
+#if __has_include("git_version.h")
+#include "git_version.h"
+#endif
+#ifndef CHAMPSIM_GIT_SHA
+#define CHAMPSIM_GIT_SHA "unknown"
+#endif
+#ifndef CHAMPSIM_GIT_DIRTY
+#define CHAMPSIM_GIT_DIRTY "unknown"
+#endif
 
 #include "cache.h"
 #include "champsim.h"
@@ -115,6 +129,63 @@ int main(int argc, char** argv)
   std::cout << "Number of CPUs: " << std::size(gen_environment.cpu_view()) << std::endl;
   std::cout << "Page size: " << PAGE_SIZE << std::endl;
   std::cout << std::endl;
+
+  // Dump full run configuration + build provenance to a sidecar file named by the
+  // launcher via CHAMPSIM_RUN_CONFIG. Cache/TLB geometry is compile-time and is
+  // otherwise never recorded anywhere, so this lets us pinpoint exactly what
+  // settings (and which source commit) produced a result. Kept out of stdout.
+  if (const char* cfg_path = std::getenv("CHAMPSIM_RUN_CONFIG"); cfg_path != nullptr && cfg_path[0] != '\0') {
+    if (std::ofstream cfg{cfg_path}; cfg) {
+      char host[256] = {0};
+      if (gethostname(host, sizeof(host) - 1) != 0)
+        std::snprintf(host, sizeof(host), "%s", "unknown");
+      std::time_t now = std::time(nullptr);
+      char tbuf[64] = "unknown";
+      if (std::tm* lt = std::localtime(&now); lt != nullptr)
+        std::strftime(tbuf, sizeof(tbuf), "%Y-%m-%dT%H:%M:%S", lt);
+
+      cfg << "# ChampSim run configuration and build provenance\n";
+      cfg << "git_sha=" << CHAMPSIM_GIT_SHA << "\n";
+      cfg << "git_dirty=" << CHAMPSIM_GIT_DIRTY << "\n";
+      cfg << "build_time=" << __DATE__ " " __TIME__ << "\n";
+      cfg << "run_time=" << tbuf << "\n";
+      cfg << "hostname=" << host << "\n";
+      cfg << "cmdline=";
+      for (int i = 0; i < argc; ++i)
+        cfg << (i ? " " : "") << argv[i];
+      cfg << "\n";
+      cfg << "num_cpus=" << std::size(gen_environment.cpu_view()) << "\n";
+      cfg << "page_size=" << PAGE_SIZE << "\n";
+      cfg << "block_size=" << BLOCK_SIZE << "\n";
+      cfg << "warmup_instructions=" << phases[0].length << "\n";
+      cfg << "simulation_instructions=" << phases[1].length << "\n";
+      cfg << "dram_channels=" << DRAM_CHANNELS << " dram_width_bits=" << (8 * DRAM_CHANNEL_WIDTH)
+          << " dram_io_freq_MTps=" << DRAM_IO_FREQ << "\n";
+
+      cfg << "# caches/TLBs: NAME sets ways line_bytes mshr fill_latency\n";
+      for (CACHE& cache : gen_environment.cache_view())
+        cfg << "cache " << cache.NAME << " sets=" << cache.NUM_SET << " ways=" << cache.NUM_WAY
+            << " line=" << (1U << cache.OFFSET_BITS) << " mshr=" << cache.MSHR_SIZE
+            << " fill_latency=" << cache.FILL_LATENCY << "\n";
+
+      cfg << "# traces\n";
+      for (const auto& t : trace_names)
+        cfg << "trace=" << t << "\n";
+
+      cfg << "# environment knobs (value or <unset>)\n";
+      static const char* const env_keys[] = {
+          "SCORING_MODE", "THD_DOA", "THD_DEAD", "LLC_THD_DOA", "LLC_THD_DEAD", "STLB_THD_DOA", "STLB_THD_DEAD",
+          "MID_THD", "LOW_THD", "BHIST_MODE", "SRRIP_LIVE_TARGET", "LRU_LIVE_HIT_INIT",
+          "LIVENESS_BYPASS", "BYPASS_THD", "STLB_LIVENESS_BYPASS", "STLB_BYPASS_THD",
+          "CBPRED", "DPPRED", "CBPRED_IDX", "DPPRED_IDX", "CBPRED_KEY", "MAZ_UNBOUNDED", "BHIST_HASH", "PHIST_HASH",
+          "BHIST_WAYS", "BHIST_PC_WAYS", "REPL_HIST_LLC_CAP", "REPL_HIST_STLB_CAP", "REPL_HIST_BUF_CAP", "REPL_HIST_REPL",
+          "PFQ_CAP", "LIVENESS_CHAR", "ST_SIZE", "JOB_ID", "SGE_TASK_ID"};
+      for (const char* k : env_keys) {
+        const char* v = std::getenv(k);
+        cfg << "env " << k << "=" << (v ? v : "<unset>") << "\n";
+      }
+    }
+  }
 
   auto phase_stats = champsim::main(gen_environment, phases, knob_cloudsuite, trace_names);
 

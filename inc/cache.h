@@ -104,6 +104,9 @@ public:
   // Enable periodic occupancy checkpoints to stderr every `interval` update() calls.
   // Call after construction; name labels the output lines.
   void set_scoring_mode(int m) { scoring_mode_ = m; }
+  // Hash the key into `bits` bits before indexing (models Mazumdar's finite,
+  // hashed history table). bits==0 → raw key (default, our idealized table).
+  void set_hash(unsigned bits) { hash_bits_ = bits; }
 
   void set_checkpoint(uint64_t interval, std::string name) {
     checkpoint_interval_ = interval;
@@ -179,6 +182,7 @@ public:
   uint64_t recheck_probes() const { return recheck_probes_; }
 
   int64_t get_score(uint64_t key) const {
+    key = hk_(key);
     if (unbounded_) {
       auto it = unmap_.find(key);
       return it != unmap_.end() ? it->second.second : 0;  // doa_count used for bypass
@@ -199,6 +203,7 @@ public:
   // Classify a key against thd_doa / thd_dead, consulting main table then
   // promotion buffer. Tracks which structure resolved the classification in stats.
   liveness_class classify(uint64_t key, uint64_t thd_doa, uint64_t thd_dead) const {
+    key = hk_(key);
     if (unbounded_) {
       auto it = unmap_.find(key);
       if (it != unmap_.end()) {
@@ -419,6 +424,7 @@ public:
               int64_t thd_dead = 0, int64_t thd_doa = 0,
               uint64_t lifespan = 0) {
     if (!unbounded_ && cap_ == 0 && buf_cap_ == 0) return;
+    key = hk_(key);
     seen_pcs_.insert(key);
     ++update_count_;
     if (thd_dead > 0) thd_dead_cache_ = thd_dead;
@@ -632,6 +638,7 @@ public:
   }
 
   void reset(uint64_t key) {
+    key = hk_(key);
     for (auto& e : entries_)
       if (e.valid && e.key == key) { e.score = 0; return; }
   }
@@ -656,6 +663,17 @@ private:
     }
     return 0;
   }
+
+  // Fold the low 32 bits of val into `bits` bits by XOR (Mazumdar-style hash).
+  static uint64_t fold_(uint64_t val, unsigned bits) {
+    uint64_t result = 0;
+    const uint64_t mask = (1ULL << bits) - 1;
+    for (unsigned i = 0; i < 32u / bits; ++i, val >>= bits)
+      result ^= (val & mask);
+    return result;
+  }
+  // Apply the optional hash to a key (identity when hash_bits_ == 0).
+  uint64_t hk_(uint64_t key) const { return hash_bits_ ? fold_(key, hash_bits_) : key; }
 
   struct Entry {
     uint64_t key              = 0;
@@ -723,6 +741,7 @@ private:
   //     adapt via EMA over block lifespans passed in the lifespan= arg of update(). Stability
   //     property: at a 50/50 MA/DoA boundary the score is exactly stationary.
   int scoring_mode_ = 2;
+  unsigned hash_bits_ = 0;  // >0 → hash keys into this many bits (faithful Mazumdar)
   // Mode 6: per-class EMA of observed block lifespans and resulting proportional deltas.
   // Indexed: [0]=DoA  [1]=mostly_dead  [2]=mostly_alive
   std::array<uint64_t, 3> avg_life_   = {};     // EMA of lifespan in cycles
@@ -1352,6 +1371,11 @@ class CACHE : public champsim::operable, public MemoryRequestConsumer, public Me
   //             per-PC-aggregate vs per-(PC,address) difference in the Mazumdar→ours bridge.
   bool use_pc_bhist = false;
   bool cbpred_pc_only_ = false;   // BHIST_MODE=pconly: bhist_flat keyed by dp_pc only
+  bool cbpred_access_pc_ = false; // CBPRED_KEY set: use the clean ungated cbPred path
+                                  // (learn every eviction, evict_lv + thresholds)
+  bool cbpred_key_addr_  = false; // CBPRED_KEY=block_addr: key that clean path by block
+                                  // address instead of the demand-access PC. Lets us vary
+                                  // indexing and scoring ONE at a time in the morph.
   HistTable          bhist_flat;  // used when use_pc_bhist=false (keyed by address, or dp_pc if pc_only)
   PCPartitionedTable bhist_pc;    // used when use_pc_bhist=true
   std::deque<std::tuple<uint64_t, uint64_t, uint64_t>> shadow_table; // (VPN, data, PC)

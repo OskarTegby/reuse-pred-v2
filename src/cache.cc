@@ -192,6 +192,17 @@ bool CACHE::liveness_bypass_shadow_hit(const PACKET& handle_pkt)
 // (its page was previously bypassed by dpPred and its block counter is high).
 bool CACHE::cbpred_bypass(const PACKET& fill_mshr)
 {
+  if (cbpred_access_pc_) {
+    // Morph rung: clean ungated predictor. Key by block address (CBPRED_KEY=block_addr)
+    // or the demand-access PC (CBPRED_KEY=access_pc) so indexing can be varied alone.
+    // bconf_thd plays the role of (bypass_thd - 1).
+    const uint64_t key = cbpred_key_addr_ ? (fill_mshr.address >> OFFSET_BITS) : fill_mshr.ip;
+    const uint64_t conf = (uint64_t)std::max(int64_t{0}, bhist_flat.get_score(key));
+    if (conf <= bconf_thd)
+      return false;
+    sim_stats.back().llc_bypasses++;
+    return true;
+  }
   const auto pfn    = fill_mshr.address >> LOG2_PAGE_SIZE;
   const auto pfq_it = std::find_if(pfq.begin(), pfq.end(),
                                    [pfn](const auto& e){ return e.first == pfn; });
@@ -244,13 +255,21 @@ void CACHE::update_eviction_counters(const BLOCK& victim, liveness_class evict_l
   const liveness_class bypass_lv = victim.accessed ? liveness_class::mostly_alive : liveness_class::doa;
   if (dppred && NAME == "cpu0_STLB")
     phist.update(victim.ip, bypass_lv);
-  else if (cbpred && NAME == "LLC" && victim.dp) {
-    if (cbpred_pc_only_)
-      bhist_flat.update(victim.dp_pc, bypass_lv);                 // PC-only: aggregate per dp_pc
-    else if (use_pc_bhist)
-      bhist_pc.update(victim.dp_pc, victim.address >> OFFSET_BITS, bypass_lv);
-    else
+  else if (cbpred && NAME == "LLC") {
+    if (cbpred_access_pc_) {
+      // Morph rung: learn on every eviction, same classification (evict_lv) + thresholds
+      // for both key choices, so only the key (and BHIST_SCORING) varies between rungs.
+      const uint64_t key = cbpred_key_addr_ ? (victim.address >> OFFSET_BITS) : victim.ip;
+      bhist_flat.update(key, evict_lv, thd_dead, thd_doa, 0);
+    } else if (cbpred_pc_only_) {
+      if (victim.dp) bhist_flat.update(victim.dp_pc, bypass_lv);  // PC-only: per dp_pc (needs PFQ)
+    } else if (use_pc_bhist) {
+      if (victim.dp) bhist_pc.update(victim.dp_pc, victim.address >> OFFSET_BITS, bypass_lv);
+    } else if (victim.dp || !pfq_gate) {
+      // Per-address: when the PFQ gate is off (CBPRED_NO_PFQ) learn on every
+      // eviction so the ungated rung has data even with dpPred disabled.
       bhist_flat.update(victim.address >> OFFSET_BITS, bypass_lv);
+    }
   }
 
   // Replacement-guidance history: delegated to HistTable (bounded or unbounded).
@@ -351,9 +370,19 @@ void CACHE::load_predictor_settings()
     const char* phist_repl = std::getenv("PHIST_REPL") ? std::getenv("PHIST_REPL") : hist_repl;
     const char* bhist_repl = std::getenv("BHIST_REPL") ? std::getenv("BHIST_REPL") : hist_repl;
 
+    // Morph study (branch maz-morph-unbounded): flags to gradually turn Mazumdar's
+    // bounded/hashed/gated predictor into our idealized one.
+    //   MAZ_UNBOUNDED=1   → bhist/phist become unbounded (idealized, like ours)
+    //   {B,P}HIST_HASH=1  → bounded table hashes the key into log2(ways) bits
+    //                       (faithful Mazumdar: finite hashed index with aliasing)
+    const bool maz_unbounded = getenv_uint64("MAZ_UNBOUNDED", 0) != 0;
+    auto log2_floor = [](uint64_t n) { unsigned b = 0; while (n > 1) { n >>= 1; ++b; } return b; };
+
     const uint64_t pw        = getenv_uint64("PHIST_WAYS",    1024);
     const uint64_t phist_buf = getenv_uint64("PHIST_BUF_CAP",    0);
-    phist = HistTable(pw, parse_policy(phist_repl), phist_buf);
+    phist = maz_unbounded ? HistTable() : HistTable(pw, parse_policy(phist_repl), phist_buf);
+    if (!maz_unbounded && getenv_uint64("PHIST_HASH", 0))
+      phist.set_hash(log2_floor(pw));
 
     if (const char* v = std::getenv("BHIST_MODE"); v && std::string_view(v) == "pc") {
       use_pc_bhist = true;
@@ -365,11 +394,21 @@ void CACHE::load_predictor_settings()
       use_pc_bhist = false;
       const uint64_t bw      = getenv_uint64("BHIST_WAYS",    4096);
       const uint64_t buf_cap = getenv_uint64("BHIST_BUF_CAP",    0);
-      bhist_flat = HistTable(bw, parse_policy(bhist_repl), buf_cap);
+      bhist_flat = maz_unbounded ? HistTable() : HistTable(bw, parse_policy(bhist_repl), buf_cap);
+      if (!maz_unbounded && getenv_uint64("BHIST_HASH", 0))
+        bhist_flat.set_hash(log2_floor(bw));
+      // bhist scoring mode (default 2 = Mazumdar dead-counter). Set BHIST_SCORING=5
+      // to give cbPred our liveness scoring, used by the access-PC convergence rung.
+      bhist_flat.set_scoring_mode(static_cast<int>(getenv_uint64("BHIST_SCORING", 2)));
       // pconly: same bhist_flat HistTable, but keyed by the dpPred PC alone (set below).
       if (const char* m = std::getenv("BHIST_MODE"); m && std::string_view(m) == "pconly")
         cbpred_pc_only_ = true;
     }
+  }
+  if (const char* v = std::getenv("CBPRED_KEY"); v) {
+    const std::string_view k(v);
+    if      (k == "access_pc")  cbpred_access_pc_ = true;
+    else if (k == "block_addr") { cbpred_access_pc_ = true; cbpred_key_addr_ = true; }
   }
 
   if (const char* v = std::getenv("CBPRED_NO_PFQ"); v && std::stoull(v))
