@@ -953,18 +953,13 @@ bool CACHE::try_hit(const PACKET& handle_pkt)
       ret->return_data(copy);
 
     way->dirty = (handle_pkt.type == WRITE);
-    // A writeback hit is dirty data landing from L2, not a read of the block,
-    // so it is not evidence of read reuse. We therefore do not update the
-    // liveness signals on writeback hits: neither the Accessed bit (which
-    // distinguishes DoA from reused blocks) nor last_hit_cycle (which drives
-    // the mostly-dead vs mostly-alive halflife split). This keeps the liveness
-    // classification based on genuine reads only. Both fields are used solely
-    // by the LLC/STLB liveness mechanism.
-    if (handle_pkt.type != WRITE) {
-      if (NAME == "cpu0_STLB" || NAME == "LLC")
-        way->accessed = true;
-      way->last_hit_cycle = current_cycle;
-    }
+    // PRE-GATE behavior (revert of f082f78, for characterization reproduction):
+    // every hit -- including writeback hits -- sets the Accessed bit and updates
+    // last_hit_cycle. This branch exists only to reproduce the pre-gate liveness
+    // results; main/maz-morph-unbounded keeps the writeback-excluding gate.
+    if (NAME == "cpu0_STLB" || NAME == "LLC")
+      way->accessed = true;
+    way->last_hit_cycle = current_cycle;
 
     // update prefetch stats and reset prefetch bit
     if (way->prefetch && !handle_pkt.prefetch_from_this) {
