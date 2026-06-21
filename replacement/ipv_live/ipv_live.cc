@@ -70,7 +70,7 @@ ipv_t parse_ipv(const char* var, ipv_t dflt)
   buf[sizeof(buf) - 1] = '\0';
   ipv_t v = dflt;
   char* tok = std::strtok(buf, ",:");  // accept both ',' and ':' so qsub -v can use ':'
-  for (int i = 0; i < 5 && tok; ++i, tok = std::strtok(nullptr, ","))
+  for (int i = 0; i < 5 && tok; ++i, tok = std::strtok(nullptr, ",:"))
     v[i] = std::atoi(tok);
   return v;
 }
