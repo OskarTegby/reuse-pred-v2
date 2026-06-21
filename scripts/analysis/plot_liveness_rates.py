@@ -19,14 +19,19 @@ RESULTS = os.path.join(ROOT, "results")
 OUT = os.path.join(RESULTS, "plots", "liveness_rates.png")
 
 SUITES = {
-    "DPC3":   ("dpc3_thd_rebaseline_20260605_2316",  "lru"),
-    "GAP":    ("gap_thd_rebaseline_20260605_2316",   "lru"),
-    "GMS":    ("gms_thd_rebaseline_20260605_2316",   "lru"),
-    "Google": ("google_repl_pol_20260522_0722",       "lru_baseline"),
-    "Ligra":  ("ligra_thd_rebaseline_20260605_2316", "lru"),
-    "ML":     ("ml_thd_rebaseline_20260605_2316",    "lru"),
-    "QMM":    ("qmm_thd_rebaseline_20260604_2307",   "lru"),
+    "DPC3":   ("livchar_dpc3full_20260616_1251/dpc3", ""),
+    "GAP":    ("livchar_unified_20260616_1249/gap",   ""),
+    "GMS":    ("livchar_unified_20260616_1249/gms",   ""),
+    "Google": ("liveness_char_20260608_0006/google",  ""),
+    "Ligra":  ("livchar_unified_20260616_1249/ligra", ""),
+    "ML":     ("livchar_unified_20260616_1249/ml",    ""),
+    "QMM":    ("livchar_unified_20260616_1249/qmm",   ""),
 }
+# Provenance for these directories: see results/paper/FIGURE_PROVENANCE.md
+# (Figure 1 / fig:liveness). DPC3/GAP/GMS/Ligra/ML/QMM verified bit-for-bit
+# against the original liveness_char_20260608_0006 run; Google is carried
+# over from that run unverified under the current commit (predates the
+# run_config.txt provenance dump).
 
 LLC_PAT = re.compile(
     r"LLC LIVENESS EVICTIONS:\s+(\d+)\s+"

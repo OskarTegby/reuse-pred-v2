@@ -58,16 +58,10 @@ RUN_LABEL="$run_label",BINARY="$BINARY",\
   echo "  [jid=${jid}] ${name}"
 }
 
-# (a) Old: single threshold, no mostly_dead tier, no bypass
-submit_config "old_thd4" \
-  "THD_DEAD=0,THD_DOA=4,LIVENESS_BYPASS=0"
+# THD_DOA sweep with THD_DEAD=0, no bypass — find equivalent operating point
+for thd in 1 2 4 8 16; do
+  submit_config "no_dead_thd${thd}" \
+    "THD_DEAD=0,THD_DOA=${thd},LIVENESS_BYPASS=0"
+done
 
-# (b) New: three-tier, no bypass
-submit_config "new_thd4_dead2" \
-  "THD_DEAD=2,THD_DOA=4,LIVENESS_BYPASS=0"
-
-# (c) New: three-tier + bypass
-submit_config "new_thd4_dead2_bypass6" \
-  "THD_DEAD=2,THD_DOA=4,BYPASS_THD=6,LIVENESS_BYPASS=1"
-
-finish_submission $(( N_TRACES * 3 )) "${BASE_LABEL}"
+finish_submission $(( N_TRACES * 5 )) "${BASE_LABEL}"

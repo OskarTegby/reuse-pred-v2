@@ -5,11 +5,16 @@ Shows SRRIP-Live and IPV-Live geomean speedup vs LRU across DoA thresholds
 {1,2,4,8,16} for all 7 benchmark suites. Grouped bars per threshold.
 Layout: 2 rows x 4 cols (last cell hidden). Shared y-axis.
 
-Data sources:
-  SRRIP-Live: results/{suite}_srrip_live_thd_pc_*/srrip_live_thd{N}/
-  IPV-Live:   results/{suite}_ipv_live_thd_pc_*/ipv_live_thd{N}/
-              results/cluster/{suite}_ipv_live_thd_*/ipv_live_thd{N}/  (dpc3/qmm/google)
-  LRU:        results/{suite}_repl_pol_20260522_0722/lru_baseline/
+Data sources (6 suites): June 2026 rebaseline dirs
+  LRU:        results/{suite}_thd_rebaseline_20260605_2316/lru/
+  SRRIP-Live: results/{suite}_thd_rebaseline_20260605_2316/srrip_live_llc/thd{N}/
+  IPV-Live:   results/{suite}_thd_rebaseline_20260605_2316/ipv_live_llc/thd{N}/
+  (qmm uses qmm_thd_rebaseline_20260604_2307)
+
+Google (no rebaseline):
+  LRU:        results/google_repl_pol_20260522_0722/lru_baseline/
+  SRRIP-Live: results/google_srrip_live_thd_pc_20260513_0056/srrip_live_thd{N}/
+  IPV-Live:   results/cluster/google_ipv_live_thd_pc_20260514_1432/ipv_live_thd{N}/
 """
 
 import sys
@@ -35,28 +40,20 @@ SUITE_LABELS = {
     "ml":     "ML",
 }
 
-SRRIP_DIRS = {
-    "dpc3":   "dpc3_srrip_live_thd_pc_20260513_0055",
-    "qmm":    "qmm_srrip_live_thd_pc_20260513_0056",
-    "google": "google_srrip_live_thd_pc_20260513_0056",
-    "gap":    "gap_srrip_live_thd_pc_20260520_0059",
-    "gms":    "gms_srrip_live_thd_pc_20260520_0128",
-    "ligra":  "ligra_srrip_live_thd_pc_20260520_0059",
-    "ml":     "ml_srrip_live_thd_pc_20260520_0059",
+# June 2026 rebaseline directories (Config C, vs LRU)
+REBASE_DIRS = {
+    "dpc3":  "dpc3_thd_rebaseline_20260605_2316",
+    "gap":   "gap_thd_rebaseline_20260605_2316",
+    "gms":   "gms_thd_rebaseline_20260605_2316",
+    "ligra": "ligra_thd_rebaseline_20260605_2316",
+    "ml":    "ml_thd_rebaseline_20260605_2316",
+    "qmm":   "qmm_thd_rebaseline_20260604_2307",
 }
 
-# dpc3/qmm/google IPV-Live data lives under results/cluster/
-IPV_DIRS = {
-    "dpc3":   ("cluster", "dpc3_ipv_live_thd_addr_20260514_1432"),
-    "qmm":    ("cluster", "qmm_ipv_live_thd_pc_20260514_1432"),
-    "google": ("cluster", "google_ipv_live_thd_pc_20260514_1432"),
-    "gap":    ("results", "gap_ipv_live_thd_pc_20260520_0819"),
-    "gms":    ("results", "gms_ipv_live_thd_pc_20260520_0819"),
-    "ligra":  ("results", "ligra_ipv_live_thd_pc_20260520_0819"),
-    "ml":     ("results", "ml_ipv_live_thd_pc_20260520_0819"),
-}
-
-LRU_SUBDIRS = {s: f"{s}_repl_pol_20260522_0722/lru_baseline" for s in SUITES}
+# Google has no rebaseline — use original sweep directories
+GOOGLE_LRU_DIR   = "google_repl_pol_20260522_0722/lru_baseline"
+GOOGLE_SRRIP_DIR = "google_srrip_live_thd_pc_20260513_0056"
+GOOGLE_IPV_DIR   = "cluster/google_ipv_live_thd_pc_20260514_1432"
 
 COLOR_SRRIP = "#2ca02c"
 COLOR_IPV   = "#9467bd"
@@ -114,16 +111,22 @@ def main():
     # ── Pass 1: collect all data ──────────────────────────────────────────────
     suite_data = {}
     for suite in SUITES:
-        lru_ipcs = load_ipcs(results_dir / LRU_SUBDIRS[suite])
+        if suite == "google":
+            lru_ipcs  = load_ipcs(results_dir / GOOGLE_LRU_DIR)
+            srrip_spds = speedups_for_policy(
+                results_dir / GOOGLE_SRRIP_DIR, "srrip_live_thd", thresholds, lru_ipcs)
+            ipv_spds   = speedups_for_policy(
+                results_dir / GOOGLE_IPV_DIR, "ipv_live_thd", thresholds, lru_ipcs)
+        else:
+            rbase     = results_dir / REBASE_DIRS[suite]
+            lru_ipcs  = load_ipcs(rbase / "lru")
+            srrip_spds = speedups_for_policy(
+                rbase / "srrip_live_llc", "thd", thresholds, lru_ipcs)
+            ipv_spds   = speedups_for_policy(
+                rbase / "ipv_live_llc", "thd", thresholds, lru_ipcs)
+
         if not lru_ipcs:
             continue
-
-        srrip_spds = speedups_for_policy(
-            results_dir / SRRIP_DIRS[suite], "srrip_live_thd", thresholds, lru_ipcs)
-
-        loc, dirname = IPV_DIRS[suite]
-        ipv_base = (cluster_dir if loc == "cluster" else results_dir) / dirname
-        ipv_spds = speedups_for_policy(ipv_base, "ipv_live_thd", thresholds, lru_ipcs)
 
         suite_data[suite] = {
             "srrip": srrip_spds, "ipv": ipv_spds, "n": len(lru_ipcs)

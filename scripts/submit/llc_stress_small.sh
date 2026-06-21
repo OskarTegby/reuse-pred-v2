@@ -1,23 +1,23 @@
 #!/bin/bash
 set -euo pipefail
-# LLC history table stress test: very small capacities (buf=0) to verify that
-# performance converges to plain SRRIP as the table shrinks to near-zero.
+# LLC history table stress test: very small capacities (buf=0).
 #
-# Design: STLB unbounded, LLC table swept {1..128} with NO promotion buffer
-# (REPL_HIST_BUF_CAP not set → buf=0). buf=0 is essential here: with buf=128
-# even cap=4 would have effective capacity 132, masking the degradation.
+# Design: STLB unbounded liveness (STLB_MID_THD=1), LLC table swept {8,32,64,128}
+# with NO promotion buffer (REPL_HIST_BUF_CAP not set → buf=0).
 #
-# Expected: at cap=1..2 classify() finds no history for almost every PC and
-# returns mostly_alive (the default), which is identical to SRRIP. The geomean
-# should converge to the SRRIP baseline (+0.00% vs SRRIP).
+# Proper baseline: SRRIP_LIVE_TARGET=stlb — STLB guided + LLC plain SRRIP
+# (use_liveness=false → mostly_alive → SRRIP). This is the zero-LLC-contribution
+# reference. As the LLC cap shrinks, the test points converge to this baseline
+# and the speedup vs this baseline should approach zero.
 #
-# Baselines (LRU, SRRIP) reused from qmm_thd_rebaseline_20260604_2307.
+# LRU + plain SRRIP baselines reused from qmm_thd_rebaseline_20260604_2307.
 BASE=~/ChampSim-dev
 TRACES="$BASE/trace-files/QMM"; EXT="champsimtrace.xz"
 W=50000000; S=100000000
 DATE=$(date +%Y%m%d_%H%M)
 LABEL="qmm_llc_stress_${DATE}"
-COMMON="BHIST_MODE=pc,SRRIP_LIVE_TARGET=both,LLC_MID_THD=4,STLB_MID_THD=1"
+BOTH_COMMON="BHIST_MODE=pc,SRRIP_LIVE_TARGET=both,LLC_MID_THD=4,STLB_MID_THD=1"
+STLB_ONLY="BHIST_MODE=pc,SRRIP_LIVE_TARGET=stlb,STLB_MID_THD=1"
 
 submit() {
   local label="$1" binary="$2" jobname="$3"; shift 3
@@ -31,12 +31,20 @@ RUN_LABEL="$label",BINARY="$binary",$* \
   echo "  [jid=$jid] $label"
 }
 
-echo "--- LLC stress (SRRIP-Live, buf=0, STLB unbounded) ---"
+# Baseline: STLB fully guided + LLC plain SRRIP (use_liveness=false → mostly_alive).
+# This is the zero-LLC-contribution reference. Cap runs are compared against this;
+# at cap→0 the speedup should converge to 0 (not to plain SRRIP which would include
+# STLB contribution).
+echo "--- Baseline: STLB guided + LLC SRRIP ---"
+submit "$LABEL/stlb_only_baseline" champsim_both_srrip_live "lss_base" \
+  "$STLB_ONLY"
+
+echo "--- LLC stress: STLB guided + LLC liveness at varying cap ---"
 for cap in 8 32 64 128; do
   submit "$LABEL/cap${cap}" champsim_both_srrip_live "lss_${cap}" \
-    "REPL_HIST_LLC_CAP=${cap},$COMMON"
+    "REPL_HIST_LLC_CAP=${cap},$BOTH_COMMON"
 done
 
 echo ""
-echo "Submitted: 4 arrays x 45 traces = 180 jobs"
+echo "Submitted: 5 arrays x 45 traces = 225 jobs"
 echo "Label: $LABEL"

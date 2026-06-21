@@ -55,6 +55,7 @@ export REPL_POL=${REPL_POL:-lru}
 export PFQ_CAP=${PFQ_CAP:-8}
 export LIVENESS_CHAR=${LIVENESS_CHAR:-0}
 export SRRIP_LIVE_TARGET=${SRRIP_LIVE_TARGET:-}
+export LRU_LIVE_HIT_INIT=${LRU_LIVE_HIT_INIT:-0}
 export LOW_THD=${LOW_THD:-$MID_THD}
 export LLC_MID_THD=${LLC_MID_THD:-}
 export LLC_LOW_THD=${LLC_LOW_THD:-}
@@ -67,6 +68,13 @@ export REPL_HIST_SHADOW_CAP=${REPL_HIST_SHADOW_CAP:-0}
 export REPL_HIST_CHECKPOINT=${REPL_HIST_CHECKPOINT:-0}
 export REPL_HIST_REPL=${REPL_HIST_REPL:-lfu_doa}
 export ST_SIZE=${ST_SIZE:-2}
+export SCORING_MODE=${SCORING_MODE:-2}
+export THD_DOA=${THD_DOA:-1}
+export THD_DEAD=${THD_DEAD:-0}
+[ -n "${LLC_THD_DOA+x}" ]  && export LLC_THD_DOA
+[ -n "${LLC_THD_DEAD+x}" ] && export LLC_THD_DEAD
+[ -n "${STLB_THD_DOA+x}" ]  && export STLB_THD_DOA
+[ -n "${STLB_THD_DEAD+x}" ] && export STLB_THD_DEAD
 
 # Binary selection: BINARY env var selects the per-policy executable.
 BINARY=${BINARY:-champsim_lru}
@@ -97,6 +105,7 @@ TRACE_FILE="${TRACES[$IDX]}"
 TRACE_NAME=$(basename "$TRACE_FILE" ".${TRACE_EXT}")
 RUN_DIR="results/${RUN_LABEL}/${TRACE_NAME}"
 mkdir -p "$RUN_DIR"
+export CHAMPSIM_RUN_CONFIG="${RUN_DIR}/run_config.txt"
 
 # Sanity checks
 if [ ! -x "$BIN" ]; then
@@ -152,6 +161,13 @@ cbpred_w_low=${CBPRED_W_LOW}
 cbpred_w_mispredict=${CBPRED_W_MISPREDICT}
 bypass_debt_scale=${BYPASS_DEBT_SCALE}
 bypass_debt_cap=${BYPASS_DEBT_CAP}
+scoring_mode=${SCORING_MODE}
+thd_doa=${THD_DOA}
+thd_dead=${THD_DEAD}
+llc_thd_doa=${LLC_THD_DOA:-}
+llc_thd_dead=${LLC_THD_DEAD:-}
+stlb_thd_doa=${STLB_THD_DOA:-}
+stlb_thd_dead=${STLB_THD_DEAD:-}
 warmup=${WARMUP}
 sim=${SIM}
 INFO

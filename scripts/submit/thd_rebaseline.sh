@@ -30,22 +30,22 @@ submit "$LABEL/srrip" champsim_srrip "rb_srrip"
 echo "--- SRRIP-Live LLC (unbounded) ---"
 for thd in 1 2 4 8 16; do
   submit "$LABEL/srrip_live_llc/thd${thd}" champsim_srrip_live "rsl_${thd}" \
-    "MID_THD=${thd},BHIST_MODE=pc,SRRIP_LIVE_TARGET=llc"
+    "THD_DOA=${thd},BHIST_MODE=pc,SRRIP_LIVE_TARGET=llc"
 done
 echo "--- IPV-Live LLC (unbounded) ---"
 for thd in 1 2 4 8 16; do
   submit "$LABEL/ipv_live_llc/thd${thd}" champsim_ipv_live "ril_${thd}" \
-    "MID_THD=${thd},BHIST_MODE=pc,SRRIP_LIVE_TARGET=llc"
+    "THD_DOA=${thd},BHIST_MODE=pc,SRRIP_LIVE_TARGET=llc"
 done
 echo "--- SRRIP-Live STLB (unbounded) ---"
 for thd in 1 2 4 8 16; do
   submit "$LABEL/srrip_live_stlb/thd${thd}" champsim_stlb_srrip_live "rss_${thd}" \
-    "MID_THD=${thd},BHIST_MODE=pc,SRRIP_LIVE_TARGET=stlb"
+    "THD_DOA=${thd},BHIST_MODE=pc,SRRIP_LIVE_TARGET=stlb"
 done
 echo "--- IPV-Live STLB (unbounded) ---"
 for thd in 1 2 4 8 16; do
   submit "$LABEL/ipv_live_stlb/thd${thd}" champsim_stlb_ipv_live "ris_${thd}" \
-    "MID_THD=${thd},BHIST_MODE=pc,SRRIP_LIVE_TARGET=stlb"
+    "THD_DOA=${thd},BHIST_MODE=pc,SRRIP_LIVE_TARGET=stlb"
 done
 
 echo ""
