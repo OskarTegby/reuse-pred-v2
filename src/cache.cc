@@ -432,6 +432,8 @@ void CACHE::load_predictor_settings()
   thd_doa  = (level_doa  && *level_doa)  ? std::stoull(level_doa)  : getenv_uint64("THD_DOA",  1);
   thd_dead = (level_dead && *level_dead) ? std::stoull(level_dead) : getenv_uint64("THD_DEAD", 0);
   repl_hist_pc.set_scoring_mode(static_cast<int>(getenv_uint64("SCORING_MODE", 2)));
+  if (const char* v = std::getenv("DOA_SATURATE_MD"); v && std::stoull(v))
+    repl_hist_pc.set_doa_saturate_md(true);
 
   // Bounded repl_hist_pc: 0 = unbounded (default, backward compatible).
   // REPL_HIST_REPL controls table management policy (same options as HIST_REPL).
@@ -441,8 +443,7 @@ void CACHE::load_predictor_settings()
         ? getenv_uint64("REPL_HIST_LLC_CAP",  0)
         : getenv_uint64("REPL_HIST_STLB_CAP", 0);
     if (rh_cap > 0) {
-      const uint64_t rh_buf    = getenv_uint64("REPL_HIST_BUF_CAP",    0);
-      const uint64_t rh_shadow = getenv_uint64("REPL_HIST_SHADOW_CAP", 0);
+      const uint64_t rh_buf    = getenv_uint64("REPL_HIST_BUF_CAP", 0);
       const char* rh_repl      = std::getenv("REPL_HIST_REPL");
       auto parse_rh_policy     = [](const char* v) -> HistTable::Policy {
         if (!v) return HistTable::Policy::LRU;
@@ -452,8 +453,10 @@ void CACHE::load_predictor_settings()
         if (std::string_view(v) == "tiered")  return HistTable::Policy::TIERED;
         return HistTable::Policy::LRU;
       };
-      repl_hist_pc = HistTable(rh_cap, parse_rh_policy(rh_repl), rh_buf, rh_shadow);
+      repl_hist_pc = HistTable(rh_cap, parse_rh_policy(rh_repl), rh_buf);
       repl_hist_pc.set_scoring_mode(static_cast<int>(getenv_uint64("SCORING_MODE", 2)));
+      if (const char* v = std::getenv("DOA_SATURATE_MD"); v && std::stoull(v))
+        repl_hist_pc.set_doa_saturate_md(true);
       const uint64_t rh_ckpt = getenv_uint64("REPL_HIST_CHECKPOINT", 0);
       if (rh_ckpt > 0)
         repl_hist_pc.set_checkpoint(rh_ckpt, NAME);

@@ -19,8 +19,10 @@
 // Aging loops          — find_victim scan passes needed; fewer = less pressure
 //                        from protected entries crowding out eviction candidates.
 //
-// Runtime overrides:
-//   IPV_DOA=0,0,1,2,3   IPV_MOSTLY_DEAD=0,0,0,2,3   IPV_MOSTLY_ALIVE=0,0,0,0,2
+// Runtime overrides (index layout: [hit@0, hit@1, hit@2, hit@3, insert]):
+//   IPV_DOA=0,1,2,2,2          default: insert@2, reset to 2 on hit (mirrors LRU-Live DoA)
+//   IPV_MOSTLY_DEAD=0,1,1,2,2  default: insert@2, hit@2→1, hit@1→1 (capped at RRPV=1)
+//   IPV_MOSTLY_ALIVE=0,0,0,0,2 default: insert@2, full promotion on first hit
 //   SRRIP_LIVE_TARGET=llc|stlb|both
 
 #include <array>
@@ -54,9 +56,9 @@ struct Stats {
 std::unordered_map<CACHE*, Stats> stats;
 
 using ipv_t = std::array<int, 5>;
-ipv_t g_ipv_doa          = {0, 0, 1, 2, maxRRPV};
-ipv_t g_ipv_mostly_dead  = {0, 0, 0, 2, maxRRPV};
-ipv_t g_ipv_mostly_alive = {0, 0, 0, 0, maxRRPV - 1};
+ipv_t g_ipv_doa          = {0, 1, 2, 2, 2};  // insert@2, hit@3→2 (second chance), hit@2→2 (no reward)
+ipv_t g_ipv_mostly_dead  = {0, 1, 1, 2, 2};  // insert@2, hit@2→1, hit@1→1 (capped at RRPV=1)
+ipv_t g_ipv_mostly_alive = {0, 0, 0, 0, 2};  // insert@2, full promotion on first hit
 bool  g_parsed = false;
 
 ipv_t parse_ipv(const char* var, ipv_t dflt)
@@ -67,7 +69,7 @@ ipv_t parse_ipv(const char* var, ipv_t dflt)
   std::strncpy(buf, s, sizeof(buf) - 1);
   buf[sizeof(buf) - 1] = '\0';
   ipv_t v = dflt;
-  char* tok = std::strtok(buf, ",");
+  char* tok = std::strtok(buf, ",:");  // accept both ',' and ':' so qsub -v can use ':'
   for (int i = 0; i < 5 && tok; ++i, tok = std::strtok(nullptr, ","))
     v[i] = std::atoi(tok);
   return v;

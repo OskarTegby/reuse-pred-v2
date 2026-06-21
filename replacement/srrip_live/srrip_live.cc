@@ -2,12 +2,18 @@
 //
 // Policy rules (three liveness classes)
 // --------------------------------------
-//   DoA fill:         RRPV = maxRRPV     (evict first)
-//   DoA hit:          RRPV = maxRRPV-1   (partial promotion)
+//   DoA fill:         RRPV = SRRIP_DOA_INS_RRPV  (default 2: moderate, not immediate eviction)
+//   DoA hit:          RRPV = SRRIP_DOA_HIT_RRPV  (default 2: reset to insertion, no reward)
 //   Mostly-dead fill: RRPV = maxRRPV-1   (standard SRRIP insertion)
 //   Mostly-dead hit:  RRPV = maxRRPV-2   (moderate promotion)
 //   Mostly-alive fill:RRPV = maxRRPV-1   (same insertion as mostly-dead)
 //   Mostly-alive hit: RRPV = 0           (full promotion, protect the block)
+//
+// Runtime overrides (LRU-Live mapping: DoA→2N/3 from MRU=RRPV2, MD→N/3 from MRU=RRPV1):
+//   SRRIP_DOA_INS_RRPV=N  insertion RRPV for DoA blocks (default 2).
+//   SRRIP_DOA_HIT_RRPV=N  RRPV on DoA hit; 2=reset-to-ins (default, no reward), 1=mild.
+//   SRRIP_MD_INS_RRPV=N   insertion RRPV for mostly-dead blocks (default 2, LRU-Live mirror=1).
+//   SRRIP_MD_HIT_RRPV=N   RRPV on MD hit; 1=one-step (default), 0=full (LRU-Live mirror).
 //
 // Statistics printed in replacement_final_stats()
 // ------------------------------------------------
@@ -60,12 +66,32 @@ std::unordered_map<CACHE*, Stats> stats;
 
 } // namespace
 
+static int g_doa_ins_rrpv = -1;
+static int g_doa_hit_rrpv = -1;
+static int g_md_ins_rrpv  = -1;
+static int g_md_hit_rrpv  = -1;
+
+static int parse_env_rrpv(const char* var, int dflt)
+{
+  const char* e = std::getenv(var);
+  return (e && *e) ? std::atoi(e) : dflt;
+}
+
+static int doa_ins_rrpv() { if (g_doa_ins_rrpv < 0) g_doa_ins_rrpv = parse_env_rrpv("SRRIP_DOA_INS_RRPV", 2); return g_doa_ins_rrpv; }
+static int doa_hit_rrpv() { if (g_doa_hit_rrpv < 0) g_doa_hit_rrpv = parse_env_rrpv("SRRIP_DOA_HIT_RRPV", 2); return g_doa_hit_rrpv; }
+static int md_ins_rrpv()  { if (g_md_ins_rrpv  < 0) g_md_ins_rrpv  = parse_env_rrpv("SRRIP_MD_INS_RRPV",  2); return g_md_ins_rrpv;  }
+static int md_hit_rrpv()  { if (g_md_hit_rrpv  < 0) g_md_hit_rrpv  = parse_env_rrpv("SRRIP_MD_HIT_RRPV",  1); return g_md_hit_rrpv;  }
+
 void CACHE::initialize_replacement()
 {
   const std::size_t n = NUM_SET * NUM_WAY;
   ::rrpv_values[this] = std::vector<int>   (n, ::maxRRPV);
   ::slot_class[this]  = std::vector<int8_t>(n, 0);
   ::stats[this]       = Stats{};
+  (void)doa_ins_rrpv();  // parse all env vars once at init
+  (void)doa_hit_rrpv();
+  (void)md_ins_rrpv();
+  (void)md_hit_rrpv();
 }
 
 uint32_t CACHE::find_victim(uint32_t triggering_cpu, uint64_t instr_id, uint32_t set,
@@ -143,14 +169,14 @@ void CACHE::update_replacement_state(uint32_t triggering_cpu, uint32_t set, uint
       // across classes so the liveness effect is isolated.
       const bool promote = (type != WRITE);
       switch (cls) {
-        case 1:  if (promote) rrpv = ::maxRRPV - 1; st.hit_doa++;   break;  // DoA: partial
-        case 2:  if (promote) rrpv = ::maxRRPV - 2; st.hit_dead++;  break;  // mostly-dead: moderate
+        case 1:  if (promote) rrpv = ::doa_hit_rrpv(); st.hit_doa++;  break;  // DoA: see SRRIP_DOA_HIT_RRPV
+        case 2:  if (promote) rrpv = ::md_hit_rrpv(); st.hit_dead++;  break;  // mostly-dead: see SRRIP_MD_HIT_RRPV
         default: if (promote) rrpv = 0;             st.hit_alive++; break;  // alive: full
       }
     } else {
       const liveness_class lc = classify_block_liveness(full_addr, ip);
-      if      (lc == liveness_class::doa)         { rrpv = ::maxRRPV;     cls = 1; st.ins_doa++;  }
-      else if (lc == liveness_class::mostly_dead)  { rrpv = ::maxRRPV - 1; cls = 2; st.ins_dead++; }
+      if      (lc == liveness_class::doa)         { rrpv = ::doa_ins_rrpv(); cls = 1; st.ins_doa++;  }
+      else if (lc == liveness_class::mostly_dead)  { rrpv = ::md_ins_rrpv(); cls = 2; st.ins_dead++; }
       else                                         { rrpv = ::maxRRPV - 1; cls = 3; st.ins_alive++;}
     }
   } else {
@@ -180,6 +206,10 @@ void CACHE::replacement_final_stats()
   const uint64_t evict_total= evict_doa + evict_dead + evict_alive + evict_ung;
 
   printf("%s SRRIP-Live STATS:\n", NAME.c_str());
+  printf("  DoA ins RRPV     : %d  (SRRIP_DOA_INS_RRPV; 2=default, 3=legacy)\n",    ::doa_ins_rrpv());
+  printf("  DoA hit RRPV     : %d  (SRRIP_DOA_HIT_RRPV; 2=reset-to-ins, 1=mild)\n", ::doa_hit_rrpv());
+  printf("  MD  ins RRPV     : %d  (SRRIP_MD_INS_RRPV;  2=default, 1=lru-live-mirror)\n", ::md_ins_rrpv());
+  printf("  MD  hit RRPV     : %d  (SRRIP_MD_HIT_RRPV;  1=default, 0=full-promotion)\n",  ::md_hit_rrpv());
   printf("  Activation rate  : %.1f%%  (%lu guided / %lu total insertions)\n",
          pct(guided_ins, total_ins), guided_ins, total_ins);
   printf("  guided_insertions=%lu\n", guided_ins);
