@@ -457,6 +457,9 @@ void CACHE::load_predictor_settings()
       repl_hist_pc.set_scoring_mode(static_cast<int>(getenv_uint64("SCORING_MODE", 2)));
       if (const char* v = std::getenv("DOA_SATURATE_MD"); v && std::stoull(v))
         repl_hist_pc.set_doa_saturate_md(true);
+      const uint64_t rh_hash = getenv_uint64("REPL_HIST_HASH_BITS", 0);
+      if (rh_hash > 0)
+        repl_hist_pc.set_hash(static_cast<unsigned>(rh_hash));
       const uint64_t rh_ckpt = getenv_uint64("REPL_HIST_CHECKPOINT", 0);
       if (rh_ckpt > 0)
         repl_hist_pc.set_checkpoint(rh_ckpt, NAME);
