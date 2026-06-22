@@ -57,12 +57,21 @@ struct Stats {
     std::array<uint64_t, 4> evict_rrpv_alive     = {};
     std::array<uint64_t, 4> evict_rrpv_unguided  = {};
     uint64_t aging_loops = 0;
+    uint64_t sampler_a_hits = 0;
+    uint64_t sampler_b_hits = 0;
     // Lifespan (cycles from insertion to eviction) per insertion class:
     //   [0]=unguided  [1]=doa  [2]=mostly_dead  [3]=mostly_alive
     std::array<uint64_t, 4> lifespan_sum   = {};
     std::array<uint64_t, 4> lifespan_count = {};
 };
 std::unordered_map<CACHE*, Stats> stats;
+
+constexpr int PSEL_BITS = 10;
+constexpr int PSEL_MAX  = (1 << PSEL_BITS) - 1;
+constexpr int PSEL_MID  = 1 << (PSEL_BITS - 1);
+
+std::unordered_map<CACHE*, int>                  psel;
+std::unordered_map<CACHE*, std::vector<uint8_t>> slot_cfg_b;
 
 } // namespace
 
@@ -82,16 +91,35 @@ static int doa_hit_rrpv() { if (g_doa_hit_rrpv < 0) g_doa_hit_rrpv = parse_env_r
 static int md_ins_rrpv()  { if (g_md_ins_rrpv  < 0) g_md_ins_rrpv  = parse_env_rrpv("SRRIP_MD_INS_RRPV",  2); return g_md_ins_rrpv;  }
 static int md_hit_rrpv()  { if (g_md_hit_rrpv  < 0) g_md_hit_rrpv  = parse_env_rrpv("SRRIP_MD_HIT_RRPV",  1); return g_md_hit_rrpv;  }
 
+// Config B: default is ins3/hit0 for DoA (opposite of default A's ins2/hit2).
+// Override via SRRIP_DOA_INS_RRPV_B / SRRIP_DOA_HIT_RRPV_B / SRRIP_MD_INS_RRPV_B / SRRIP_MD_HIT_RRPV_B.
+// Set dueling (DUEL_N_SAMPLERS=N) picks A or B per workload via PSEL counter.
+static int g_doa_ins_b = -1, g_doa_hit_b = -1, g_md_ins_b = -1, g_md_hit_b = -1;
+static int g_n_samplers = -1;
+
+static int doa_ins_b()  { if (g_doa_ins_b  < 0) g_doa_ins_b  = parse_env_rrpv("SRRIP_DOA_INS_RRPV_B", 3); return g_doa_ins_b;  }
+static int doa_hit_b()  { if (g_doa_hit_b  < 0) g_doa_hit_b  = parse_env_rrpv("SRRIP_DOA_HIT_RRPV_B", 0); return g_doa_hit_b;  }
+static int md_ins_b()   { if (g_md_ins_b   < 0) g_md_ins_b   = parse_env_rrpv("SRRIP_MD_INS_RRPV_B",  2); return g_md_ins_b;   }
+static int md_hit_b()   { if (g_md_hit_b   < 0) g_md_hit_b   = parse_env_rrpv("SRRIP_MD_HIT_RRPV_B",  1); return g_md_hit_b;   }
+static int n_samplers() {
+  if (g_n_samplers < 0) {
+    const char* e = std::getenv("DUEL_N_SAMPLERS");
+    g_n_samplers = (e && *e) ? std::atoi(e) : 0;
+  }
+  return g_n_samplers;
+}
+
 void CACHE::initialize_replacement()
 {
   const std::size_t n = NUM_SET * NUM_WAY;
-  ::rrpv_values[this] = std::vector<int>   (n, ::maxRRPV);
-  ::slot_class[this]  = std::vector<int8_t>(n, 0);
-  ::stats[this]       = Stats{};
-  (void)doa_ins_rrpv();  // parse all env vars once at init
-  (void)doa_hit_rrpv();
-  (void)md_ins_rrpv();
-  (void)md_hit_rrpv();
+  ::rrpv_values[this]  = std::vector<int>   (n, ::maxRRPV);
+  ::slot_class[this]   = std::vector<int8_t>(n, 0);
+  ::slot_cfg_b[this]   = std::vector<uint8_t>(n, 0);
+  ::stats[this]        = Stats{};
+  ::psel[this]         = PSEL_MID;
+  (void)doa_ins_rrpv(); (void)doa_hit_rrpv(); (void)md_ins_rrpv(); (void)md_hit_rrpv();
+  (void)doa_ins_b();    (void)doa_hit_b();    (void)md_ins_b();    (void)md_hit_b();
+  (void)n_samplers();
 }
 
 uint32_t CACHE::find_victim(uint32_t triggering_cpu, uint64_t instr_id, uint32_t set,
@@ -160,24 +188,38 @@ void CACHE::update_replacement_state(uint32_t triggering_cpu, uint32_t set, uint
   }
 
   if (use_liveness) {
+    // Set dueling: classify set as sampler_a, sampler_b, or follower.
+    // Sampler A always uses config A; sampler B always uses config B.
+    // On each demand hit, the winning sampler's PSEL edge increments toward it.
+    // Followers adopt whichever config has more hits (PSEL > MID → B wins).
+    // With DUEL_N_SAMPLERS=0 (default), step=0, every set is a follower using A.
+    const int ns   = ::n_samplers();
+    const int step = ns > 0 ? static_cast<int>(NUM_SET) / ns : 0;
+    const bool is_a = step > 0 && static_cast<int>(set) % step == 0;
+    const bool is_b = step > 0 && static_cast<int>(set) % step == step / 2;
+
+    if (hit && type != WRITE) {
+      if (is_a) { ::psel[this] = std::max(0,        ::psel[this] - 1); st.sampler_a_hits++; }
+      if (is_b) { ::psel[this] = std::min(PSEL_MAX, ::psel[this] + 1); st.sampler_b_hits++; }
+    }
+    // ub: this slot should use config B
+    const bool ub = is_b || (!is_a && step > 0 && ::psel[this] > PSEL_MID);
+
+    auto& cfg_b = ::slot_cfg_b[this][idx];
     if (hit) {
-      // Use the class stored at insertion time — do not re-classify at hit time.
-      // Re-classifying allows a block inserted as alive to lose full promotion if
-      // its PC accumulates DoA history while the block sits in the cache, which
-      // causes live blocks to be evicted prematurely.
-      // Skip promotion on writeback hits (matches LRU/baseline SRRIP), uniform
-      // across classes so the liveness effect is isolated.
+      // Use the config stored at insertion time — do not re-classify.
       const bool promote = (type != WRITE);
       switch (cls) {
-        case 1:  if (promote) rrpv = ::doa_hit_rrpv(); st.hit_doa++;  break;  // DoA: see SRRIP_DOA_HIT_RRPV
-        case 2:  if (promote) rrpv = ::md_hit_rrpv(); st.hit_dead++;  break;  // mostly-dead: see SRRIP_MD_HIT_RRPV
-        default: if (promote) rrpv = 0;             st.hit_alive++; break;  // alive: full
+        case 1:  if (promote) rrpv = cfg_b ? ::doa_hit_b() : ::doa_hit_rrpv(); st.hit_doa++;  break;
+        case 2:  if (promote) rrpv = cfg_b ? ::md_hit_b()  : ::md_hit_rrpv();  st.hit_dead++; break;
+        default: if (promote) rrpv = 0;                                         st.hit_alive++; break;
       }
     } else {
       const liveness_class lc = classify_block_liveness(full_addr, ip);
-      if      (lc == liveness_class::doa)         { rrpv = ::doa_ins_rrpv(); cls = 1; st.ins_doa++;  }
-      else if (lc == liveness_class::mostly_dead)  { rrpv = ::md_ins_rrpv(); cls = 2; st.ins_dead++; }
-      else                                         { rrpv = ::maxRRPV - 1; cls = 3; st.ins_alive++;}
+      cfg_b = ub;
+      if      (lc == liveness_class::doa)         { rrpv = ub ? ::doa_ins_b() : ::doa_ins_rrpv(); cls = 1; st.ins_doa++;  }
+      else if (lc == liveness_class::mostly_dead)  { rrpv = ub ? ::md_ins_b()  : ::md_ins_rrpv();  cls = 2; st.ins_dead++; }
+      else                                         { rrpv = ::maxRRPV - 1; cls = 3; st.ins_alive++; }
     }
   } else {
     // No liveness signal: behave exactly like baseline SRRIP.
@@ -206,10 +248,23 @@ void CACHE::replacement_final_stats()
   const uint64_t evict_total= evict_doa + evict_dead + evict_alive + evict_ung;
 
   printf("%s SRRIP-Live STATS:\n", NAME.c_str());
-  printf("  DoA ins RRPV     : %d  (SRRIP_DOA_INS_RRPV; 2=default, 3=legacy)\n",    ::doa_ins_rrpv());
-  printf("  DoA hit RRPV     : %d  (SRRIP_DOA_HIT_RRPV; 2=reset-to-ins, 1=mild)\n", ::doa_hit_rrpv());
-  printf("  MD  ins RRPV     : %d  (SRRIP_MD_INS_RRPV;  2=default, 1=lru-live-mirror)\n", ::md_ins_rrpv());
-  printf("  MD  hit RRPV     : %d  (SRRIP_MD_HIT_RRPV;  1=default, 0=full-promotion)\n",  ::md_hit_rrpv());
+  if (::n_samplers() > 0) {
+    const int p = ::psel[this];
+    printf("  Set dueling      : PSEL=%d/%d  winner=%s"
+           "  sampler_a_hits=%lu  sampler_b_hits=%lu\n",
+           p, PSEL_MAX, p > PSEL_MID ? "config_B" : "config_A",
+           st.sampler_a_hits, st.sampler_b_hits);
+    printf("  Config A: DoA ins=%d hit=%d  MD ins=%d hit=%d\n",
+           ::doa_ins_rrpv(), ::doa_hit_rrpv(), ::md_ins_rrpv(), ::md_hit_rrpv());
+    printf("  Config B: DoA ins=%d hit=%d  MD ins=%d hit=%d"
+           "  (SRRIP_DOA_INS_RRPV_B / _HIT_RRPV_B / SRRIP_MD_INS_RRPV_B / _HIT_RRPV_B)\n",
+           ::doa_ins_b(), ::doa_hit_b(), ::md_ins_b(), ::md_hit_b());
+  } else {
+    printf("  DoA ins RRPV     : %d  (SRRIP_DOA_INS_RRPV; 2=default, 3=legacy)\n",    ::doa_ins_rrpv());
+    printf("  DoA hit RRPV     : %d  (SRRIP_DOA_HIT_RRPV; 2=reset-to-ins, 1=mild)\n", ::doa_hit_rrpv());
+    printf("  MD  ins RRPV     : %d  (SRRIP_MD_INS_RRPV;  2=default, 1=lru-live-mirror)\n", ::md_ins_rrpv());
+    printf("  MD  hit RRPV     : %d  (SRRIP_MD_HIT_RRPV;  1=default, 0=full-promotion)\n",  ::md_hit_rrpv());
+  }
   printf("  Activation rate  : %.1f%%  (%lu guided / %lu total insertions)\n",
          pct(guided_ins, total_ins), guided_ins, total_ins);
   printf("  guided_insertions=%lu\n", guided_ins);
