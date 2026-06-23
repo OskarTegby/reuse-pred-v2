@@ -438,6 +438,17 @@ using only the existing 2-bit per-block state. \doa blocks hit from a
 deprioritised slot are only partially promoted, keeping them vulnerable to
 eviction if they do not continue to show reuse.
 
+In \srrip, standard insertion places every block at $\text{RRPV}=\text{maxRRPV}-1=2$.
+Inserting \doa blocks at the same position (\texttt{ins@2}) therefore produces no
+insertion-level change over plain \srrip; the only behavioural difference is
+suppressed hit-promotion for \doa blocks, which has negligible effect because
+\doa blocks are rarely re-referenced by definition.
+The actionable lever is \texttt{ins@3}: inserting \doa blocks as immediate eviction
+candidates ($\text{RRPV}=\text{maxRRPV}=3$), one step beyond the standard position.
+This single-step difference suffices for meaningful gains on workloads with accurate
+\doa classification, and because \texttt{ins@2}$\approx$\srrip there is no useful
+two-way tradeoff to duel --- \texttt{ins@3} is the only non-trivial configuration.
+
 \subsection{IPV-Live}
 
 \ipv-Live selects a per-class insertion priority vector (\textsc{IPV}) and
@@ -445,6 +456,30 @@ applies it uniformly to both insertion and promotion. Both \doa and mostly-dead
 blocks enter as eviction candidates but earn protection progressively through
 hits; mostly-alive blocks enter at an intermediate priority and jump to full
 protection on any hit.
+
+Unlike \srrip-Live, where the \texttt{ins@2} option is degenerate, \ipv-Live's
+five-position vector creates a real, workload-dependent tradeoff between two
+non-trivial configurations.
+\textit{cfgA} $\{0,1,2,2,2\}$ inserts \doa blocks at position~2 (moderate priority),
+while \textit{ilB} $\{0,1,2,2,3\}$ inserts them as immediate eviction candidates
+(position~3).
+On workloads where \doa classification is accurate, \textit{ilB} provides large gains;
+on workloads with higher misclassification (notably Ligra, where many
+``dead-on-arrival'' blocks are later re-referenced), \textit{ilB} causes regression
+while \textit{cfgA} is near-neutral.
+This per-workload divergence motivates \emph{set dueling} between the two vectors.
+
+\paragraph{Set dueling for IPV-Live.}
+We partition the \llc sets into sampler groups: sets assigned to \textit{cfgA} always
+use that vector, sets assigned to \textit{ilB} always use that vector, and the
+remaining follower sets adopt whichever sampler is currently winning.
+Rather than counting sampler hits --- which is misleading when the winning config
+retains \doa blocks and thereby inflates its own hit count --- we accumulate
+\emph{total miss latency} per sampler configuration and let follower sets adopt the
+configuration with the lower accumulated latency.
+Miss latency captures both miss count and miss cost (e.g., \textsc{DRAM} row-buffer
+locality), making it sensitive to the cases where \textit{ilB} wins not by reducing
+misses but by reducing the average cost of each miss.
 
 \paragraph{The adopted policy.}
 All three policies use the same per-\textsc{PC} liveness signal; they differ only in

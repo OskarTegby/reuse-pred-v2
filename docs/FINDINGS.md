@@ -77,6 +77,54 @@ it always wins. Data: `lru_live_vs_base_*`, `ipv_live_vs_base_*`,
 `bypass_allsuites .../repl_only`.
 *(IPV-Live old MID-scoring vs mode-5 is a wash vs IPV; see conversation 2026-06-15.)*
 
+### IPV-Live set dueling (2026-06-23, branch `duel-miss-latency`)
+
+**Bug (commit 488746c18dc4): non-dueling IPV-Live ran with a zero-initialized DoA vector.**
+The N-way set-dueling refactor (commit 9819c17a) routed all DoA insertion through
+`g_duel_doa[cfg]` but only populated that array when dueling was active. Non-dueling
+runs (fixed cfgA or fixed ilB) read `g_duel_doa[0] = {0,0,0,0,0}`, so DoA blocks
+inserted at RRPV=0 (MRU position) while ignoring `IPV_DOA` and `THD_DOA` entirely.
+Symptom: cfgA and ilB produced byte-identical champsim.out files. Impact: the ins2 arm
+of both threshold sweeps was invalid ("ins@2 is threshold-insensitive" was an artifact);
+pre-N-way references (`ipv_cfg2_20260621` cfgA, `ins3_hit_20260621` ilB) are unaffected
+since they predate the refactor. Fix: added `g_duel_doa[0] = g_ipv_doa` before the
+early-return path in `ensure_parsed_duel()`.
+
+**Finding: hit-count dueling is unreliable for IPV-Live; miss-latency dueling resolves it.**
+The hit-based duel fails on QMM because cfgA retains DoA blocks at higher RRPV, inflating
+its sampler hit count even though ilB produces better IPC via fewer, cheaper misses.
+`DUEL_METRIC=latency` (commit 7b3bf80) accumulates total fill latency
+(`current_cycle − cycle_enqueued − 1`) per sampler configuration; follower sets pick
+argmin. Results at θ=6 across 6 of 7 suites (dpc3 pending, 157 common traces):
+
+| suite  | cfgA/SRRIP | ilB/SRRIP | hitDuel/SRRIP | latDuel/SRRIP |
+|--------|-----------|----------|--------------|--------------|
+| gap    |  −0.91%   |  +6.12%  |    +6.34%    |    +6.04%    |
+| ligra  |  −0.27%   |  −1.82%  |    +1.41%    |    +1.30%    |
+| gms    |  −0.19%   |  −0.54%  |    +0.09%    |    −0.39%    |
+| ml     |  +0.06%   |  +1.62%  |    +1.43%    |    +1.41%    |
+| qmm    |  +0.16%   |  +1.54%  |    +0.18%    |    +1.47%    |
+| google |  +0.16%   |  −0.11%  |    +0.20%    |    −0.01%    |
+| Pooled |  +0.01%   |  +0.83%  |    +0.90%    |    **+1.15%**|
+
+Data: `eval_theta6_fixed_20260623_1440/ipv_live/duel_lat`, `ipv_cfg2_20260621_0042`,
+`ins3_hit_20260621_1954`, `duel_allsuites_20260623_0007`.
+
+Key resolutions: the latency duel recovers the ligra regression (−1.82% → +1.30%) and
+fixes the QMM hit-duel failure (+0.18% → +1.47%), while tracking near-optimal
+performance on gap/ml. It beats both fixed configs and the hit-based duel pooled.
+
+**Finding: SRRIP-Live ins@2 is degenerate; set dueling is only needed for IPV-Live.**
+In SRRIP, all blocks insert at RRPV = maxRRPV − 1 = 2. DoA blocks at ins@2 therefore
+have the same insertion position as plain SRRIP; the only difference is suppressed
+hit-promotion, which barely moves performance because DoA blocks rarely get hits by
+definition (+0.10% on 5 QMM traces at 50M/100M). Only ins@3 (DoA → RRPV = 3,
+immediate eviction candidate) produces meaningful gains (+1.40% same traces). For
+SRRIP-Live there is therefore no useful pair to duel — ins@2 ≈ SRRIP. For IPV-Live,
+both cfgA and ilB differ non-trivially from plain IPV, and their performance diverges
+per workload (+6.12% vs −1.82% on gap/ligra), which is what makes the duel worthwhile.
+Data: `results/local_srrip_live_exp_full` (5 QMM traces, 50M/100M warmup/sim).
+
 **Still owed (cluster work):** the indexing-vs-scoring decomposition (`morph_split`,
 cancelled — only gms/addr_dc ran) and a **valid bounded size study** (the finished
 `ours_sizestudy` is the broken bounded-path version with ~zero bypasses).
