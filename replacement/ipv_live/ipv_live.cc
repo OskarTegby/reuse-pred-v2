@@ -57,6 +57,9 @@ std::unordered_map<CACHE*, std::vector<int8_t>> slot_class;
 std::unordered_map<CACHE*, std::vector<uint8_t>> slot_cfg_idx;
 // per-config hit counters (saturating at INT64_MAX in practice, but won't overflow)
 std::unordered_map<CACHE*, std::array<int64_t, MAX_DUEL_CFGS>> hit_counts;
+// per-config summed miss-fill latency (cycles); used when DUEL_METRIC=latency.
+// The config with the LOWEST total miss latency wins (least memory stall).
+std::unordered_map<CACHE*, std::array<int64_t, MAX_DUEL_CFGS>> miss_latency;
 
 struct Stats {
     uint64_t ins_unguided = 0, ins_doa = 0, ins_dead = 0, ins_alive = 0;
@@ -90,6 +93,14 @@ int   g_hyst       = 0;   // hit-count lead required to win followers
 // as MORE non-DoA hits (freed space lets live data stay), so filtering DoA hits
 // realigns the signal with performance. See update_replacement_state.
 int   g_hit_filter = 0;
+// Which metric the duel optimizes (DUEL_METRIC):
+//   0 = hits    (default) — followers pick the config with the MOST sampler hits
+//   1 = latency           — followers pick the config with the LOWEST total miss
+//                           latency (least memory stall). Captures configs that
+//                           win by making misses cheaper rather than more frequent
+//                           (e.g. QMM: ins@3 frees space → better DRAM locality),
+//                           which a hit-count signal cannot see.
+int   g_duel_metric = 0;
 std::array<ipv_t, MAX_DUEL_CFGS> g_duel_doa;
 bool  g_parsed_duel = false;
 
@@ -141,6 +152,11 @@ void ensure_parsed_duel()
     else if (std::strcmp(hf, "live")  == 0 || std::strcmp(hf, "1") == 0) g_hit_filter = 1;
     else                                                                  g_hit_filter = 0;
   }
+  const char* dm = std::getenv("DUEL_METRIC");
+  if (dm && *dm) {
+    if (std::strcmp(dm, "latency") == 0 || std::strcmp(dm, "1") == 0) g_duel_metric = 1;
+    else                                                              g_duel_metric = 0;
+  }
 
   if (g_n_configs < 2) return;
   if (g_n_configs > MAX_DUEL_CFGS) g_n_configs = MAX_DUEL_CFGS;
@@ -170,19 +186,26 @@ int sampler_config_of(int set, int step, int n_configs)
   return -1;
 }
 
-// Returns the winning config index for follower sets (argmax with hysteresis).
-// If no config leads all others by at least g_hyst, returns 0 (conservative default).
+// Returns the winning config index for follower sets, with hysteresis.
+// metric=hits   : argmax sampler hits (more reuse wins).
+// metric=latency: argmin total miss latency (least memory stall wins).
+// If the leader doesn't beat every other config by at least g_hyst (in the
+// metric's native units), returns 0 (conservative default = config 0).
 int winner_config(CACHE* c)
 {
-  const auto& hc = ::hit_counts[c];
+  const bool lat = (::g_duel_metric == 1);
+  const auto& m = lat ? ::miss_latency[c] : ::hit_counts[c];
   int best = 0;
-  for (int i = 1; i < ::g_n_configs; ++i)
-    if (hc[i] > hc[best]) best = i;
-  // Hysteresis: best must lead every other config by g_hyst, else fall back to 0.
+  for (int i = 1; i < ::g_n_configs; ++i) {
+    const bool better = lat ? (m[i] < m[best]) : (m[i] > m[best]);
+    if (better) best = i;
+  }
   if (::g_hyst > 0) {
     for (int i = 0; i < ::g_n_configs; ++i) {
       if (i == best) continue;
-      if (hc[best] - hc[i] <= static_cast<int64_t>(::g_hyst)) return 0;
+      // margin of best over config i (positive = best is ahead)
+      const int64_t margin = lat ? (m[i] - m[best]) : (m[best] - m[i]);
+      if (margin <= static_cast<int64_t>(::g_hyst)) return 0;
     }
   }
   return best;
@@ -200,6 +223,7 @@ void CACHE::initialize_replacement()
   ::slot_cfg_idx[this] = std::vector<uint8_t>(n, 0);
   ::stats[this]        = Stats{};
   ::hit_counts[this]   = {};
+  ::miss_latency[this] = {};
 }
 
 uint32_t CACHE::find_victim(uint32_t triggering_cpu, uint64_t instr_id, uint32_t set,
@@ -270,11 +294,18 @@ void CACHE::update_replacement_state(uint32_t triggering_cpu, uint32_t set, uint
         // filter (DUEL_HIT_FILTER) decides which classes contribute to the
         // duel signal — excluding DoA hits removes the retention bias.
         cfg = sc;
-        bool count_hit = hit && type != WRITE;
-        if (count_hit && ::g_hit_filter == 1) count_hit = (cls != 1);
-        if (count_hit && ::g_hit_filter == 2) count_hit = (cls == 3);
-        if (count_hit)
-          ::hit_counts[this][sc]++;
+        if (hit) {
+          bool count_hit = type != WRITE;
+          if (count_hit && ::g_hit_filter == 1) count_hit = (cls != 1);
+          if (count_hit && ::g_hit_filter == 2) count_hit = (cls == 3);
+          if (count_hit)
+            ::hit_counts[this][sc]++;
+        } else if (type != WRITE) {
+          // Miss fill into this config's sampler set: attribute the fill's miss
+          // latency (set by handle_fill) to this config. Captures miss cost for
+          // the DUEL_METRIC=latency signal; harmless when metric=hits.
+          ::miss_latency[this][sc] += static_cast<int64_t>(this->last_fill_latency);
+        }
       } else {
         // Follower set: uses current winner.
         cfg = ::winner_config(this);
@@ -337,14 +368,15 @@ void CACHE::replacement_final_stats()
     const int winner = ::winner_config(this);
     const char* filt = ::g_hit_filter == 2 ? "alive" :
                        ::g_hit_filter == 1 ? "live"  : "all";
-    printf("  Set dueling     : N=%d  samplers/cfg=%d  hyst=%d  hit_filter=%s  winner=config_%d\n",
-           ::g_n_configs, ::g_n_samplers, ::g_hyst, filt, winner);
+    const char* metric = ::g_duel_metric == 1 ? "latency" : "hits";
+    printf("  Set dueling     : N=%d  samplers/cfg=%d  hyst=%d  metric=%s  hit_filter=%s  winner=config_%d\n",
+           ::g_n_configs, ::g_n_samplers, ::g_hyst, metric, filt, winner);
     for (int i = 0; i < ::g_n_configs; ++i) {
       const ipv_t& d = ::g_duel_doa[i];
-      printf("  Config %d%s: DoA={%d,%d,%d,%d,%d}  sampler_hits=%ld\n",
+      printf("  Config %d%s: DoA={%d,%d,%d,%d,%d}  sampler_hits=%ld  miss_latency=%ld\n",
              i, (i == winner ? "*" : " "),
              d[0],d[1],d[2],d[3],d[4],
-             ::hit_counts[this][i]);
+             ::hit_counts[this][i], ::miss_latency[this][i]);
     }
     printf("  MD: {%d,%d,%d,%d,%d}  MA: {%d,%d,%d,%d,%d}  (shared across configs)\n",
            ::g_ipv_mostly_dead[0],::g_ipv_mostly_dead[1],::g_ipv_mostly_dead[2],
