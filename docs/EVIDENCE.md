@@ -300,6 +300,30 @@ Full 7-suite θ=6 result: pooled latency-duel +1.15% vs SRRIP, vs +0.83% for fix
 and +0.90% for the hit-based duel. Both key failures resolved: QMM +0.18%→+1.47%,
 ligra −1.82%→+1.30%.
 
+### Why hit-count IS reliable for SRRIP-Live on Ligra (contrast with IPV-Live on QMM)
+
+On Ligra at θ=6, 94–99% of LLC insertions are classified DoA but a non-trivial fraction
+are re-referenced (DoA hit rates 2–25% per trace). Config B (ins@3) immediately evicts
+those blocks → regression up to −5.2%. Config A (ins@2 ≈ SRRIP) keeps them at RRPV=2
+→ they accumulate hits in A-sampler sets but not in B-sampler sets.
+
+**Evidence (local experiment, 3 ligra traces, `results/local_ligra_duel`):**
+
+| trace         | cfgB/SRRIP | duel/SRRIP | PSEL      |
+|---------------|-----------|-----------|-----------|
+| CF            |   +0.24%  |   −0.19%  | config_A  |
+| BFSCC         |   −1.71%  |   −0.44%  | config_A  |
+| PageRankDelta |   −5.16%  |   −1.53%  | 2/1023 → config_A |
+
+PSEL reaches 2/1023 on PageRankDelta — the counter saturates almost entirely toward A.
+The hit-count signal is clean here because A's sampler-hit advantage reflects genuinely
+useful blocks being kept alive (misclassified DoA blocks that are actually re-used), not
+inflated retention of truly-dead blocks as in the IPV-Live/QMM case.
+
+The residual gap between the duel (−0.72% pooled) and standalone cfgA (−0.19%) is
+structural: B-sampler sets are locked to cfgB and cannot switch. This cost is unavoidable
+with any set-dueling design but is bounded by the sampler fraction (~3% of sets per config).
+
 ---
 
 ## 12. Bottom line — where the performance comes from

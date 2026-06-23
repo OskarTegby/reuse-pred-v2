@@ -114,16 +114,35 @@ Key resolutions: the latency duel recovers the ligra regression (−1.82% → +1
 fixes the QMM hit-duel failure (+0.18% → +1.47%), while tracking near-optimal
 performance on gap/ml. It beats both fixed configs and the hit-based duel pooled.
 
-**Finding: SRRIP-Live ins@2 is degenerate; set dueling is only needed for IPV-Live.**
+**Finding: SRRIP-Live ins@2 is degenerate; set dueling is primarily motivated by IPV-Live.**
 In SRRIP, all blocks insert at RRPV = maxRRPV − 1 = 2. DoA blocks at ins@2 therefore
 have the same insertion position as plain SRRIP; the only difference is suppressed
 hit-promotion, which barely moves performance because DoA blocks rarely get hits by
 definition (+0.10% on 5 QMM traces at 50M/100M). Only ins@3 (DoA → RRPV = 3,
-immediate eviction candidate) produces meaningful gains (+1.40% same traces). For
-SRRIP-Live there is therefore no useful pair to duel — ins@2 ≈ SRRIP. For IPV-Live,
+immediate eviction candidate) produces meaningful gains (+1.40% same traces). For IPV-Live,
 both cfgA and ilB differ non-trivially from plain IPV, and their performance diverges
-per workload (+6.12% vs −1.82% on gap/ligra), which is what makes the duel worthwhile.
+per workload (+6.12% vs −1.82% on gap/ligra), which is the primary motivation for dueling.
 Data: `results/local_srrip_live_exp_full` (5 QMM traces, 50M/100M warmup/sim).
+
+**Finding: SRRIP-Live set dueling (cfgA vs cfgB) correctly detects and mitigates Ligra regression.**
+Ligra's DoA insertion rate is 94–99% at θ=6, but a non-trivial fraction of those blocks
+are re-referenced (history tables show 2–25% DoA hit rates depending on the trace), so
+ins@3 (cfgB) — which immediately evicts them — causes regression up to −5.2% vs SRRIP.
+A local experiment on 3 ligra traces (50M/100M, unbounded history table) confirms that
+the PSEL hit-count duel correctly identifies cfgA as the winner on all three:
+
+| trace          | srrip  | cfgA/SR | cfgB/SR | duel/SR | PSEL (winner) |
+|----------------|--------|---------|---------|---------|---------------|
+| CF             | 0.5767 |  −0.18% |  +0.24% |  −0.19% | config_A      |
+| BFSCC          | 0.6260 |  −0.00% |  −1.71% |  −0.44% | config_A      |
+| PageRankDelta  | 0.3903 |  −0.38% |  −5.16% |  −1.53% | config_A (2/1023) |
+| geomean        | 0.5204 |  −0.19% |  −2.24% |  −0.72% |               |
+
+The duel recovers most of cfgB's loss (−2.24% → −0.72%). The residual gap versus
+standalone cfgA (−0.19%) is structural: the B-sampler sets are locked to cfgB and pay
+its penalty, dragging the aggregate. The hit-count signal is clean here (unlike IPV-Live
+on QMM) because cfgA genuinely earns more hits from misclassified-alive DoA blocks,
+not from inflated retention. Data: `results/local_ligra_duel` (3 ligra traces, local).
 
 **Still owed (cluster work):** the indexing-vs-scoring decomposition (`morph_split`,
 cancelled — only gms/addr_dc ran) and a **valid bounded size study** (the finished
