@@ -288,17 +288,19 @@ Hypothesis: cfgA's hit-count lead over ilB on QMM came from DoA blocks being ret
 at higher RRPV and re-hitting. If so, filtering the duel signal to non-DoA hits should
 flip the winner to ilB.
 
-**Evidence against:** a local experiment on 3 QMM traces measured cfgA sampler DoA
-hits = 1,560 of 93,548 total (1.7%). Filtering DoA hits barely changed the counters;
-the winner never flipped. cfgA genuinely produces more non-DoA hits too, but ilB's IPC
-advantage is in the miss stream (fewer/cheaper misses), invisible to any hit counter.
+**Evidence against:** a local experiment on 3 QMM traces (binary at commit `488746c18dc4`,
+branch `duel-miss-latency`) measured cfgA sampler DoA hits = 1,560 of 93,548 total (1.7%).
+Filtering DoA hits barely changed the counters; the winner never flipped. cfgA genuinely
+produces more non-DoA hits too, but ilB's IPC advantage is in the miss stream
+(fewer/cheaper misses), invisible to any hit counter.
 
-**Resolution:** `DUEL_METRIC=latency` (commit 7b3bf80) accumulates total fill latency
-per sampler config; argmin selects the winner. Validated on 3 QMM traces that
+**Resolution:** `DUEL_METRIC=latency` (commit `7b3bf80fd758`) accumulates total fill
+latency per sampler config; argmin selects the winner. Validated on 3 QMM traces that
 previously picked cfgA under hit-count: all 3 correctly flip to ilB under latency.
 Full 7-suite θ=6 result: pooled latency-duel +1.15% vs SRRIP, vs +0.83% for fixed ilB
 and +0.90% for the hit-based duel. Both key failures resolved: QMM +0.18%→+1.47%,
-ligra −1.82%→+1.30%.
+ligra −1.82%→+1.30%. Cluster jobs: `eval_theta6_fixed_20260623_1440/ipv_live/duel_lat`
+(binary `champsim_ipv_live_latency`, built from commit `7b3bf80fd758`).
 
 ### Why hit-count IS reliable for SRRIP-Live on Ligra (contrast with IPV-Live on QMM)
 
@@ -307,7 +309,9 @@ are re-referenced (DoA hit rates 2–25% per trace). Config B (ins@3) immediatel
 those blocks → regression up to −5.2%. Config A (ins@2 ≈ SRRIP) keeps them at RRPV=2
 → they accumulate hits in A-sampler sets but not in B-sampler sets.
 
-**Evidence (local experiment, 3 ligra traces, `results/local_ligra_duel`):**
+**Evidence (local experiment, 3 ligra traces, `results/local_ligra_duel`,
+binary `bin/champsim_srrip_live` built from commit `da3249d5f3c3`, branch `duel-miss-latency`,
+script `scripts/local_srrip_live_ligra_duel.sh`):**
 
 | trace         | cfgB/SRRIP | duel/SRRIP | PSEL      |
 |---------------|-----------|-----------|-----------|

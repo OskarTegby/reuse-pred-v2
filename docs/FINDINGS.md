@@ -122,7 +122,9 @@ definition (+0.10% on 5 QMM traces at 50M/100M). Only ins@3 (DoA → RRPV = 3,
 immediate eviction candidate) produces meaningful gains (+1.40% same traces). For IPV-Live,
 both cfgA and ilB differ non-trivially from plain IPV, and their performance diverges
 per workload (+6.12% vs −1.82% on gap/ligra), which is the primary motivation for dueling.
-Data: `results/local_srrip_live_exp_full` (5 QMM traces, 50M/100M warmup/sim).
+Data: `results/local_srrip_live_exp_full` (5 QMM traces, 50M/100M warmup/sim),
+binary built from commit `da3249d5f3c3` (branch `duel-miss-latency`),
+script `scripts/local_srrip_live_exp.sh`.
 
 **Finding: SRRIP-Live set dueling (cfgA vs cfgB) correctly detects and mitigates Ligra regression.**
 Ligra's DoA insertion rate is 94–99% at θ=6, but a non-trivial fraction of those blocks
@@ -142,7 +144,9 @@ The duel recovers most of cfgB's loss (−2.24% → −0.72%). The residual gap 
 standalone cfgA (−0.19%) is structural: the B-sampler sets are locked to cfgB and pay
 its penalty, dragging the aggregate. The hit-count signal is clean here (unlike IPV-Live
 on QMM) because cfgA genuinely earns more hits from misclassified-alive DoA blocks,
-not from inflated retention. Data: `results/local_ligra_duel` (3 ligra traces, local).
+not from inflated retention. Data: `results/local_ligra_duel` (3 ligra traces, local),
+binary built from commit `da3249d5f3c3` (branch `duel-miss-latency`),
+script `scripts/local_srrip_live_ligra_duel.sh`.
 
 **Still owed (cluster work):** the indexing-vs-scoring decomposition (`morph_split`,
 cancelled — only gms/addr_dc ran) and a **valid bounded size study** (the finished
