@@ -81,6 +81,15 @@ bool  g_parsed  = false;
 int   g_n_configs  = 0;   // 0 = dueling disabled; 2+ = N-way
 int   g_n_samplers = 0;   // sampler sets per config
 int   g_hyst       = 0;   // hit-count lead required to win followers
+// Which insertion-class hits count toward the duel signal (DUEL_HIT_FILTER):
+//   0 = all hits (default)         — raw demand hits, any class
+//   1 = exclude DoA (cls != 1)     — MD+MA hits only
+//   2 = mostly-alive only (cls==3) — productive-residency hits only
+// Rationale: counting DoA-block hits biases toward retention (ins@2), which on
+// some suites (qmm) is anti-correlated with IPC. The benefit of ins@3 shows up
+// as MORE non-DoA hits (freed space lets live data stay), so filtering DoA hits
+// realigns the signal with performance. See update_replacement_state.
+int   g_hit_filter = 0;
 std::array<ipv_t, MAX_DUEL_CFGS> g_duel_doa;
 bool  g_parsed_duel = false;
 
@@ -120,6 +129,12 @@ void ensure_parsed_duel()
   if (g_n_configs < 2 && g_n_samplers > 0) g_n_configs = 2;
   const char* h = std::getenv("DUEL_HYST");
   g_hyst = (h && *h) ? std::atoi(h) : 0;
+  const char* hf = std::getenv("DUEL_HIT_FILTER");
+  if (hf && *hf) {
+    if      (std::strcmp(hf, "alive") == 0 || std::strcmp(hf, "2") == 0) g_hit_filter = 2;
+    else if (std::strcmp(hf, "live")  == 0 || std::strcmp(hf, "1") == 0) g_hit_filter = 1;
+    else                                                                  g_hit_filter = 0;
+  }
 
   if (g_n_configs < 2) return;
   if (g_n_configs > MAX_DUEL_CFGS) g_n_configs = MAX_DUEL_CFGS;
@@ -245,8 +260,14 @@ void CACHE::update_replacement_state(uint32_t triggering_cpu, uint32_t set, uint
       const int sc = ::sampler_config_of(static_cast<int>(set), step, nc);
       if (sc >= 0) {
         // Sampler set: always uses its assigned config; records a hit for it.
+        // cls holds the block's insertion class (1=DoA, 2=MD, 3=MA). The hit
+        // filter (DUEL_HIT_FILTER) decides which classes contribute to the
+        // duel signal — excluding DoA hits removes the retention bias.
         cfg = sc;
-        if (hit && type != WRITE)
+        bool count_hit = hit && type != WRITE;
+        if (count_hit && ::g_hit_filter == 1) count_hit = (cls != 1);
+        if (count_hit && ::g_hit_filter == 2) count_hit = (cls == 3);
+        if (count_hit)
           ::hit_counts[this][sc]++;
       } else {
         // Follower set: uses current winner.
@@ -308,8 +329,10 @@ void CACHE::replacement_final_stats()
 
   if (::g_n_configs >= 2) {
     const int winner = ::winner_config(this);
-    printf("  Set dueling     : N=%d  samplers/cfg=%d  hyst=%d  winner=config_%d\n",
-           ::g_n_configs, ::g_n_samplers, ::g_hyst, winner);
+    const char* filt = ::g_hit_filter == 2 ? "alive" :
+                       ::g_hit_filter == 1 ? "live"  : "all";
+    printf("  Set dueling     : N=%d  samplers/cfg=%d  hyst=%d  hit_filter=%s  winner=config_%d\n",
+           ::g_n_configs, ::g_n_samplers, ::g_hyst, filt, winner);
     for (int i = 0; i < ::g_n_configs; ++i) {
       const ipv_t& d = ::g_duel_doa[i];
       printf("  Config %d%s: DoA={%d,%d,%d,%d,%d}  sampler_hits=%ld\n",
