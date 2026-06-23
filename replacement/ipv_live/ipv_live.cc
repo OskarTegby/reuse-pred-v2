@@ -121,6 +121,12 @@ void ensure_parsed_duel()
   if (g_parsed_duel) return;
   g_parsed_duel = true;
 
+  // Config 0 always mirrors the single-IPV DoA vector. The insertion/promotion
+  // paths read g_duel_doa[cfg] unconditionally (cfg==0 when dueling is off), so
+  // without this the non-dueling path would use a zero-initialised vector and
+  // insert DoA blocks at RRPV=0. Requires ensure_parsed() to have run first.
+  g_duel_doa[0] = g_ipv_doa;
+
   const char* e = std::getenv("DUEL_N_CONFIGS");
   g_n_configs = (e && *e) ? std::atoi(e) : 0;
   const char* ns = std::getenv("DUEL_N_SAMPLERS");
