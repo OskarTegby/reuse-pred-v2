@@ -60,12 +60,19 @@ namespace
 // DoA insertion mode constants
 enum class DoAIns { Pos2N3, LRUpos, Bypass };
 
+static bool bypass_allowed()
+{
+    const char* e = std::getenv("LRU_LIVE_ALLOW_BYPASS");
+    // Default: bypass allowed. Set LRU_LIVE_ALLOW_BYPASS=0 to disable globally.
+    return !(e && e[0] == '0');
+}
+
 static DoAIns parse_ins_mode(const char* env, const char* dflt_str)
 {
     const char* v = std::getenv(env);
     if (!v || !v[0]) v = dflt_str;
     if (std::string(v) == "lru")    return DoAIns::LRUpos;
-    if (std::string(v) == "bypass") return DoAIns::Bypass;
+    if (std::string(v) == "bypass") return bypass_allowed() ? DoAIns::Bypass : DoAIns::LRUpos;
     return DoAIns::Pos2N3;
 }
 
