@@ -106,6 +106,9 @@ Three classes are defined by how a block behaves during its residency.
 Mostly-dead: at least one hit, and the last hit fell in the \emph{first half}
 of the block's residency (dead time $>$ live time).
 Mostly-alive: last hit in the \emph{second half} (live time $>$ dead time).
+On each hit we record the reuse timestamp (Algorithm~\ref{alg:on_hit});
+on eviction we determine the class from these timestamps
+(Algorithm~\ref{alg:evict_classify}).
 
 \looseness=-1
 We track two saturating counters per-PC: $\text{doa}[pc]$, which increments
@@ -114,7 +117,8 @@ accessed (i.e.\ on mostly-dead or mostly-alive evictions); and
 $\text{dead}[pc]$, which increments on each mostly-dead eviction and resets to
 zero on a mostly-alive eviction (left unchanged on \doa evictions, since \doa
 does not disprove a prior mostly-dead pattern).
-At classification time two independent thresholds are applied:
+At fill time we classify the incoming block's \textsc{PC} against these counters
+(Algorithm~\ref{alg:on_fill}) and apply two independent thresholds:
 $\text{doa}[pc] \geq \theta_{\mathrm{doa}}$ classifies as \doa (checked first);
 $\text{dead}[pc] \geq \theta_{\mathrm{dead}}$ classifies as mostly-dead; otherwise mostly-alive.
 Section~\ref{sec:results} sweeps $\theta_{\mathrm{doa}},\,\theta_{\mathrm{dead}} \in \{2, 4, 8, 16\}$.
@@ -219,32 +223,6 @@ Mostly-alive & $0$                   & $0$                   & 2 & 0 & 2 & $2\!\
 \end{tabular}
 \end{table*}
 
-\begin{algorithm}[t!]
-\caption{Per-PC counters: update on eviction and classify}
-\label{alg:pc_counter}
-\begin{algorithmic}[1]
-\State \textbf{On eviction:}
-\If{$\neg accessed$} \Comment{DoA: never hit during residency}
-  \State $\text{doa}[pc] \mathrel{+}= 1$
-  \Comment{$\text{dead}[pc]$ unchanged: DoA does not disprove a prior mostly-dead pattern}
-\ElsIf{$\mathit{dead\_tail} > \mathit{residence} / 2$} \Comment{mostly-dead}
-  \State $\text{dead}[pc] \mathrel{+}= 1$
-  \State $\text{doa}[pc] \gets 0$ \Comment{accessed: not DoA}
-\Else \Comment{mostly-alive}
-  \State $\text{doa}[pc]  \gets 0$
-  \State $\text{dead}[pc] \gets 0$
-\EndIf
-\medskip
-\State \textbf{Classify} ($\theta_{\mathrm{doa}},\,\theta_{\mathrm{dead}}$):
-\If{$\text{doa}[pc] \geq \theta_{\mathrm{doa}}$}
-  \State \Return \doa \Comment{DoA checked first; takes priority if both saturate}
-\ElsIf{$\text{dead}[pc] \geq \theta_{\mathrm{dead}}$}
-  \State \Return mostly-dead
-\Else
-  \State \Return mostly-alive
-\EndIf
-\end{algorithmic}
-\end{algorithm}
 
 \iffalse  % single-counter scored variant + FSM removed; adopted scheme is the two-counter reset below
 \paragraph{Scored liveness prediction.}
@@ -323,8 +301,8 @@ the \doa class.
 
 Increments are \emph{state-dependent}: the current classification of the \textsc{PC}
 determines a weight $\delta$ applied to the counter update
-($\delta=5$ in \textsc{MA}, $\delta=3$ in \textsc{MD}, $\delta=1$ in \doa),
-as shown in Algorithm~\ref{alg:counter_variant}.
+($\delta=5$ in \textsc{MA}, $\delta=3$ in \textsc{MD}, $\delta=1$ in \doa);
+Algorithm~\ref{alg:counter_variant} gives the full update procedure.
 
 The weight is proportional to how long that class of block is expected to
 remain in cache, which is itself determined by the policy's insertion and
@@ -370,22 +348,52 @@ separate: the mostly-dead counter accumulates evidence only from non-\doa evicti
 \fi
 
 \begin{algorithm}[t]
-\caption{Counter-based variant: update and classify}
+\caption{On hit: record reuse timestamp}
+\label{alg:on_hit}
+\begin{algorithmic}[1]
+\State $\mathit{accessed} \gets \textbf{true}$
+\State $\mathit{last\_hit} \gets \mathit{current\_cycle}$
+\end{algorithmic}
+\end{algorithm}
+
+\begin{algorithm}[t]
+\caption{On eviction: classify block liveness}
+\label{alg:evict_classify}
+\begin{algorithmic}[1]
+\If{$\neg\,\mathit{accessed}$} \Return \doa \EndIf
+\State $\mathit{live\_time} \gets \mathit{last\_hit} - \mathit{fill\_cycle}$
+\State $\mathit{dead\_time} \gets \mathit{current\_cycle} - \mathit{last\_hit}$
+\If{$\mathit{dead\_time} > \mathit{live\_time}$} \Return mostly-dead
+\Else{} \Return mostly-alive
+\EndIf
+\end{algorithmic}
+\end{algorithm}
+
+\begin{algorithm}[t]
+\caption{On eviction: update PC counters}
 \label{alg:counter_variant}
 \begin{algorithmic}[1]
-\State \textbf{On eviction} of address $a$ with eviction class \textit{evict}:
 \State $\delta \gets \mathrm{weight}(\mathrm{classify}(\mathit{md}[pc],\,\mathit{doa}[pc]))$
   \Comment{5 if \textsc{MA},\ 3 if \textsc{MD},\ 1 if \doa}
-\If{evict $=$ \doa}
-  \State $\mathit{doa}[pc] \mathrel{+}= \delta$  \Comment{DoA-only update; $\mathit{md}$ unchanged}
-\ElsIf{evict $=$ mostly-dead}
+\If{$\mathit{evict} = \doa$}
+  \State $\mathit{doa}[pc] \mathrel{+}= \delta$
+  \Comment{$\mathit{md}$ unchanged: \doa does not disprove a prior mostly-dead}
+\ElsIf{$\mathit{evict} = \text{mostly-dead}$}
   \State $\mathit{md}[pc] \mathrel{+}= \delta$;\quad $\mathit{doa}[pc] \gets 0$
-\Else \Comment{mostly-alive}
+\Else
   \State $\mathit{md}[pc] \gets 0$;\quad $\mathit{doa}[pc] \gets 0$
 \EndIf
-\medskip
-\State \textbf{Classify} ($\theta_{\mathrm{md}},\,\theta_{\mathrm{doa}}$):
+\end{algorithmic}
+\end{algorithm}
+
+\begin{algorithm}[t]
+\caption{On fill: initialise block state and classify PC}
+\label{alg:on_fill}
+\begin{algorithmic}[1]
+\State $\mathit{fill\_cycle} \gets \mathit{current\_cycle}$
+\State $\mathit{accessed} \gets \textbf{false}$
 \If{$\mathit{doa}[pc] \geq \theta_{\mathrm{doa}}$} \Return \doa
+  \Comment{checked first; takes priority if both saturate}
 \ElsIf{$\mathit{md}[pc] \geq \theta_{\mathrm{md}}$} \Return mostly-dead
 \Else{} \Return mostly-alive
 \EndIf
