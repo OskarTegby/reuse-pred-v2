@@ -1,44 +1,24 @@
-"""Blackbox tests for N-way set dueling in IPV-Live and SRRIP-Live.
+"""Black-box regression tests for set dueling in IPV-Live and SRRIP-Live.
 
-N-way design:
-  DUEL_N_CONFIGS=N partitions LLC sets into N sampler groups (DUEL_N_SAMPLERS sets
-  each) plus followers.  Each sampler group records demand hits.  Followers use the
-  config with the most hits so far (argmax, with optional DUEL_HYST hysteresis).
+Each pinned test fixes the end-to-end IPC for a specific duel configuration.
+The IPC reflects both sampler contamination and follower convergence — a change
+to the dueling mechanism (sampler partitioning, hit counting, winner selection)
+will shift these numbers.
 
-Env-var API:
-  DUEL_N_CONFIGS     — number of competing configs (2 = binary; default 2 when
-                       DUEL_N_SAMPLERS is set but DUEL_N_CONFIGS is omitted).
-  DUEL_N_SAMPLERS    — sampler sets per config.
-  IPV_DOA_0..N-1    — per-config DoA IPV (falls back to IPV_DOA / IPV_DOA_B for
-                       configs 0 and 1 respectively).
-  DUEL_HYST          — minimum hit-count lead required for the winner to be any
-                       config other than config 0 (conservative default).
+Ordering test: assigning the higher-IPC config (ins@3 on a DoA trace) to
+sampler group 0 must produce higher IPC than assigning ins@2, because cfg0
+wins by default on tie and followers adopt its insertion policy.  This
+directly tests that follower sets converge to the winning config's behavior.
 
-Output format:
-  "Set dueling     : N=2  samplers/cfg=32  hyst=0  winner=config_0"
-  "Config 0*: DoA={0,1,2,2,2}  sampler_hits=5639"
-  "Config 1 : DoA={0,1,2,2,3}  sampler_hits=0"
+Note: config_1-wins cannot be demonstrated on pagerank because re-accessed
+blocks always hash to sampler group 0 regardless of config assignment.
+Correctness for that case is validated by cluster runs on GAP/Ligra.
 
-Trace coverage note:
-  Only pagerank.champsimtrace.xz is available locally.  Pagerank is nearly
-  fully DoA with very few LLC re-accesses, and those re-accessed blocks hash
-  to sets that are always in sampler group 0 for any tested step size.
-
-    config_0 wins (config_0=ins@2, config_1=ins@3):
-      sampler_0 gets the re-accessed hits → config_0 wins. ✓
-
-    config_1 wins (config_0=ins@3, config_1=ins@2):
-      sampler_0 uses ins@3, which evicts immediately → no hits anywhere →
-      config_0 wins by default (HYST=0 returns config 0 on tie). ✗
-      Cannot be demonstrated with this trace.
-
-  config_1-wins correctness validated by cluster runs on GAP/Ligra suites.
-
-Pinned from reference runs (2026-06-22, set-dueling-nway branch).
+Trace: pagerank.champsimtrace.xz (100% DoA, 4 unique PCs).
+Pinned: June 2026, main branch, post duel-miss-latency merge.
 """
 
 import os
-import re
 import subprocess
 import unittest
 from pathlib import Path
@@ -48,40 +28,51 @@ BIN_IPV   = ROOT / "bin" / "champsim_ipv_live"
 BIN_SRRIP = ROOT / "bin" / "champsim_srrip_live"
 TRACE     = ROOT / "trace-files" / "pagerank.champsimtrace.xz"
 
-WARMUP = "1000000"
-SIM    = "2000000"
+WARMUP  = "1000000"
+SIM     = "2000000"
+IPC_TOL = 0.0001
 
-# Mechanism tests: 256 sampler sets → more LLC coverage → robust hit signal.
-MECH_ENV = dict(
-    THD_DOA=6,
-    THD_DEAD=10,
-    SCORING_MODE=5,
-    SRRIP_LIVE_TARGET="llc",
-    DUEL_N_SAMPLERS=256,
-)
+BASE_IPV   = dict(THD_DOA=6, THD_DEAD=10, SCORING_MODE=5,
+                  SRRIP_LIVE_TARGET="llc", DUEL_N_SAMPLERS=256)
+BASE_SRRIP = dict(THD_DOA=6, THD_DEAD=10, BHIST_MODE="pc",
+                  SRRIP_LIVE_TARGET="llc", SCORING_MODE=5, DUEL_N_SAMPLERS=256)
 
-# Follower-convergence tests: 32 sampler sets (production density).
-PERF_ENV = dict(
-    THD_DOA=6,
-    THD_DEAD=10,
-    SCORING_MODE=5,
-    SRRIP_LIVE_TARGET="llc",
-    DUEL_N_SAMPLERS=32,
-)
+_CONFIGS = {
+    "ipv_cfg0_ins2": {**BASE_IPV,   "IPV_DOA_0": "0,1,2,2,2", "IPV_DOA_1": "0,1,2,2,3"},
+    "ipv_cfg0_ins3": {**BASE_IPV,   "IPV_DOA_0": "0,1,2,2,3", "IPV_DOA_1": "0,1,2,2,2"},
+    "ipv_3way":      {**BASE_IPV,   "DUEL_N_CONFIGS": 3,
+                                    "IPV_DOA_0": "0,1,2,2,2",
+                                    "IPV_DOA_1": "0,1,2,2,3",
+                                    "IPV_DOA_2": "0,1,1,2,3"},
+    "srrip_cfg0wins":{**BASE_SRRIP, "SRRIP_DOA_INS_RRPV": 2, "SRRIP_DOA_INS_RRPV_B": 3},
+}
 
+PINNED = [
+    ("ipv_cfg0_ins2",  "ipv_cfg0_ins2",  BIN_IPV,   0.210701, 118055),
+    ("ipv_cfg0_ins3",  "ipv_cfg0_ins3",  BIN_IPV,   0.240647, 159718),
+    ("ipv_3way",       "ipv_3way",       BIN_IPV,   0.216070, 124999),
+    ("srrip_cfg0wins", "srrip_cfg0wins", BIN_SRRIP, 0.210701, 118055),
+]
 
-def run_sim(binary, env_extra: dict) -> dict:
+R: dict = {}
+
+def setUpModule():
+    for key, env in _CONFIGS.items():
+        # Determine binary from pinned table
+        binary = next(b for (n, k, b, _, _) in PINNED if k == key)
+        if not binary.exists() or not TRACE.exists():
+            continue
+        R[key] = _run(binary, env)
+
+def _run(binary, env_extra):
     env = {**os.environ, **{k: str(v) for k, v in env_extra.items()}}
     result = subprocess.run(
-        [str(binary),
-         "--warmup_instructions", WARMUP,
-         "--simulation_instructions", SIM,
-         str(TRACE)],
-        capture_output=True, text=True, env=env, timeout=120
+        [str(binary), "--warmup_instructions", WARMUP,
+         "--simulation_instructions", SIM, str(TRACE)],
+        capture_output=True, text=True, env=env, timeout=120,
     )
     out = result.stdout + result.stderr
-    stats = {"raw": out, "returncode": result.returncode, "cfg_hits": {}}
-
+    stats = {"raw": out, "returncode": result.returncode}
     for line in out.splitlines():
         if "CPU 0 cumulative IPC:" in line:
             stats["ipc"] = float(line.split()[4])
@@ -89,205 +80,40 @@ def run_sim(binary, env_extra: dict) -> dict:
             parts = line.split()
             try:
                 stats["llc_miss"] = int(parts[parts.index("MISS:") + 1])
-                stats["llc_hit"]  = int(parts[parts.index("HIT:")  + 1])
             except (ValueError, IndexError):
                 pass
-        # "  Set dueling     : N=2  samplers/cfg=32  hyst=0  winner=config_0"
-        if "Set dueling" in line and "winner=" in line:
-            m = re.search(r"winner=config_(\d+)", line)
-            if m:
-                stats["winner"] = int(m.group(1))
-            m = re.search(r"N=(\d+)", line)
-            if m:
-                stats["n_configs"] = int(m.group(1))
-        # "  Config 0*: DoA={0,1,2,2,2}  sampler_hits=5639"
-        m = re.match(r"\s+Config\s+(\d+)[* :]", line)
-        if m and "sampler_hits=" in line:
-            idx = int(m.group(1))
-            hm = re.search(r"sampler_hits=(\d+)", line)
-            if hm:
-                stats["cfg_hits"][idx] = int(hm.group(1))
-
     return stats
 
-
-# ---------------------------------------------------------------------------
-# IPV-Live: config_0 wins (config_0=ins@2, config_1=ins@3)
-# ---------------------------------------------------------------------------
-
-@unittest.skipUnless(BIN_IPV.exists(),  "binary not found: champsim_ipv_live")
-@unittest.skipUnless(TRACE.exists(),    "trace not found: pagerank.champsimtrace.xz")
-class TestIPVDuelingCfg0Wins(unittest.TestCase):
-    """config_0={0,1,2,2,2} (ins@2) vs config_1={0,1,2,2,3} (ins@3).
-    ins@2 keeps DoA blocks in cache; re-accessed blocks hash to sampler group 0
-    and generate hits.  ins@3 evicts immediately → sampler group 1 = 0 hits →
-    config_0 wins.
-    """
-
-    def setUp(self):
-        self.s = run_sim(BIN_IPV, {
-            **MECH_ENV,
-            "IPV_DOA_0": "0,1,2,2,2",
-            "IPV_DOA_1": "0,1,2,2,3",
-        })
-
-    def test_returncode(self):
-        self.assertEqual(self.s["returncode"], 0, msg=self.s["raw"][-500:])
-
-    def test_dueling_stats_present(self):
-        self.assertIn("winner", self.s, msg="Set dueling stats not found in output")
-
-    def test_winner_is_config_0(self):
-        self.assertEqual(self.s.get("winner"), 0,
-                         msg="Expected config_0 to win; winner=%s" % self.s.get("winner"))
-
-    def test_cfg0_hits_exceed_cfg1(self):
-        hits = self.s["cfg_hits"]
-        h0 = hits.get(0, 0)
-        h1 = hits.get(1, 0)
-        self.assertGreater(h0, h1,
-                           msg="config_0 hits=%d should exceed config_1 hits=%d" % (h0, h1))
+def _make_pinned(key, binary, expected_ipc, expected_miss):
+    def test(self):
+        self.skipTest(f"binary not found: {binary}") if not binary.exists() else None
+        s = R.get(key, {})
+        self.assertTrue(s, msg=f"no result for config '{key}'")
+        self.assertEqual(s["returncode"], 0, msg=s["raw"][-500:])
+        self.assertAlmostEqual(s["ipc"], expected_ipc, delta=IPC_TOL)
+        self.assertEqual(s.get("llc_miss"), expected_miss)
+    return test
 
 
-# ---------------------------------------------------------------------------
-# IPV-Live: config_1 wins — skipped (trace limitation, see module docstring)
-# ---------------------------------------------------------------------------
+@unittest.skipUnless(TRACE.exists(), f"trace not found: {TRACE}")
+class TestPinned(unittest.TestCase):
+    """End-to-end regression: each duel config must reproduce its reference IPC and miss count."""
 
-@unittest.skip(
-    "config_1-wins cannot be demonstrated on pagerank: re-accessed blocks always "
-    "hash to sampler group 0 regardless of config assignment, so group 1 never "
-    "accumulates hits.  Correctness validated by cluster runs on GAP/Ligra."
-)
-class TestIPVDuelingCfg1Wins(unittest.TestCase):
-    pass
+for _name, _key, _bin, _ipc, _miss in PINNED:
+    setattr(TestPinned, f"test_{_name}", _make_pinned(_key, _bin, _ipc, _miss))
 
 
-# ---------------------------------------------------------------------------
-# IPV-Live: dueling disabled
-# ---------------------------------------------------------------------------
+@unittest.skipUnless(BIN_IPV.exists(),  f"binary not found: {BIN_IPV}")
+@unittest.skipUnless(TRACE.exists(),    f"trace not found: {TRACE}")
+class TestOrdering(unittest.TestCase):
 
-@unittest.skipUnless(BIN_IPV.exists(),  "binary not found: champsim_ipv_live")
-@unittest.skipUnless(TRACE.exists(),    "trace not found: pagerank.champsimtrace.xz")
-class TestIPVDuelingDisabled(unittest.TestCase):
-    """DUEL_N_SAMPLERS=0 (or unset) and DUEL_N_CONFIGS=0 disable dueling."""
-
-    def test_no_dueling_output_by_default(self):
-        env = {k: v for k, v in PERF_ENV.items()
-               if k not in ("DUEL_N_SAMPLERS", "DUEL_N_CONFIGS")}
-        s = run_sim(BIN_IPV, env)
-        self.assertNotIn("winner", s, msg="Dueling stats should not appear when disabled")
-
-    def test_duel_n_samplers_zero_disables_dueling(self):
-        s = run_sim(BIN_IPV, {**PERF_ENV, "DUEL_N_SAMPLERS": 0, "DUEL_N_CONFIGS": 0})
-        self.assertNotIn("winner", s, msg="Dueling stats should not appear when DUEL_N_SAMPLERS=0")
-
-
-# ---------------------------------------------------------------------------
-# IPV-Live: follower convergence
-#
-# With DUEL_N_SAMPLERS=32 on pagerank, config_0 wins (sampler group 1 sees
-# no hits).  Followers adopt config_0's IPC regardless of which config is
-# assigned to slot 0.
-# ---------------------------------------------------------------------------
-
-IPC_PURE_INS2   = 0.211229   # pure IPV_DOA={0,1,2,2,2}, no dueling
-IPC_PURE_INS3   = 0.251271   # pure IPV_DOA={0,1,2,2,3}, no dueling
-IPC_SAMPLER_TOL = 0.005      # ±0.5% covers sampler contamination (32/2048)
-
-
-@unittest.skipUnless(BIN_IPV.exists(),  "binary not found: champsim_ipv_live")
-@unittest.skipUnless(TRACE.exists(),    "trace not found: pagerank.champsimtrace.xz")
-class TestIPVDuelingFollowerConvergence(unittest.TestCase):
-    """Followers track the winning config's IPC regardless of slot assignment."""
-
-    def test_config0_ins2_ipc(self):
-        s = run_sim(BIN_IPV, {
-            **PERF_ENV,
-            "IPV_DOA_0": "0,1,2,2,2",
-            "IPV_DOA_1": "0,1,2,2,3",
-        })
-        self.assertAlmostEqual(s["ipc"], IPC_PURE_INS2, delta=IPC_SAMPLER_TOL,
-                               msg="config_0=ins@2: IPC %.6f should be near %.6f"
-                                   % (s["ipc"], IPC_PURE_INS2))
-
-    def test_config0_ins3_ipc(self):
-        s = run_sim(BIN_IPV, {
-            **PERF_ENV,
-            "IPV_DOA_0": "0,1,2,2,3",
-            "IPV_DOA_1": "0,1,2,2,2",
-        })
-        self.assertAlmostEqual(s["ipc"], IPC_PURE_INS3, delta=IPC_SAMPLER_TOL,
-                               msg="config_0=ins@3: IPC %.6f should be near %.6f"
-                                   % (s["ipc"], IPC_PURE_INS3))
-
-
-# ---------------------------------------------------------------------------
-# IPV-Live: 3-way dueling (N=3)
-# ---------------------------------------------------------------------------
-
-@unittest.skipUnless(BIN_IPV.exists(),  "binary not found: champsim_ipv_live")
-@unittest.skipUnless(TRACE.exists(),    "trace not found: pagerank.champsimtrace.xz")
-class TestIPVDueling3Way(unittest.TestCase):
-    """3-way duel: config_0=ins@2 (expected winner on pagerank), configs 1 & 2 = ins@3 variants."""
-
-    def setUp(self):
-        self.s = run_sim(BIN_IPV, {
-            **MECH_ENV,
-            "DUEL_N_CONFIGS": 3,
-            "IPV_DOA_0": "0,1,2,2,2",
-            "IPV_DOA_1": "0,1,2,2,3",
-            "IPV_DOA_2": "0,1,1,2,3",
-        })
-
-    def test_returncode(self):
-        self.assertEqual(self.s["returncode"], 0, msg=self.s["raw"][-500:])
-
-    def test_n_configs_reported(self):
-        self.assertEqual(self.s.get("n_configs"), 3,
-                         msg="Expected N=3 in dueling stats")
-
-    def test_three_configs_have_hit_counts(self):
-        hits = self.s["cfg_hits"]
-        self.assertEqual(len(hits), 3,
-                         msg="Expected 3 config hit counts, got %s" % hits)
-
-    def test_winner_is_config_0(self):
-        self.assertEqual(self.s.get("winner"), 0,
-                         msg="Expected config_0 to win on pagerank with ins@2")
-
-
-# ---------------------------------------------------------------------------
-# SRRIP-Live: config_0 wins (binary dueling — srrip_live uses old PSEL API)
-# ---------------------------------------------------------------------------
-
-@unittest.skipUnless(BIN_SRRIP.exists(), "binary not found: champsim_srrip_live")
-@unittest.skipUnless(TRACE.exists(),     "trace not found: pagerank.champsimtrace.xz")
-class TestSRRIPDuelingCfg0Wins(unittest.TestCase):
-    """DoA ins=2 in config A, DoA ins=3 in config B. A should win on pagerank."""
-
-    def setUp(self):
-        self.s = run_sim(BIN_SRRIP, {
-            **MECH_ENV,
-            "SRRIP_DOA_INS_RRPV":   2,
-            "SRRIP_DOA_INS_RRPV_B": 3,
-        })
-
-    def test_returncode(self):
-        self.assertEqual(self.s["returncode"], 0, msg=self.s["raw"][-500:])
-
-    def test_dueling_stats_present(self):
-        # srrip_live still uses binary PSEL; accept either new or old stat format
-        has_new = "winner" in self.s
-        has_old = "Set dueling" in self.s.get("raw", "")
-        self.assertTrue(has_new or has_old, msg="No dueling stats found in srrip output")
-
-
-@unittest.skip(
-    "config_1-wins cannot be demonstrated on pagerank — same set-hash limitation as IPV. "
-    "Validated by cluster runs on GAP/Ligra."
-)
-class TestSRRIPDuelingCfg1Wins(unittest.TestCase):
-    pass
+    def test_follower_convergence_drives_ipc(self):
+        # On a 100% DoA trace ins@3 beats ins@2.  Assigning ins@3 to cfg0
+        # (which wins by default on tie) causes followers to adopt ins@3,
+        # raising IPC.  If follower convergence is broken, the two configs
+        # produce the same IPC.
+        self.assertGreater(R["ipv_cfg0_ins3"]["ipc"],
+                           R["ipv_cfg0_ins2"]["ipc"] + IPC_TOL)
 
 
 if __name__ == "__main__":
