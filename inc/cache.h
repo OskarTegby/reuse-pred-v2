@@ -30,6 +30,7 @@
 #include <unordered_map>
 #include <unordered_set>
 #include <string>
+#include <tuple>
 #include <vector>
 
 #include "champsim.h"
@@ -295,6 +296,24 @@ public:
   // thd_doa: used to flag shadow hits where dead_count >= thd_doa — recovered
   // classification that the bounded table missed.
   void print_stats(const char* prefix, uint64_t thd_doa = 0, uint64_t thd_dead = 0) const {
+    // TEMPORARY (testing): dump the PCs currently resident in the history table,
+    // sorted by key for determinism. Opt-in via REPL_HIST_DUMP_PCS=1 so normal
+    // runs are unaffected. Lets black-box tests verify which PCs survive under a
+    // realistic cap on many-PC traces (QMM/SPEC), where the eviction policy is
+    // actually exercised.
+    if (const char* d = std::getenv("REPL_HIST_DUMP_PCS"); d && d[0] == '1') {
+      std::vector<std::tuple<uint64_t, int64_t, int64_t>> dump;
+      if (unbounded_) {
+        for (const auto& [k, v] : unmap_) dump.emplace_back(k, v.second, v.first);
+      } else {
+        for (const auto& e : entries_)
+          if (e.valid) dump.emplace_back(e.key, e.score, e.md_score);
+      }
+      std::sort(dump.begin(), dump.end());
+      printf("%s repl_hist PCS: count=%zu\n", prefix, dump.size());
+      for (const auto& [k, sc, md] : dump)
+        printf("%s repl_hist PC: key=0x%lx doa=%ld md=%ld\n", prefix, k, sc, md);
+    }
     if (unbounded_) {
       printf("%s repl_hist: unbounded (%zu entries)  scoring_mode=%d\n",
              prefix, unmap_.size(), scoring_mode_);
