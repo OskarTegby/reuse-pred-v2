@@ -98,7 +98,8 @@ static int md_hit_rrpv()  { if (g_md_hit_rrpv  < 0) g_md_hit_rrpv  = parse_env_r
 // Override via SRRIP_DOA_INS_RRPV_B / SRRIP_DOA_HIT_RRPV_B / SRRIP_MD_INS_RRPV_B / SRRIP_MD_HIT_RRPV_B.
 // Set dueling (DUEL_N_SAMPLERS=N) picks A or B per workload via PSEL counter.
 static int g_doa_ins_b = -1, g_doa_hit_b = -1, g_md_ins_b = -1, g_md_hit_b = -1;
-static int g_n_samplers = -1;
+static int     g_n_samplers = -1;
+static int64_t g_hyst       = -1;  // cfgB must lead cfgA by this margin to win followers
 
 static int doa_ins_b()  { if (g_doa_ins_b  < 0) g_doa_ins_b  = parse_env_rrpv("SRRIP_DOA_INS_RRPV_B", 3); return g_doa_ins_b;  }
 static int doa_hit_b()  { if (g_doa_hit_b  < 0) g_doa_hit_b  = parse_env_rrpv("SRRIP_DOA_HIT_RRPV_B", 0); return g_doa_hit_b;  }
@@ -110,6 +111,13 @@ static int n_samplers() {
     g_n_samplers = (e && *e) ? std::atoi(e) : 0;
   }
   return g_n_samplers;
+}
+static int64_t hyst() {
+  if (g_hyst < 0) {
+    const char* e = std::getenv("DUEL_HYST");
+    g_hyst = (e && *e) ? static_cast<int64_t>(std::atoll(e)) : 0;
+  }
+  return g_hyst;
 }
 static int duel_metric() {
   if (g_duel_metric < 0) {
@@ -131,7 +139,7 @@ void CACHE::initialize_replacement()
   ::miss_lat_b[this]   = 0;
   (void)doa_ins_rrpv(); (void)doa_hit_rrpv(); (void)md_ins_rrpv(); (void)md_hit_rrpv();
   (void)doa_ins_b();    (void)doa_hit_b();    (void)md_ins_b();    (void)md_hit_b();
-  (void)n_samplers();   (void)duel_metric();
+  (void)n_samplers();   (void)duel_metric();  (void)hyst();
 }
 
 uint32_t CACHE::find_victim(uint32_t triggering_cpu, uint64_t instr_id, uint32_t set,
@@ -225,8 +233,8 @@ void CACHE::update_replacement_state(uint32_t triggering_cpu, uint32_t set, uint
     }
     // ub: this slot should use config B
     const bool b_wins = (duel_metric() == 1)
-        ? (::miss_lat_b[this] < ::miss_lat_a[this])
-        : (::psel[this] > PSEL_MID);
+        ? (::miss_lat_a[this] - ::miss_lat_b[this] > ::hyst())
+        : (::psel[this] > PSEL_MID + static_cast<int>(::hyst()));
     const bool ub = is_b || (!is_a && step > 0 && b_wins);
 
     auto& cfg_b = ::slot_cfg_b[this][idx];

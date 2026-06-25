@@ -79,6 +79,7 @@ static DoAIns parse_ins_mode(const char* env, const char* dflt_str)
 static DoAIns g_ins_a = DoAIns::Pos2N3;  // cfgA (default: 2n3)
 static DoAIns g_ins_b = DoAIns::Bypass;  // cfgB (default: bypass when dueling)
 static int    g_n_samplers = -1;
+static int64_t g_hyst = 0;  // cfgB must beat cfgA by this margin to win followers
 
 static int g_ll_duel_metric = -1;
 
@@ -87,6 +88,8 @@ static void ensure_parsed()
     if (g_n_samplers >= 0) return;
     const char* e = std::getenv("DUEL_N_SAMPLERS");
     g_n_samplers = (e && *e) ? std::atoi(e) : 0;
+    const char* h = std::getenv("DUEL_HYST");
+    g_hyst = (h && *h) ? static_cast<int64_t>(std::atoll(h)) : 0;
     g_ins_a = parse_ins_mode("LRU_LIVE_DOA_INS",   "2n3");
     g_ins_b = parse_ins_mode("LRU_LIVE_DOA_INS_B", "bypass");
     const char* dm = std::getenv("DUEL_METRIC");
@@ -337,7 +340,7 @@ void CACHE::update_replacement_state(uint32_t triggering_cpu, uint32_t set, uint
             const bool is_a = step > 0 && static_cast<int>(set) % step == 0;
             const bool is_b = step > 0 && static_cast<int>(set) % step == step / 2;
             const bool b_wins = (::g_ll_duel_metric == 1)
-                ? (::miss_lat_b[this] < ::miss_lat_a[this])
+                ? (::miss_lat_a[this] - ::miss_lat_b[this] > ::g_hyst)
                 : (::psel[this] > PSEL_MID);
             const bool use_b = is_b || (!is_a && step > 0 && b_wins);
             ::slot_cfg_b[this][slot] = use_b;
@@ -426,12 +429,12 @@ void CACHE::replacement_final_stats()
     printf("%s LRU-Live STATS:\n", NAME.c_str());
     if (::g_n_samplers > 0) {
         const bool lat = (::g_ll_duel_metric == 1);
-        const bool b_wins = lat ? (::miss_lat_b[this] < ::miss_lat_a[this])
+        const bool b_wins = lat ? (::miss_lat_a[this] - ::miss_lat_b[this] > ::g_hyst)
                                 : (::psel[this] > PSEL_MID);
         if (lat) {
-            printf("  Set dueling      : metric=latency  winner=%s"
+            printf("  Set dueling      : metric=latency  hyst=%ld  winner=%s"
                    "  lat_a=%ld  lat_b=%ld\n",
-                   b_wins ? "cfgB" : "cfgA",
+                   ::g_hyst, b_wins ? "cfgB" : "cfgA",
                    ::miss_lat_a[this], ::miss_lat_b[this]);
         } else {
             const int p = ::psel[this];
