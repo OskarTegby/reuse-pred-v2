@@ -670,6 +670,11 @@ bool CACHE::handle_fill(const PACKET& fill_mshr)
 {
   cpu = fill_mshr.cpu;
 
+  // Expose this fill's miss latency to the replacement module (read in
+  // impl_update_replacement_state below). Mirrors the total_miss_latency
+  // accounting further down so set dueling can compare configs by miss cost.
+  last_fill_latency = current_cycle - (fill_mshr.cycle_enqueued + 1);
+
   // find victim
   auto [set_begin, set_end] = get_set_span(fill_mshr.address);
   auto way = std::find_if_not(set_begin, set_end, [](auto x) { return x.valid; });

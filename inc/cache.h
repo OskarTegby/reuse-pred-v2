@@ -1532,6 +1532,12 @@ class CACHE : public champsim::operable, public MemoryRequestConsumer, public Me
   bool repl_guidance_enable = false;  // enable replacement guidance from bHIST
   uint64_t repl_guidance_thd = 0;     // threshold: dead_count >= thd → good victim
 
+  // Most recent miss-fill latency in cycles (current_cycle - cycle_enqueued - 1),
+  // set in handle_fill immediately before impl_update_replacement_state. Lets a
+  // replacement module attribute per-fill miss cost (e.g. ipv_live set dueling on
+  // total miss latency instead of hit count). 0 on warmup-elided fills.
+  uint64_t last_fill_latency = 0;
+
 
   // Query bHIST for guidance score (dead_count) of a block for replacement.
   // Returns the dead_count from bHIST, or 0 if not found or guidance disabled.

@@ -252,7 +252,85 @@ None of these explain the headline gap; they are overhead/robustness studies.
 
 ---
 
-## 11. Bottom line — where the performance comes from
+## 11. IPV-Live set dueling: bug, falsification, and fix (2026-06-23)
+
+### The zero-initialized DoA vector bug
+
+The N-way set-dueling refactor (commit 9819c17a, branch `set-dueling-nway`) changed
+IPV-Live insertion to read `g_duel_doa[cfg]` for every block. The array was populated
+from `IPV_DOA_i` env vars only when `g_n_configs >= 2`. Non-dueling runs (`g_n_configs=1`)
+skipped this path, leaving `g_duel_doa[0] = {0,0,0,0,0}`.
+
+**Evidence it was real:** cfgA (`{0,1,2,2,2}`) and ilB (`{0,1,2,2,3}`) produced
+byte-identical `champsim.out` files in the mechcheck run (same IPC to 4 decimal places,
+same MPKI, same RRPV-at-eviction histogram). Two configs that differ only in one IPV
+position cannot be identical if that position is being read. The only explanation is that
+neither config was being read — consistent with `g_duel_doa[0]` being all-zeros.
+
+**Mechanism:** RRPV = `g_duel_doa[cfg][age_bucket]` for DoA blocks. With the zero vector,
+every age bucket maps to RRPV=0 (MRU), so all DoA blocks were inserted at the most
+protected position. `THD_DOA` was also inert: the threshold gates how often a block is
+classified DoA, but the insertion position was wrong regardless of classification.
+
+**Fix (commit 488746c18dc4):** Added `g_duel_doa[0] = g_ipv_doa;` before the early
+return in `ensure_parsed_duel()`, so config 0 always mirrors the single-IPV path.
+Verified: cfgA and ilB now differ (IPC gap ~0.5–2% per trace on typical suites).
+
+**Results invalidated by the bug:** the ins2 arms of both threshold sweeps
+(`ipv_thd_sweep_20260623_*`) were run with the N-way binary and produced nonsense.
+Those jobs were cancelled and deleted. Pre-N-way references (`ipv_cfg2_20260621_0042`
+cfgA, `ins3_hit_20260621_1954` ilB) were built from the binary before the refactor
+and remain valid.
+
+### Hit-count duel falsification
+
+Hypothesis: cfgA's hit-count lead over ilB on QMM came from DoA blocks being retained
+at higher RRPV and re-hitting. If so, filtering the duel signal to non-DoA hits should
+flip the winner to ilB.
+
+**Evidence against:** a local experiment on 3 QMM traces (binary at commit `488746c18dc4`,
+branch `duel-miss-latency`) measured cfgA sampler DoA hits = 1,560 of 93,548 total (1.7%).
+Filtering DoA hits barely changed the counters; the winner never flipped. cfgA genuinely
+produces more non-DoA hits too, but ilB's IPC advantage is in the miss stream
+(fewer/cheaper misses), invisible to any hit counter.
+
+**Resolution:** `DUEL_METRIC=latency` (commit `7b3bf80fd758`) accumulates total fill
+latency per sampler config; argmin selects the winner. Validated on 3 QMM traces that
+previously picked cfgA under hit-count: all 3 correctly flip to ilB under latency.
+Full 7-suite θ=6 result: pooled latency-duel +1.15% vs SRRIP, vs +0.83% for fixed ilB
+and +0.90% for the hit-based duel. Both key failures resolved: QMM +0.18%→+1.47%,
+ligra −1.82%→+1.30%. Cluster jobs: `eval_theta6_fixed_20260623_1440/ipv_live/duel_lat`
+(binary `champsim_ipv_live_latency`, built from commit `7b3bf80fd758`).
+
+### Why hit-count IS reliable for SRRIP-Live on Ligra (contrast with IPV-Live on QMM)
+
+On Ligra at θ=6, 94–99% of LLC insertions are classified DoA but a non-trivial fraction
+are re-referenced (DoA hit rates 2–25% per trace). Config B (ins@3) immediately evicts
+those blocks → regression up to −5.2%. Config A (ins@2 ≈ SRRIP) keeps them at RRPV=2
+→ they accumulate hits in A-sampler sets but not in B-sampler sets.
+
+**Evidence (local experiment, 3 ligra traces, `results/local_ligra_duel`,
+binary `bin/champsim_srrip_live` built from commit `da3249d5f3c3`, branch `duel-miss-latency`,
+script `scripts/local_srrip_live_ligra_duel.sh`):**
+
+| trace         | cfgB/SRRIP | duel/SRRIP | PSEL      |
+|---------------|-----------|-----------|-----------|
+| CF            |   +0.24%  |   −0.19%  | config_A  |
+| BFSCC         |   −1.71%  |   −0.44%  | config_A  |
+| PageRankDelta |   −5.16%  |   −1.53%  | 2/1023 → config_A |
+
+PSEL reaches 2/1023 on PageRankDelta — the counter saturates almost entirely toward A.
+The hit-count signal is clean here because A's sampler-hit advantage reflects genuinely
+useful blocks being kept alive (misclassified DoA blocks that are actually re-used), not
+inflated retention of truly-dead blocks as in the IPV-Live/QMM case.
+
+The residual gap between the duel (−0.72% pooled) and standalone cfgA (−0.19%) is
+structural: B-sampler sets are locked to cfgB and cannot switch. This cost is unavoidable
+with any set-dueling design but is bounded by the sampler fraction (~3% of sets per config).
+
+---
+
+## 12. Bottom line — where the performance comes from
 
 1. **Liveness scoring (3-class, mode-5) is the enabler:** ~0 → +2.43% even with a
    bad (address) index. Mazumdar's dead-counter caps the predictor at ~0.

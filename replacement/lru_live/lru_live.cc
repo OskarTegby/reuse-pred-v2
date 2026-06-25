@@ -41,29 +41,97 @@
 
 #include "cache.h"
 
+// DoA insertion modes (LRU_LIVE_DOA_INS env var):
+//   "2n3"    (default): insert DoA at 2N/3 from MRU — current behaviour
+//   "lru"            : insert DoA at rank 0 (LRU position, evicted on next fill)
+//   "bypass"         : insert DoA at rank 0 AND mark as bypass-priority, so
+//                      find_victim always returns bypass slots before any other
+//
+// Set dueling (DUEL_N_SAMPLERS=N):
+//   Partition LLC sets into sampler-A, sampler-B, and follower sets.
+//   Sampler A always uses the cfgA insertion mode (LRU_LIVE_DOA_INS).
+//   Sampler B always uses the cfgB insertion mode (LRU_LIVE_DOA_INS_B).
+//   Follower sets adopt whichever sampler accumulates more demand hits (PSEL).
+//   LRU_LIVE_DOA_INS_B defaults to "bypass" when dueling is on.
+
 namespace
 {
+
+// DoA insertion mode constants
+enum class DoAIns { Pos2N3, LRUpos, Bypass };
+
+static bool bypass_allowed()
+{
+    const char* e = std::getenv("LRU_LIVE_ALLOW_BYPASS");
+    // Default: bypass allowed. Set LRU_LIVE_ALLOW_BYPASS=0 to disable globally.
+    return !(e && e[0] == '0');
+}
+
+static DoAIns parse_ins_mode(const char* env, const char* dflt_str)
+{
+    const char* v = std::getenv(env);
+    if (!v || !v[0]) v = dflt_str;
+    if (std::string(v) == "lru")    return DoAIns::LRUpos;
+    if (std::string(v) == "bypass") return bypass_allowed() ? DoAIns::Bypass : DoAIns::LRUpos;
+    return DoAIns::Pos2N3;
+}
+
+static DoAIns g_ins_a = DoAIns::Pos2N3;  // cfgA (default: 2n3)
+static DoAIns g_ins_b = DoAIns::Bypass;  // cfgB (default: bypass when dueling)
+static int    g_n_samplers = -1;
+static int64_t g_hyst = 0;  // cfgB must beat cfgA by this margin to win followers
+
+static int g_ll_duel_metric = -1;
+
+static void ensure_parsed()
+{
+    if (g_n_samplers >= 0) return;
+    const char* e = std::getenv("DUEL_N_SAMPLERS");
+    g_n_samplers = (e && *e) ? std::atoi(e) : 0;
+    const char* h = std::getenv("DUEL_HYST");
+    g_hyst = (h && *h) ? static_cast<int64_t>(std::atoll(h)) : 0;
+    g_ins_a = parse_ins_mode("LRU_LIVE_DOA_INS",   "2n3");
+    g_ins_b = parse_ins_mode("LRU_LIVE_DOA_INS_B", "bypass");
+    const char* dm = std::getenv("DUEL_METRIC");
+    g_ll_duel_metric = (dm && (std::string(dm) == "latency" || std::string(dm) == "1")) ? 1 : 0;
+}
 
 std::unordered_map<CACHE*, std::vector<uint32_t>> lru_rank;
 // 0=unguided  1=doa  2=mostly_dead  3=mostly_alive
 std::unordered_map<CACHE*, std::vector<int8_t>>   slot_class;
+// true if slot was inserted in bypass mode (always evicted first)
+std::unordered_map<CACHE*, std::vector<bool>>      bypassed;
+// which config (A=false, B=true) was used at insertion for this slot
+std::unordered_map<CACHE*, std::vector<bool>>      slot_cfg_b;
+
+// PSEL counter and per-cache hit counts for dueling (hit-count mode)
+constexpr int PSEL_BITS = 10;
+constexpr int PSEL_MAX  = (1 << PSEL_BITS) - 1;
+constexpr int PSEL_MID  = 1 << (PSEL_BITS - 1);
+std::unordered_map<CACHE*, int>      psel;
+std::unordered_map<CACHE*, uint64_t> sampler_a_hits;
+std::unordered_map<CACHE*, uint64_t> sampler_b_hits;
+// Latency accumulators for dueling (latency mode)
+std::unordered_map<CACHE*, int64_t>  miss_lat_a;
+std::unordered_map<CACHE*, int64_t>  miss_lat_b;
 
 // Residency instrumentation. Time is measured in per-set "ticks": one tick per
 // update_replacement_state call for that set (every access touching the set).
 // Residency of a block = ticks survived between its fill and its eviction.
-std::unordered_map<CACHE*, std::vector<uint64_t>> fill_time;      // per slot
-std::unordered_map<CACHE*, std::vector<uint64_t>> last_hit_time;  // per slot
-std::unordered_map<CACHE*, std::vector<uint32_t>> hit_cnt;        // per slot
-std::unordered_map<CACHE*, std::vector<uint64_t>> set_clock;      // per set
+std::unordered_map<CACHE*, std::vector<uint64_t>> fill_time;
+std::unordered_map<CACHE*, std::vector<uint64_t>> last_hit_time;
+std::unordered_map<CACHE*, std::vector<uint32_t>> hit_cnt;
+std::unordered_map<CACHE*, std::vector<uint64_t>> set_clock;
 
 struct Stats {
     uint64_t ins_unguided = 0, ins_doa = 0, ins_dead = 0, ins_alive = 0;
+    uint64_t ins_doa_bypass = 0;   // DoA fills inserted in bypass mode
     uint64_t hit_unguided = 0, hit_doa = 0, hit_dead = 0, hit_alive = 0;
+    uint64_t hit_doa_bypass = 0;   // hits on bypass-mode DoA slots (before eviction)
     uint64_t evict_doa = 0, evict_dead = 0, evict_alive = 0, evict_unguided = 0;
-    // Residency at eviction, indexed [class 0..3][reuse 0=no-hit,1=>=1 hit].
+    uint64_t evict_doa_bypass = 0; // bypass-mode DoA evictions
     double   res_sum[4][2] = {};
     uint64_t res_cnt[4][2] = {};
-    // For evicted blocks that were hit >=1 time: ticks between last hit and eviction.
     double   afterhit_sum[4] = {};
     uint64_t afterhit_cnt[4] = {};
 };
@@ -73,17 +141,25 @@ std::unordered_map<CACHE*, Stats> stats;
 
 void CACHE::initialize_replacement()
 {
+    ensure_parsed();
     const std::size_t n = NUM_SET * NUM_WAY;
     auto& ranks = ::lru_rank[this];
     ranks.resize(n);
     for (uint32_t set = 0; set < NUM_SET; ++set)
         for (uint32_t way = 0; way < NUM_WAY; ++way)
-            ranks[set * NUM_WAY + way] = way;  // initial: way 0 = LRU, way N-1 = MRU
-    ::slot_class[this] = std::vector<int8_t>(n, 0);
+            ranks[set * NUM_WAY + way] = way;
+    ::slot_class[this]   = std::vector<int8_t>(n, 0);
+    ::bypassed[this]     = std::vector<bool>(n, false);
+    ::slot_cfg_b[this]   = std::vector<bool>(n, false);
     ::fill_time[this]     = std::vector<uint64_t>(n, 0);
     ::last_hit_time[this] = std::vector<uint64_t>(n, 0);
     ::hit_cnt[this]       = std::vector<uint32_t>(n, 0);
     ::set_clock[this]     = std::vector<uint64_t>(NUM_SET, 0);
+    ::psel[this]           = PSEL_MID;
+    ::sampler_a_hits[this] = 0;
+    ::sampler_b_hits[this] = 0;
+    ::miss_lat_a[this]     = 0;
+    ::miss_lat_b[this]     = 0;
     ::stats[this] = Stats{};
 }
 
@@ -91,7 +167,22 @@ uint32_t CACHE::find_victim(uint32_t triggering_cpu, uint64_t instr_id, uint32_t
                              const BLOCK* current_set, uint64_t ip, uint64_t full_addr,
                              uint32_t type)
 {
-    const auto* ranks = ::lru_rank[this].data() + set * NUM_WAY;
+    const auto* ranks   = ::lru_rank[this].data() + set * NUM_WAY;
+    const auto& bypass_ = ::bypassed[this];
+
+    // Bypass-priority: always evict a bypass-flagged slot before any regular slot.
+    for (uint32_t w = 0; w < NUM_WAY; ++w) {
+        if (bypass_[set * NUM_WAY + w]) {
+            uint32_t victim = w;
+            // among multiple bypass slots pick the one with lowest rank
+            for (uint32_t w2 = w + 1; w2 < NUM_WAY; ++w2)
+                if (bypass_[set * NUM_WAY + w2] && ranks[w2] < ranks[victim])
+                    victim = w2;
+                ::stats[this].evict_doa_bypass++;
+            return victim;
+        }
+    }
+
     uint32_t victim = 0;
     for (uint32_t w = 1; w < NUM_WAY; ++w)
         if (ranks[w] < ranks[victim])
@@ -211,6 +302,23 @@ void CACHE::update_replacement_state(uint32_t triggering_cpu, uint32_t set, uint
         }
 
         if (use_liveness) {
+            // Duel signal update on demand hits (sampler sets only).
+            const int ns   = ::g_n_samplers;
+            const int step = ns > 0 ? static_cast<int>(NUM_SET) / ns : 0;
+            if (type != WRITE && step > 0) {
+                const bool is_a = static_cast<int>(set) % step == 0;
+                const bool is_b = static_cast<int>(set) % step == step / 2;
+                if (::g_ll_duel_metric == 0) {
+                    if (is_a) { ::psel[this] = std::max(0,        ::psel[this] - 1); ::sampler_a_hits[this]++; }
+                    if (is_b) { ::psel[this] = std::min(PSEL_MAX, ::psel[this] + 1); ::sampler_b_hits[this]++; }
+                }
+            }
+            // A bypass-flagged DoA slot that gets a hit proved itself: demote the
+            // bypass flag so it is no longer eviction-priority and can age normally.
+            if (cls == 1 && ::bypassed[this][slot]) {
+                ::bypassed[this][slot] = false;
+                st.hit_doa_bypass++;
+            }
             switch (cls) {
                 case 1:  st.hit_doa++;   break;
                 case 2:  st.hit_dead++;  break;
@@ -224,21 +332,56 @@ void CACHE::update_replacement_state(uint32_t triggering_cpu, uint32_t set, uint
         // Fill: evicted block had rank 0.  Remaining ways are at ranks 1..N-1.
         // Insert new block at rank R (0=LRU, N-1=MRU).
         uint32_t R;
+        ::bypassed[this][slot] = false;
         if (use_liveness) {
+            // Determine which config to use for this set.
+            const int ns   = ::g_n_samplers;
+            const int step = ns > 0 ? static_cast<int>(NUM_SET) / ns : 0;
+            const bool is_a = step > 0 && static_cast<int>(set) % step == 0;
+            const bool is_b = step > 0 && static_cast<int>(set) % step == step / 2;
+            const bool b_wins = (::g_ll_duel_metric == 1)
+                ? (::miss_lat_a[this] - ::miss_lat_b[this] > ::g_hyst)
+                : (::psel[this] > PSEL_MID);
+            const bool use_b = is_b || (!is_a && step > 0 && b_wins);
+            ::slot_cfg_b[this][slot] = use_b;
+            const DoAIns ins_mode = use_b ? ::g_ins_b : ::g_ins_a;
+
+            // Latency duel: accumulate fill latency per sampler config.
+            if (::g_ll_duel_metric == 1 && type != WRITE) {
+                if (is_a) ::miss_lat_a[this] += static_cast<int64_t>(this->last_fill_latency);
+                if (is_b) ::miss_lat_b[this] += static_cast<int64_t>(this->last_fill_latency);
+            }
+
             const liveness_class lc = classify_block_liveness(full_addr, ip);
             if (lc == liveness_class::doa) {
-                R = N - 1 - (2 * N / 3);  // position 2N/3 from MRU → rank N-1-2N/3
-                cls = 1; st.ins_doa++;
+                cls = 1;
+                switch (ins_mode) {
+                    case DoAIns::LRUpos:
+                        R = 0;
+                        st.ins_doa++;
+                        break;
+                    case DoAIns::Bypass:
+                        R = 0;
+                        ::bypassed[this][slot] = true;
+                        st.ins_doa++;
+                        st.ins_doa_bypass++;
+                        break;
+                    default:  // Pos2N3
+                        R = N - 1 - (2 * N / 3);
+                        st.ins_doa++;
+                        break;
+                }
             } else if (lc == liveness_class::mostly_dead) {
-                R = N - 1 - (N / 3);      // position N/3 from MRU → rank N-1-N/3
+                R = N - 1 - (N / 3);
                 cls = 2; st.ins_dead++;
             } else {
-                R = N - 1;                 // MRU
+                R = N - 1;
                 cls = 3; st.ins_alive++;
             }
         } else {
-            R = N - 1;  // standard LRU: always insert at MRU
+            R = N - 1;
             cls = 0; st.ins_unguided++;
+            ::slot_cfg_b[this][slot] = false;
         }
 
         // Adjust remaining ways: those with old rank in [1, R] shift down by 1.
@@ -251,7 +394,7 @@ void CACHE::update_replacement_state(uint32_t triggering_cpu, uint32_t set, uint
         }
         ranks[way] = R;
 
-        ::fill_time[this][slot]     = clk;   // residency: birth tick
+        ::fill_time[this][slot]     = clk;
         ::last_hit_time[this][slot] = clk;
         ::hit_cnt[this][slot]       = 0;
     }
@@ -275,7 +418,36 @@ void CACHE::replacement_final_stats()
     const char* hi = std::getenv("LRU_LIVE_HIT_INIT");
     const int hit_mode = (!hi || hi[0] == '\0' || hi[0] == '0') ? 0 : (hi[0] == '2' ? 2 : 1);
 
+    auto ins_str = [](DoAIns m) -> const char* {
+        switch (m) {
+            case DoAIns::LRUpos: return "lru (rank 0)";
+            case DoAIns::Bypass: return "bypass (rank 0, priority eviction)";
+            default:             return "2n3 (default)";
+        }
+    };
+
     printf("%s LRU-Live STATS:\n", NAME.c_str());
+    if (::g_n_samplers > 0) {
+        const bool lat = (::g_ll_duel_metric == 1);
+        const bool b_wins = lat ? (::miss_lat_a[this] - ::miss_lat_b[this] > ::g_hyst)
+                                : (::psel[this] > PSEL_MID);
+        if (lat) {
+            printf("  Set dueling      : metric=latency  hyst=%ld  winner=%s"
+                   "  lat_a=%ld  lat_b=%ld\n",
+                   ::g_hyst, b_wins ? "cfgB" : "cfgA",
+                   ::miss_lat_a[this], ::miss_lat_b[this]);
+        } else {
+            const int p = ::psel[this];
+            printf("  Set dueling      : metric=hits  PSEL=%d/%d  winner=%s"
+                   "  sampler_a_hits=%lu  sampler_b_hits=%lu\n",
+                   p, PSEL_MAX, b_wins ? "cfgB" : "cfgA",
+                   ::sampler_a_hits[this], ::sampler_b_hits[this]);
+        }
+        printf("  cfgA DoA ins     : %s\n", ins_str(::g_ins_a));
+        printf("  cfgB DoA ins     : %s\n", ins_str(::g_ins_b));
+    } else {
+        printf("  DoA ins mode     : %s  (LRU_LIVE_DOA_INS)\n", ins_str(::g_ins_a));
+    }
     printf("  Insertion positions: DoA=%u/MRU  Dead=%u/MRU  Alive=0/MRU  (N=%u)\n",
            pos_doa, pos_dead, N);
     printf("  Hit promotion    : %s\n",

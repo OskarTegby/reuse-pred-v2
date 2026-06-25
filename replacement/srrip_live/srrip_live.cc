@@ -72,9 +72,12 @@ constexpr int PSEL_MID  = 1 << (PSEL_BITS - 1);
 
 std::unordered_map<CACHE*, int>                  psel;
 std::unordered_map<CACHE*, std::vector<uint8_t>> slot_cfg_b;
+std::unordered_map<CACHE*, int64_t>              miss_lat_a;
+std::unordered_map<CACHE*, int64_t>              miss_lat_b;
 
 } // namespace
 
+static int g_duel_metric  = -1;  // 0=hits (PSEL), 1=latency (argmin)
 static int g_doa_ins_rrpv = -1;
 static int g_doa_hit_rrpv = -1;
 static int g_md_ins_rrpv  = -1;
@@ -95,7 +98,8 @@ static int md_hit_rrpv()  { if (g_md_hit_rrpv  < 0) g_md_hit_rrpv  = parse_env_r
 // Override via SRRIP_DOA_INS_RRPV_B / SRRIP_DOA_HIT_RRPV_B / SRRIP_MD_INS_RRPV_B / SRRIP_MD_HIT_RRPV_B.
 // Set dueling (DUEL_N_SAMPLERS=N) picks A or B per workload via PSEL counter.
 static int g_doa_ins_b = -1, g_doa_hit_b = -1, g_md_ins_b = -1, g_md_hit_b = -1;
-static int g_n_samplers = -1;
+static int     g_n_samplers = -1;
+static int64_t g_hyst       = -1;  // cfgB must lead cfgA by this margin to win followers
 
 static int doa_ins_b()  { if (g_doa_ins_b  < 0) g_doa_ins_b  = parse_env_rrpv("SRRIP_DOA_INS_RRPV_B", 3); return g_doa_ins_b;  }
 static int doa_hit_b()  { if (g_doa_hit_b  < 0) g_doa_hit_b  = parse_env_rrpv("SRRIP_DOA_HIT_RRPV_B", 0); return g_doa_hit_b;  }
@@ -108,6 +112,20 @@ static int n_samplers() {
   }
   return g_n_samplers;
 }
+static int64_t hyst() {
+  if (g_hyst < 0) {
+    const char* e = std::getenv("DUEL_HYST");
+    g_hyst = (e && *e) ? static_cast<int64_t>(std::atoll(e)) : 0;
+  }
+  return g_hyst;
+}
+static int duel_metric() {
+  if (g_duel_metric < 0) {
+    const char* e = std::getenv("DUEL_METRIC");
+    g_duel_metric = (e && (std::string(e) == "latency" || std::string(e) == "1")) ? 1 : 0;
+  }
+  return g_duel_metric;
+}
 
 void CACHE::initialize_replacement()
 {
@@ -117,9 +135,11 @@ void CACHE::initialize_replacement()
   ::slot_cfg_b[this]   = std::vector<uint8_t>(n, 0);
   ::stats[this]        = Stats{};
   ::psel[this]         = PSEL_MID;
+  ::miss_lat_a[this]   = 0;
+  ::miss_lat_b[this]   = 0;
   (void)doa_ins_rrpv(); (void)doa_hit_rrpv(); (void)md_ins_rrpv(); (void)md_hit_rrpv();
   (void)doa_ins_b();    (void)doa_hit_b();    (void)md_ins_b();    (void)md_hit_b();
-  (void)n_samplers();
+  (void)n_samplers();   (void)duel_metric();  (void)hyst();
 }
 
 uint32_t CACHE::find_victim(uint32_t triggering_cpu, uint64_t instr_id, uint32_t set,
@@ -198,12 +218,24 @@ void CACHE::update_replacement_state(uint32_t triggering_cpu, uint32_t set, uint
     const bool is_a = step > 0 && static_cast<int>(set) % step == 0;
     const bool is_b = step > 0 && static_cast<int>(set) % step == step / 2;
 
-    if (hit && type != WRITE) {
-      if (is_a) { ::psel[this] = std::max(0,        ::psel[this] - 1); st.sampler_a_hits++; }
-      if (is_b) { ::psel[this] = std::min(PSEL_MAX, ::psel[this] + 1); st.sampler_b_hits++; }
+    if (duel_metric() == 1) {
+      // Latency mode: accumulate fill latency per sampler config; argmin wins.
+      if (!hit && type != WRITE) {
+        if (is_a) ::miss_lat_a[this] += static_cast<int64_t>(this->last_fill_latency);
+        if (is_b) ::miss_lat_b[this] += static_cast<int64_t>(this->last_fill_latency);
+      }
+    } else {
+      // Hit-count mode: PSEL increments toward the sampler with more demand hits.
+      if (hit && type != WRITE) {
+        if (is_a) { ::psel[this] = std::max(0,        ::psel[this] - 1); st.sampler_a_hits++; }
+        if (is_b) { ::psel[this] = std::min(PSEL_MAX, ::psel[this] + 1); st.sampler_b_hits++; }
+      }
     }
     // ub: this slot should use config B
-    const bool ub = is_b || (!is_a && step > 0 && ::psel[this] > PSEL_MID);
+    const bool b_wins = (duel_metric() == 1)
+        ? (::miss_lat_a[this] - ::miss_lat_b[this] > ::hyst())
+        : (::psel[this] > PSEL_MID + static_cast<int>(::hyst()));
+    const bool ub = is_b || (!is_a && step > 0 && b_wins);
 
     auto& cfg_b = ::slot_cfg_b[this][idx];
     if (hit) {
@@ -249,11 +281,21 @@ void CACHE::replacement_final_stats()
 
   printf("%s SRRIP-Live STATS:\n", NAME.c_str());
   if (::n_samplers() > 0) {
-    const int p = ::psel[this];
-    printf("  Set dueling      : PSEL=%d/%d  winner=%s"
-           "  sampler_a_hits=%lu  sampler_b_hits=%lu\n",
-           p, PSEL_MAX, p > PSEL_MID ? "config_B" : "config_A",
-           st.sampler_a_hits, st.sampler_b_hits);
+    const bool lat = (::duel_metric() == 1);
+    const bool b_wins = lat ? (::miss_lat_b[this] < ::miss_lat_a[this])
+                            : (::psel[this] > PSEL_MID);
+    if (lat) {
+      printf("  Set dueling      : metric=latency  winner=%s"
+             "  lat_a=%ld  lat_b=%ld\n",
+             b_wins ? "config_B" : "config_A",
+             ::miss_lat_a[this], ::miss_lat_b[this]);
+    } else {
+      const int p = ::psel[this];
+      printf("  Set dueling      : metric=hits  PSEL=%d/%d  winner=%s"
+             "  sampler_a_hits=%lu  sampler_b_hits=%lu\n",
+             p, PSEL_MAX, b_wins ? "config_B" : "config_A",
+             st.sampler_a_hits, st.sampler_b_hits);
+    }
     printf("  Config A: DoA ins=%d hit=%d  MD ins=%d hit=%d\n",
            ::doa_ins_rrpv(), ::doa_hit_rrpv(), ::md_ins_rrpv(), ::md_hit_rrpv());
     printf("  Config B: DoA ins=%d hit=%d  MD ins=%d hit=%d"
