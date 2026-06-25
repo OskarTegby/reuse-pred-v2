@@ -472,28 +472,42 @@ choice to resolve this. Here, it is done by running both configs on small sample
 subsets of  the \llc and steering the remaining follower sets toward whichever is 
 currently performing better at the moment.
 
-\paragraph{Hit-count signal (\textsc{PSEL}).}
-A saturating counter increments toward the sampler config that accumulates more
-demand hits; follower sets use config~B when the counter exceeds the midpoint.
-This signal is a proxy for cache utility: a config that generates more hits
-is retaining more blocks that are subsequently re-referenced.
-A potential bias arises when one config retains \doa blocks longer and thereby
-inflates its own sampler hit count. Those extra hits come from blocks that
-ideally should have been evicted sooner, causing \textsc{PSEL} to prefer that
-config regardless of whether it actually improves performance.
+\paragraph{Hit-count signal.}
+A saturating \emph{policy selector} counter (\textsc{PSEL}) increments on a
+miss in the conservative-insertion sampler sets and decrements on a miss in the
+aggressive-insertion sets; follower sets switch to the aggressive insertion when
+the counter exceeds the midpoint, i.e., the aggressive insertion has sustained fewer misses.
+
+A bias can arise from mispredicted \doa blocks --- blocks classified as DoA 
+that are in fact reused. In the conservative sampler such a block is still 
+present when the reuse arrives, so it registers as a hit and contributes no miss.
+In the aggressive sampler the same block has already been evicted, so the
+reuse is a cache miss and decrements \textsc{PSEL}.
+
+The result is that \textsc{PSEL} can settle on the conservative insertion even
+in workloads where the aggressive insertion would improve overall performance
+by evicting correctly-classified \doa blocks and making room for live ones.
 
 \paragraph{Miss-latency signal.}
-Each sampler set accumulates total fill latency
-$(\text{current cycle} - \text{fill enqueue cycle} - 1)$ per config; follower sets
-adopt the config with lower accumulated latency.
-This captures both miss count and miss cost (e.g., \textsc{DRAM} row-buffer
-locality), making it sensitive to differences that arise not from miss count
-alone but from average miss cost.
-Where the block-retention bias described above distorts the hit-count signal,
-a config that retains more \doa blocks also incurs more fills for them, which
-accumulates in its latency total and counteracts any artificial hit-count
-advantage. Where retention behaviour is similar across configs, both signals
-should produce equivalent decisions.
+Each sampler set accumulates total fill latency per insertion strategy; follower
+sets adopt the option with lower accumulated total. This captures both miss count 
+and miss cost.
+
+Ways occupied by retained \doa blocks are unavailable for live blocks; when a
+live block misses because those ways are taken, its fill adds directly to the
+conservative sampler's accumulated latency.
+The aggressive insertion evicts \doa blocks first, keeping those ways free and
+reducing live-block misses.
+The latency signal therefore penalises conservative \doa retention where the
+hit-count signal rewarded it.
+
+\textsc{PSEL} is reliable when both options retain \doa blocks for similar
+durations: miss counts then faithfully reflect which option serves live blocks
+better.
+When the options differ substantially in \doa retention depth, miss-latency is
+the more robust choice, since it is sensitive to the downstream cost imposed on
+live blocks rather than to which option avoids re-fetching a mispredicted \doa
+block.
 
 \subsection{Bypass}
 \label{sec:bypassstate_policy}
@@ -510,20 +524,12 @@ The misprediction cost is the same as for aggressive insertion (a re-fetch from
 memory if the block is later referenced) but amplified, since there is no
 opportunity for the block to receive a hit while it waits near the eviction
 point.
-Set dueling between the default insertion depth and bypass uses the miss-latency
-signal to decide per workload: elevated fill latency in the bypass-sampler sets
-indicates that re-fetches are occurring frequently, and the duel withholds bypass
-there while applying it where the classifier is reliable.
 
-\paragraph{The adopted policy.}
-All three policies use the same per-\textsc{PC} liveness signal; they differ only in
-how a class steers insertion/promotion. We adopt \srrip-Live as the default
-(Section~\ref{sec:results} compares all three): liveness-guided \srrip insertion and
-promotion driven by falling-weight scoring (decoupled, $\delta{=}5/3/1$;
-Algorithm~\ref{alg:counter_variant}), a per-\textsc{PC} history
-table whose bounded form uses LFU-DoA eviction with a promotion buffer
-(Section~\ref{sec:llcsize}), and, on top of insertion guidance, the \llc bypass
-predictor of Section~\ref{sec:bypass}.
+We use set dueling to decide between the default insertion position and bypass, 
+using the miss-latency signal to arbitrate per workload.
+The expectation is that elevated fill latency in the bypass-sampler sets
+reflects frequent re-fetches of mispredicted blocks, and that the duel will
+withhold bypass in those cases while applying it where fill latency remains low.
 
 % ─────────────────────────────────────────────────────────────────────────────
 \section{Experimental Setup}
@@ -532,11 +538,28 @@ predictor of Section~\ref{sec:bypass}.
 We simulate with ChampSim using the configuration in
 Table~\ref{tab:config}. Each trace runs for 50M warmup + 100M simulation
 instructions. Speedup is geomean IPC relative to \lru.
-Seven benchmark suites span server, data-centre, and scientific workloads:
-QMM (45 Qualcomm server traces), Google (15 data-centre traces),
-DPC3 (14 SPEC CPU traces), GAP and GMS (6 graph-analytics traces each),
-Ligra (6 graph-processing traces), and ML (4 AI/ML inference traces),
-for 96 traces in total.
+Seven benchmark suites are summarised in Table~\ref{tab:suites}.
+
+\begin{table}[t!]
+\centering
+\small
+\caption{Benchmark suites. LLC MPKI characterises \llc demand pressure;
+  uniformity indicates whether pressure is consistent across traces in the suite.}
+\label{tab:suites}
+\begin{tabular}{lrll}
+\toprule
+\textbf{Suite} & \textbf{Traces} & \textbf{LLC MPKI} & \textbf{Uniform?} \\
+\midrule
+QMM    & 45 & Low (${\leq}2.5$)    & Yes --- uniformly low    \\
+Google & 43 & Moderate             & Moderate variation       \\
+DPC3   & 95 & Mixed (low--high)    & No --- heterogeneous     \\
+GAP    &  9 & High                 & Yes --- all pressured    \\
+GMS    & 11 & Moderate--high       & Partially (6/11 high)   \\
+Ligra  & 18 & High                 & Yes --- nearly all       \\
+ML     & 31 & High                 & Yes --- nearly all       \\
+\bottomrule
+\end{tabular}
+\end{table}
 
 \setcounter{table}{1}
 \begin{table}[t!]
@@ -562,7 +585,7 @@ DRAM & 3200~MHz, 1 channel & $t_{RP}$/$t_{RCD}$/$t_{CAS}$ = 12.5~ns \\
 \end{tabular}
 \end{table}
 % ─────────────────────────────────────────────────────────────────────────────
-\section{Bounded History Tables and Promotion Buffers}
+\section{Bounded History Tables}
 % ─────────────────────────────────────────────────────────────────────────────
 
 The per-PC liveness history table can be implemented with unbounded storage
@@ -570,15 +593,6 @@ The per-PC liveness history table can be implemented with unbounded storage
 impractical for hardware. A bounded table with $N$ entries raises a design
 question: when a new PC evicts an old one, how do we avoid losing useful
 history?
-
-We employ a \emph{promotion buffer} --- a second-level buffer between the
-main table and full eviction. When a PC is evicted from the main table, it
-enters the promotion buffer with its dead-count reset to 1. To re-enter the
-main table, it must accumulate enough evidence (dead-count $\geq$ threshold)
-in the buffer to ``beat'' the worst entry in the main table (by frequency
-for LFU-DoA replacement). This two-level design acts as a quality gate: weak
-entries spend time in the buffer proving their importance before displacing
-established entries in the main table.
 
 The eviction policy \emph{within} the history table is itself a design choice. We
 compare LRU, LFU, and LFU-DoA (frequency weighted by dead-on-arrival evictions)
