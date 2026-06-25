@@ -34,8 +34,8 @@
 
 \author{
   \IEEEauthorblockN{Oskar Tegby}
-  \IEEEauthorblockA{NTNU?\\
-    Trondheim, Norway}
+  \IEEEauthorblockA{NTNU? Murcia?\\
+    Norway? Spain?}
   \and
   \IEEEauthorblockN{Alberto Ros}
   \IEEEauthorblockA{University of Murcia\\
@@ -53,10 +53,9 @@ from the same load instruction have behaved before. We characterise per-block li
 cache (\llc) across seven benchmark suites and show that dead-on-arrival (\doa)
 blocks dominate (51--97\,\%), concentrated in a small number of load PCs.
 Building on this observation, we present \lru-Live, \srrip-Live, and \ipv-Live:
-a family of liveness-guided replacement policies that classify each fill as
-\doa, mostly-dead, or mostly-alive using per-PC saturating counters, and steer
-insertion priority and hit promotion accordingly. The approach is compatible with per-PC \llc bypass prediction: stacking
-liveness-guided replacement on top of per-PC bypass does not regress bypass
+liveness-guided replacement policies that steer insertion and promotion via
+per-PC saturating counters across three classes (\doa, mostly-dead, mostly-alive).
+The approach can be combined with per-PC \llc bypass without regressing bypass
 performance. For suites where guidance helps, a hardware-feasible history table with
 32--256~entries captures the full unbounded gain; QMM requires ${\sim}4096$
 entries due to its wider DoA PC footprint.
@@ -66,17 +65,19 @@ entries due to its wider DoA PC footprint.
 \section{Introduction}
 % ─────────────────────────────────────────────────────────────────────────────
 
-The program counter (PC) of the load that brought a cache block in is a strong
-predictor of whether that block will be reused before eviction. Some PCs
-consistently generate \emph{dead-on-arrival} (\doa) blocks --- evicted without
-any subsequent access --- while others rarely do. Standard policies like \lru
-and \srrip ignore this signal entirely.
+The program counter (PC) of the load that brought a cache block in is a
+strong predictor of whether that block will be reused before eviction.
+Some PCs consistently generate \emph{dead-on-arrival} (\doa) blocks ---
+evicted without any subsequent access --- while others rarely do.
+Standard policies like \lru and \srrip ignore this signal entirely.
 
 This paper describes \lru-Live, \srrip-Live, and \ipv-Live: a family of
-replacement policies that exploit per-PC liveness history. Each policy tracks,
-per PC, how many consecutive times blocks from that PC were evicted DoA or mostly-dead,
-and uses that count to guide insertion priority and promotion. We evaluate
-all three at the LLC across seven benchmark suites.
+liveness-guided replacement policies using two structurally decoupled per-PC
+counters to classify fills as \doa, mostly-dead, or mostly-alive. Each policy
+maps these classes to insertion depths and promotion rules native to its base
+policy, with set dueling choosing at runtime between conservative and aggressive
+\doa placement. Full bypass --- skipping \llc insertion entirely --- is the
+logical extreme.
 
 \begin{figure*}[b!]
 \centering
@@ -178,7 +179,7 @@ experiments throughout this paper.
 \begin{table}[b!]
 \centering
 \small
-\caption{PCs covering 90\% of LLC \doa evictions per trace (plain \lru{}); min, mean, max.}
+\caption{PCs covering 90\% of LLC \doa evictions (\lru{}).}
 \label{tab:concentration}
 \begin{tabular}{lrrr}
 \toprule
