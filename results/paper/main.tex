@@ -34,7 +34,7 @@
 
 \author{
   \IEEEauthorblockN{Oskar Tegby}
-  \IEEEauthorblockA{Norwegian University of Science and Technology\\
+  \IEEEauthorblockA{NTNU?\\
     Trondheim, Norway}
   \and
   \IEEEauthorblockN{Alberto Ros}
@@ -147,7 +147,7 @@ The \doa signal is not only common but \emph{concentrated}. Ranking each PC by i
 \doa-eviction count, a small number of PCs account for the bulk of dead-on-arrival
 traffic. Table~\ref{tab:concentration} reports, per trace under \lru, how many PCs
 are needed to cover 90\% of LLC \doa evictions. For GAP, GMS, ML and Ligra a mean of
-only 3--6 PCs suffices, and no single trace needs more than 14. DPC3 averages
+only 3--6 PCs suffices, and no single trace needs more than 14. SPEC averages
 $\sim$97 but ranges from 1 to 4833 PCs across traces, reflecting SPEC's
 heterogeneity. Only QMM consistently spreads its \doa traffic across thousands of
 PCs (3090--10504). This concentration is what lets a small per-\textsc{PC} history
@@ -155,25 +155,6 @@ table capture the signal cheaply --- and it explains why QMM is the one suite th
 benefits from a larger table. The distribution is a workload property: which
 instructions issue dead accesses is determined by the access pattern, not the
 replacement policy, so the table shows \lru as a representative baseline.
-
-\begin{table}[b!]
-\centering
-\small
-\caption{PCs covering 90\% of LLC \doa evictions per trace (plain \lru{}); min, mean, max.}
-\label{tab:concentration}
-\begin{tabular}{lrrr}
-\toprule
-\textbf{Suite} & \textbf{Min} & \textbf{Mean} & \textbf{Max} \\
-\midrule
-GAP   & 2       & 3.4     & 7        \\
-GMS   & 1       & 4.3     & 8        \\
-ML    & 1       & 4.6     & 10       \\
-Ligra & 2       & 5.6     & 14       \\
-DPC3  & 1       & 96.7    & 4{,}833  \\
-QMM   & 3{,}090 & 4{,}354 & 10{,}504 \\
-\bottomrule
-\end{tabular}
-\end{table}
 
 \paragraph{Both a high \doa fraction and high \llc pressure are required.}
 A high \doa fraction is necessary but not sufficient for liveness guidance to
@@ -189,39 +170,33 @@ Conversely, GMS and Ligra have high \doa fractions but moderate \llc pressure,
 and show near-zero or negative results because the replacement policy has little
 room to act.
 The suites that benefit most --- GAP, ML (high-\textsc{MPKI} traces), and the
-pressured DPC3 subset --- combine a high \doa fraction with \llc demand
+pressured SPEC subset --- combine a high \doa fraction with \llc demand
 \textsc{MPKI}$\,\geq 5$.
 This joint condition defines the LLC-pressured subset used for design-choice
 experiments throughout this paper.
+
+\begin{table}[b!]
+\centering
+\small
+\caption{PCs covering 90\% of LLC \doa evictions per trace (plain \lru{}); min, mean, max.}
+\label{tab:concentration}
+\begin{tabular}{lrrr}
+\toprule
+\textbf{Suite} & \textbf{Min} & \textbf{Mean} & \textbf{Max} \\
+\midrule
+GAP   & 2       & 3.4     & 7        \\
+GMS   & 1       & 4.3     & 8        \\
+ML    & 1       & 4.6     & 10       \\
+Ligra & 2       & 5.6     & 14       \\
+SPEC  & 1       & 96.7    & 4{,}833  \\
+QMM   & 3{,}090 & 4{,}354 & 10{,}504 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
 % ─────────────────────────────────────────────────────────────────────────────
 \section{Policies}
 % ─────────────────────────────────────────────────────────────────────────────
-
-\setcounter{table}{2}
-\begin{table*}[b!]
-\centering
-\renewcommand{\arraystretch}{1.2}
-\setlength{\tabcolsep}{10pt}
-\small
-\caption{Insertion and hit-promotion per liveness class.
-  \lru-Live: LRU position (0\,=\,MRU; $N\!=\!16$).
-  \srrip-Live and \ipv-Live: \rrpv (0\,=\,protected, 3\,=\,evict).
-  \ipv-Live promotion shows the per-hit trajectory.}
-\label{tab:policy_actions}
-\begin{tabular}{l cc cc cc}
-\toprule
-& \multicolumn{2}{c}{\lru-Live}
-& \multicolumn{2}{c}{\srrip-Live}
-& \multicolumn{2}{c}{\ipv-Live} \\
-\cmidrule(lr){2-3}\cmidrule(lr){4-5}\cmidrule(lr){6-7}
-Class & Insert & Hit & Insert & Hit & Insert & Promotion \\
-\midrule
-\doa         & $\lfloor 2N/3\rfloor$ & $\lfloor 2N/3\rfloor$ & 3 & 2 & 3 & $3\!\to\!2\!\to\!1\!\to\!0$ \\
-Mostly-dead  & $\lfloor N/3\rfloor$  & $\lfloor N/2\rfloor$  & 2 & 1 & 3 & $3\!\to\!2\!\to\!0$         \\
-Mostly-alive & $0$                   & $0$                   & 2 & 0 & 2 & $2\!\to\!0$                 \\
-\bottomrule
-\end{tabular}
-\end{table*}
 
 
 \iffalse  % single-counter scored variant + FSM removed; adopted scheme is the two-counter reset below
@@ -411,6 +386,7 @@ a block that has a history of not being reused should be placed close to the
 eviction end so that it leaves quickly as blocks get evicted, whereas a block
 that has shown reuse in the past should stay longer.
 
+
 \lru-Live follows this principle directly by assigning each fill a stack position
 that reflects its liveness class, as seen in Table \ref{tab:policy_actions}.
 This requires no state beyond the per-block position counter already present in \lru.
@@ -427,6 +403,28 @@ that are displaced on the very next fill, regardless of set pressure.
 This is the \lru-Live analogue of inserting at $\text{RRPV}=\text{maxRRPV}$ in
 \srrip-Live and for \ipv-Live discussed below, and carries the same trade-off 
 between freeing capacity and risking a re-fetch on misclassification.
+\begin{table}[h!]
+\centering
+\renewcommand{\arraystretch}{1.2}
+\setlength{\tabcolsep}{4pt}
+\footnotesize
+\caption{Insertion and promotion per liveness class.}
+\label{tab:policy_actions}
+\begin{tabular}{l cc cc cc}
+\toprule
+& \multicolumn{2}{c}{\lru-Live}
+& \multicolumn{2}{c}{\srrip-Live}
+& \multicolumn{2}{c}{\ipv-Live} \\
+\cmidrule(lr){2-3}\cmidrule(lr){4-5}\cmidrule(lr){6-7}
+Class & Insert & Hit & Insert & Hit & Insert & Prom. \\
+\midrule
+\doa         & $\lfloor 2N/3\rfloor$ & $\lfloor 2N/3\rfloor$ & 3 & 2 & 3 & $3\!\to\!2\!\to\!1\!\to\!0$ \\
+Mostly-dead  & $\lfloor N/3\rfloor$  & $\lfloor N/2\rfloor$  & 2 & 1 & 3 & $3\!\to\!2\!\to\!0$         \\
+Mostly-alive & $0$                   & $0$                   & 2 & 0 & 2 & $2\!\to\!0$                 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
 
 \subsection{SRRIP-Live}
 
@@ -531,6 +529,37 @@ The expectation is that elevated fill latency in the bypass-sampler sets
 reflects frequent re-fetches of mispredicted blocks, and that the duel will
 withhold bypass in those cases while applying it where fill latency remains low.
 
+\subsection{History Table Replacement}
+\label{sec:histrep}
+
+A hardware history table is bounded in capacity; we fix it at 256~entries.
+For most suites this is ample: DoA traffic concentrates in fewer than
+15~PCs per trace (Table~\ref{tab:concentration}), so the table never fills.
+The exceptions are SPEC and QMM, where many PCs contribute DoA traffic and
+eviction pressure is real.
+
+When the table is full and a new PC arrives, an existing entry must be
+removed.
+A natural criterion is to evict the entry whose PC has the fewest accumulated
+dead-on-arrival observations --- it carries the weakest signal, so losing it
+costs the least.
+We call this \emph{DoA-count eviction}: the table preferentially retains the
+most reliably dead PCs.
+
+A second approach assigns each entry a protection level based on its current
+liveness classification.
+Entries classified as \doa are the most protected from eviction; entries with
+little dead evidence are evicted first, regardless of how long they have been
+in the table.
+We call this \emph{liveness-priority eviction}: well-established \doa signal
+is preserved at the cost of less-established entries, and a PC that
+accumulates enough dead evidence to cross a classification threshold
+automatically gains protection.
+
+We evaluate both on SPEC and QMM; the remaining five suites converge to their
+unbounded gain well below 256~entries, making the eviction policy immaterial
+there.
+
 % ─────────────────────────────────────────────────────────────────────────────
 \section{Experimental Setup}
 % ─────────────────────────────────────────────────────────────────────────────
@@ -540,28 +569,6 @@ Table~\ref{tab:config}. Each trace runs for 50M warmup + 100M simulation
 instructions. Speedup is geomean IPC relative to \lru.
 Seven benchmark suites are summarised in Table~\ref{tab:suites}.
 
-\begin{table}[t!]
-\centering
-\small
-\caption{Benchmark suites. LLC MPKI characterises \llc demand pressure;
-  uniformity indicates whether pressure is consistent across traces in the suite.}
-\label{tab:suites}
-\begin{tabular}{lrll}
-\toprule
-\textbf{Suite} & \textbf{Traces} & \textbf{LLC MPKI} & \textbf{Uniform?} \\
-\midrule
-QMM    & 45 & Low (${\leq}2.5$)    & Yes --- uniformly low    \\
-Google & 43 & Moderate             & Moderate variation       \\
-DPC3   & 95 & Mixed (low--high)    & No --- heterogeneous     \\
-GAP    &  9 & High                 & Yes --- all pressured    \\
-GMS    & 11 & Moderate--high       & Partially (6/11 high)   \\
-Ligra  & 18 & High                 & Yes --- nearly all       \\
-ML     & 31 & High                 & Yes --- nearly all       \\
-\bottomrule
-\end{tabular}
-\end{table}
-
-\setcounter{table}{1}
 \begin{table}[t!]
 \centering
 \small
@@ -584,59 +591,29 @@ DRAM & 3200~MHz, 1 channel & $t_{RP}$/$t_{RCD}$/$t_{CAS}$ = 12.5~ns \\
 \bottomrule
 \end{tabular}
 \end{table}
+
+\begin{table}[t!]
+\centering
+\small
+\caption{Benchmark suites. LLC MPKI gives the typical demand pressure level;
+  pressure profile describes how consistently that pressure appears across traces.}
+\label{tab:suites}
+\begin{tabular}{lll}
+\toprule
+\textbf{Suite} & \textbf{LLC MPKI} & \textbf{Pressure profile} \\
+\midrule
+QMM    & Low (${\leq}2.5$)    & All traces low; no high-pressure outliers   \\
+Google & Moderate             & Varies by workload type                     \\
+SPEC   & Low--high            & Wide spread; reflects SPEC heterogeneity    \\
+GAP    & High                 & All traces high-pressure                    \\
+GMS    & Moderate--high       & 6 of 11 traces high-pressure                \\
+Ligra  & High                 & Nearly all traces high-pressure             \\
+ML     & High                 & All traces uniformly high-pressure          \\
+\bottomrule
+\end{tabular}
+\end{table}
 % ─────────────────────────────────────────────────────────────────────────────
-\section{Bounded History Tables}
-% ─────────────────────────────────────────────────────────────────────────────
 
-The per-PC liveness history table can be implemented with unbounded storage
-(using a hash table that grows as new PCs are encountered), but this is
-impractical for hardware. A bounded table with $N$ entries raises a design
-question: when a new PC evicts an old one, how do we avoid losing useful
-history?
-
-The eviction policy \emph{within} the history table is itself a design choice. We
-compare LRU, LFU, and LFU-DoA (frequency weighted by dead-on-arrival evictions)
-for the main table; LFU-DoA is selected because it retains the consistently-dead
-PCs that carry the predictive signal, outperforming plain LFU and LRU. A tiered
-variant helps only when the working set has both active churn and liveness
-diversity, and degenerates at small capacities, so we keep LFU-DoA as the default.
-
-\subsection{Measurement methodology: the correct baseline}
-\label{sec:baseline}
-
-Measuring the benefit of liveness guidance requires care in the choice of
-baseline. A liveness-guided policy with an \emph{empty} history table
-classifies every block as mostly-alive and therefore reduces exactly to its
-underlying base policy (SRRIP-Live $\to$ SRRIP). The base
-policy is thus the true zero point of the liveness axis, and the honest
-measure of liveness benefit is the speedup of the guided policy over the
-\emph{same base policy with liveness disabled} --- not over \lru.
-
-This distinction is not cosmetic. Comparing a liveness-guided policy against
-\lru folds in the (often larger) base-policy-over-\lru gain, which has nothing
-to do with liveness. On our QMM workloads, plain SRRIP already beats \lru by
-+1.35\%; quoting SRRIP-Live versus \lru therefore overstates the liveness
-contribution by that constant. We report all liveness speedups versus the base
-policy, with \lru shown only as a secondary reference.
-
-A subtle corollary is that the guided and base implementations must be
-\emph{identical} when liveness is off. We verify this directly: with the
-history table set to zero capacity, SRRIP-Live reproduces plain SRRIP's IPC
-exactly. Any deviation would indicate an implementation difference being
-misattributed to liveness.
-
-\paragraph{Liveness labeling and writeback hits.}
-The liveness predictor is trained from each block's reuse behaviour during its
-residency, captured by an Accessed bit (set on a hit) and the cycle of the last
-hit. We exclude \emph{writeback} hits from both signals: a writeback is a dirty
-line being deposited from the L2, not a read of the block, and so is not
-evidence that the block will be reused. Counting writebacks as reuse mislabels
-write-back-only blocks as live and teaches their fetching PC that it produces
-live blocks, diluting the dead-on-arrival signal. Excluding them sharpens the
-classification (e.g.\ on one server trace the dead-on-arrival insertion rate
-rose from 24\% to 43\%). This mirrors the replacement policies, which likewise
-do not promote on writeback hits; we keep both consistent so the base policy
-and the guided policy differ only in their use of the liveness signal.
 
 \iffalse  % threshold study removed from paper (kept for reference)
 \begin{table}[t!]
@@ -654,7 +631,7 @@ and the guided policy differ only in their use of the liveness signal.
 \cmidrule(lr){2-3}\cmidrule(lr){5-6}
   & $\theta^*$ & vs \lru & & $\theta^*$ & vs \lru \\
 \midrule
-DPC3   & 16 & $+2.66\%$           & & 16 & $+0.20\%$  \\
+SPEC   & 16 & $+2.66\%$           & & 16 & $+0.20\%$  \\
 GAP    & 2  & $\mathbf{+10.77\%}$ & & 1  & $\mathbf{+10.66\%}$ \\
 GMS    & 16 & $+0.94\%$           & & 16 & $+0.60\%$  \\
 Google & 8  & $+4.17\%$           & & 8  & $+4.02\%$  \\
@@ -674,7 +651,7 @@ QMM    & 4  & $+3.56\%$           & & 4  & $+4.51\%$  \\
 \subsection{Scoring mode selection}
 
 We compare four counter-based scoring variants on the \llc-pressured subset
-(\llc demand \textsc{MPKI}$\,\geq 5$, $n=38/9/6/17/29$ for DPC3/GAP/GMS/Ligra/ML),
+(\llc demand \textsc{MPKI}$\,\geq 5$, $n=38/9/6/17/29$ for SPEC/GAP/GMS/Ligra/ML),
 where the liveness signal is most active.
 QMM is excluded: its \llc demand \textsc{MPKI} does not exceed~2.5 on any of its
 45~traces, so the liveness predictor has no material effect there regardless of
@@ -769,7 +746,7 @@ uniformly.
 \caption{Per-suite DoA threshold sensitivity: \srrip-Live geomean IPC speedup over
   pure \srrip as a function of $\theta_{\mathrm{doa}}$ (\llc-only guidance, mode-5
   falling-weight scoring, PC-keyed history table). Each curve is over the suite's
-  full trace set; DPC3 is SimPoint-weighted. The dashed line marks the default
+  full trace set; SPEC is SimPoint-weighted. The dashed line marks the default
   $\theta_{\mathrm{doa}}=6$.}
 \label{fig:doa_thd}
 \end{figure}
@@ -793,7 +770,7 @@ Three behaviours emerge. GAP --- the largest single-suite gain --- peaks sharply
 at $\theta_{\mathrm{doa}}=6$ ($+6.1\%$) and declines as the threshold rises,
 because its mostly-alive blocks are misclassified \doa when the counter saturates
 too slowly. Most suites instead rise monotonically and plateau by
-$\theta_{\mathrm{doa}}\approx16$ (DPC3, GMS, Google, QMM, ML), where a higher bar
+$\theta_{\mathrm{doa}}\approx16$ (SPEC, GMS, Google, QMM, ML), where a higher bar
 suppresses spurious \doa classifications at a small cost in responsiveness. ML
 shows the cost of an over-aggressive threshold directly: at $\theta_{\mathrm{doa}}=2$
 it loses $-5.8\%$, recovering to $+1.7\%$ by $\theta_{\mathrm{doa}}=4$. Ligra is
@@ -847,7 +824,7 @@ replacement-guidance contribution in Figure~\ref{fig:live_vs_base}.
 Figure~\ref{fig:policy_comparison} summarises peak \llc performance for each suite at the
 best $\theta_{\mathrm{doa}}$, expressed over the \lru baseline.
 GAP benefits most ($+10.8\%$ \srrip-Live, $+10.7\%$ \ipv-Live).
-DPC3 gains more with \srrip-Live ($+2.7\%$) than \ipv-Live ($+0.2\%$), unlike most
+SPEC gains more with \srrip-Live ($+2.7\%$) than \ipv-Live ($+0.2\%$), unlike most
 suites. Ligra and QMM follow the typical pattern of \ipv-Live $\geq$ \srrip-Live:
 $+3.2\%$/$+2.8\%$ and $+3.6\%$/$+4.5\%$ respectively. Google is nearly equal under
 both policies (${\approx}+4.1\%$), and GMS is modest ($<1\%$).
@@ -873,7 +850,7 @@ liveness signal alone buys. \srrip-Live yields consistent gains over \srrip on e
 suite (ML largest at $+8.8\%$; the server/graph suites $+1$--$2.3\%$), confirming the
 contribution is real and never negative at the \llc. \lru-Live is similarly positive
 where measured (e.g.\ GAP $+3.6\%$). \ipv-Live, by contrast, is the fragile case ---
-positive only on GAP ($+6.3\%$) and QMM, and negative on DPC3/GMS/Ligra/ML --- because
+positive only on GAP ($+6.3\%$) and QMM, and negative on SPEC/GMS/Ligra/ML --- because
 its aggressive high-\rrpv insertion punishes a mis-predicted-dead block far more than
 \srrip's insertion at \rrpv${-}1$. Liveness guidance is thus robust for \lru/\srrip
 insertion but fragile for \ipv.
@@ -914,7 +891,7 @@ and $+5.52\%$ (\stlb, $\theta{=}1$) combine to $+8.11\%$ over \lru,
 below the na\"ive product of the two but well above either level alone.
 \ipv-Live reaches $+8.22\%$ combined on QMM ($\theta{=}2$), essentially matching
 \srrip-Live when both levels are co-guided.
-For DPC3 and Google the \stlb contributes negligibly on its own ($<0.2\%$) but
+For SPEC and Google the \stlb contributes negligibly on its own ($<0.2\%$) but
 the combined \llc+\stlb run yields $+2.63\%$ and $+4.09\%$ respectively,
 reflecting that a unified threshold interacts with both access streams simultaneously.
 
@@ -922,7 +899,7 @@ reflecting that a unified threshold interacts with both access streams simultane
 \centering
 \includegraphics[width=0.95\textwidth]{../plots/combined_llc_stlb_comparison.png}
 \caption{Geomean speedup for four policy configurations across the three suites
-with combined \llc+\stlb data available (DPC3, Google, QMM).}
+with combined \llc+\stlb data available (SPEC, Google, QMM).}
 \label{fig:combined}
 \end{figure*}
 \fi
@@ -947,7 +924,7 @@ baseline and report geomean IPC speedup over \srrip. Falling-weight scoring ($\d
 used throughout, with $\theta_{\mathrm{doa}} = 6$ and
 $\theta_{\mathrm{dead}} = 10$, an unbounded PC-indexed history table, and the
 ChampSim configuration in Table~\ref{tab:config}. Six benchmark suites are
-evaluated using expanded trace sets: QMM (45 traces), DPC3 LLC-pressured (35),
+evaluated using expanded trace sets: QMM (45 traces), SPEC LLC-pressured (35),
 GAP (9), GMS (11), Ligra (17), and ML (31), for a total of 148 traces.
 
 \subsection{Performance}
@@ -967,7 +944,7 @@ near-total \doa composition: the history table quickly learns which PCs produce
 dead blocks and inserts them at \rrpv~3, keeping live data resident longer. The
 other suites gain $+1$--$2.3\%$.
 
-\textbf{Adding bypass} lifts the overall geomean to $+9.78\%$. DPC3 and Ligra
+\textbf{Adding bypass} lifts the overall geomean to $+9.78\%$. SPEC and Ligra
 drive most of the gain ($+17.3\%$ and $+34.9\%$): both contain streaming workloads
 (\texttt{fotonik3d}, \texttt{roms}, several Ligra kernels) whose \doa blocks
 generate repeated DRAM write-backs. Bypass eliminates these write-backs and
@@ -976,7 +953,7 @@ $\sim$3\% to $\sim$98\%, cutting LLC-miss latency by roughly $4\times$. ML reach
 $+11.70\%$.
 
 Even after SimPoint weighting, the gain is concentrated in a few benchmarks.
-Within DPC3 it is carried by streaming/scientific codes --- \texttt{fotonik3d}
+Within SPEC it is carried by streaming/scientific codes --- \texttt{fotonik3d}
 ($+97.5\%$), \texttt{roms} ($+29\%$), \texttt{lbm} ($+26\%$) --- while
 \texttt{gcc} and \texttt{cactuBSSN} are essentially flat. A few workloads gain
 enormously --- where \srrip thrashes (IPC $\approx$0.4) and liveness rescues it
@@ -1037,7 +1014,7 @@ claimed.
 \small
 \caption{Bypass--replacement interaction per suite at $\theta_{\mathrm{bypass}}=16$
   (matched pairs: traces complete in all three configs).
-  Per-suite geomeans are SimPoint-weighted: for DPC3 (SPEC) the slices of each
+  Per-suite geomeans are SimPoint-weighted: for SPEC the slices of each
   benchmark are combined by their SimPoint weights before the cross-benchmark
   geomean; the remaining suites carry equal per-trace weight.
   \emph{Synergy} $=$ combined $-$ bypass-only $-$ repl-only.}
@@ -1047,7 +1024,7 @@ claimed.
 \textbf{Suite} & bypass only & repl only & combined & synergy \\
 \midrule
 QMM   & $+1.11\%$  & $+0.99\%$  & $+1.62\%$  & $-0.48\%$ \\
-DPC3  & $+16.78\%$ & $+2.27\%$  & $+17.27\%$ & $-1.79\%$ \\
+SPEC  & $+16.78\%$ & $+2.27\%$  & $+17.27\%$ & $-1.79\%$ \\
 GAP   & $+4.21\%$  & $+2.05\%$  & $+4.94\%$  & $-1.32\%$ \\
 GMS   & $+2.11\%$  & $+1.28\%$  & $+1.63\%$  & $-1.76\%$ \\
 Ligra & $+32.53\%$ & $+1.53\%$  & $+34.88\%$ & $\mathbf{+0.82\%}$ \\
@@ -1073,7 +1050,7 @@ history table is keyed on cache-line address instead of load PC.
 
 \paragraph{Per-PC vs.\ per-address indexing.}
 Switching to address indexing collapses performance on streaming workloads.
-DPC3 falls from $+17.3\%$ to $+3.0\%$ and Ligra from $+34.9\%$ to $+5.5\%$,
+SPEC falls from $+17.3\%$ to $+3.0\%$ and Ligra from $+34.9\%$ to $+5.5\%$,
 both roughly $6\times$ worse.
 The cause is structural: streaming workloads touch millions of distinct cache-line
 addresses, each evicted after one use, so a per-address entry is rarely updated
@@ -1095,7 +1072,7 @@ GAP shows the same pattern: per-address replacement guidance alone is $-2.38\%$
 \paragraph{Mazumdar et~al.}
 Their address-indexed predictor achieves $+2.03\%$ on QMM, where high address
 reuse lets the block-history table accumulate confidence, but is neutral or
-negative on every suite driven by streaming bypass: $+0.28\%$ on DPC3, $+0.13\%$
+negative on every suite driven by streaming bypass: $+0.28\%$ on SPEC, $+0.13\%$
 on GAP, and $+0.32\%$ on GMS.
 Their confidence-threshold mechanism cannot extract streaming speedups because
 individual addresses are not revisited frequently enough to cross the threshold.
