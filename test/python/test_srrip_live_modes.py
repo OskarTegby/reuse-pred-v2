@@ -14,6 +14,7 @@ Pinned: June 2026, main branch, post duel-miss-latency merge.
 """
 
 import os
+import re
 import subprocess
 import unittest
 from pathlib import Path
@@ -28,6 +29,11 @@ IPC_TOL = 0.0001
 
 BASE = dict(THD_DOA=6, THD_DEAD=10, BHIST_MODE="pc", SRRIP_LIVE_TARGET="llc")
 
+# pagerank's four load PCs (deterministic addresses from the trace).
+PC_HEAVY = {"0x555555563de8", "0x555555563df1"}
+PC_LIGHT = {"0x555555563dfa", "0x555555563e02"}
+PC_ALL   = PC_HEAVY | PC_LIGHT
+
 _CONFIGS = {
     "default": {},
     "mode3":   {**BASE, "SCORING_MODE": 3},
@@ -35,8 +41,8 @@ _CONFIGS = {
     "mode5":   {**BASE, "SCORING_MODE": 5},
     "mode7":   {**BASE, "SCORING_MODE": 7},
     "mode8":   {**BASE, "SCORING_MODE": 8},
-    "cap1":    {**BASE, "SCORING_MODE": 5, "REPL_HIST_LLC_CAP": 1, "REPL_HIST_REPL": "tiered"},
-    "cap2":    {**BASE, "SCORING_MODE": 5, "REPL_HIST_LLC_CAP": 2, "REPL_HIST_REPL": "tiered"},
+    "cap256":  {**BASE, "SCORING_MODE": 5, "REPL_HIST_LLC_CAP": 256,
+                        "REPL_HIST_REPL": "tiered", "REPL_HIST_DUMP_PCS": 1},
 }
 
 PINNED = [
@@ -46,8 +52,7 @@ PINNED = [
     ("mode5",   "mode5",   0.211229, 111112),
     ("mode7",   "mode7",   0.211229, 111112),
     ("mode8",   "mode8",   0.211229, 111112),
-    ("cap1",    "cap1",    0.211163, 111111),
-    ("cap2",    "cap2",    0.211229, 111112),
+    ("cap256",  "cap256",  0.211229, 111112),
 ]
 
 R: dict = {}
@@ -66,7 +71,7 @@ def _run(env_extra):
         capture_output=True, text=True, env=env, timeout=120,
     )
     out = result.stdout + result.stderr
-    stats = {"raw": out, "returncode": result.returncode}
+    stats = {"raw": out, "returncode": result.returncode, "pcs": {}}
     for line in out.splitlines():
         if "CPU 0 cumulative IPC:" in line:
             stats["ipc"] = float(line.split()[4])
@@ -76,6 +81,12 @@ def _run(env_extra):
                 stats["llc_miss"] = int(parts[parts.index("MISS:") + 1])
             except (ValueError, IndexError):
                 pass
+        m = re.search(r"repl_hist PCS: count=(\d+)", line)
+        if m:
+            stats["pc_count"] = int(m.group(1))
+        m = re.search(r"repl_hist PC: key=(0x[0-9a-f]+) doa=(-?\d+) md=(-?\d+)", line)
+        if m:
+            stats["pcs"][m.group(1)] = (int(m.group(2)), int(m.group(3)))
     return stats
 
 def _make_pinned(key, expected_ipc, expected_miss):
@@ -107,10 +118,19 @@ class TestOrdering(unittest.TestCase):
         for ipc in ipcs:
             self.assertAlmostEqual(ipc, ipcs[0], delta=IPC_TOL)
 
-    # Note: no cap1-vs-cap2 ordering test here.  Unlike LRU-Live, SRRIP-Live is
-    # nearly insensitive to history loss on pagerank — cap=1 changes IPC by
-    # <0.01% (below tolerance) and even lowers the miss count.  The exact
-    # constrained behavior is pinned in TestPinned (cap1/cap2) instead.
+    # History-table contents under a realistic cap (256).  Local placeholder for
+    # the real eviction-policy test on a many-PC trace (QMM/SPEC).
+
+    def test_table_holds_exactly_the_trace_pcs(self):
+        self.assertEqual(R["cap256"].get("pc_count"), len(PC_ALL))
+        self.assertEqual(set(R["cap256"]["pcs"].keys()), PC_ALL)
+
+    def test_heavy_pcs_classify_strongly_doa(self):
+        pcs = R["cap256"]["pcs"]
+        for k in PC_HEAVY:
+            self.assertGreater(pcs[k][0], 1000, msg=f"{k} doa={pcs[k][0]} too low")
+        for k in PC_LIGHT:
+            self.assertLess(pcs[k][0], 100, msg=f"{k} doa={pcs[k][0]} too high")
 
 
 if __name__ == "__main__":

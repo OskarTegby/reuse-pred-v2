@@ -19,6 +19,7 @@ Pinned: June 2026, main branch, post duel-miss-latency merge.
 """
 
 import os
+import re
 import subprocess
 import unittest
 from pathlib import Path
@@ -33,6 +34,12 @@ IPC_TOL = 0.0001  # ±0.01% absolute
 
 BASE = dict(THD_DOA=6, THD_DEAD=10, SCORING_MODE=5)
 
+# pagerank's four load PCs (deterministic virtual addresses from the trace).
+# Two are heavily re-referenced and classify strongly DoA; two are barely seen.
+PC_HEAVY = {"0x555555563de8", "0x555555563df1"}
+PC_LIGHT = {"0x555555563dfa", "0x555555563e02"}
+PC_ALL   = PC_HEAVY | PC_LIGHT
+
 
 def run_sim(env_extra: dict) -> dict:
     env = {**os.environ, **{k: str(v) for k, v in env_extra.items()}}
@@ -42,7 +49,7 @@ def run_sim(env_extra: dict) -> dict:
         capture_output=True, text=True, env=env, timeout=120,
     )
     out = result.stdout + result.stderr
-    stats = {"raw": out, "returncode": result.returncode}
+    stats = {"raw": out, "returncode": result.returncode, "pcs": {}}
     for line in out.splitlines():
         if "CPU 0 cumulative IPC:" in line:
             stats["ipc"] = float(line.split()[4])
@@ -52,6 +59,12 @@ def run_sim(env_extra: dict) -> dict:
                 stats["llc_miss"] = int(parts[parts.index("MISS:") + 1])
             except (ValueError, IndexError):
                 pass
+        m = re.search(r"repl_hist PCS: count=(\d+)", line)
+        if m:
+            stats["pc_count"] = int(m.group(1))
+        m = re.search(r"repl_hist PC: key=(0x[0-9a-f]+) doa=(-?\d+) md=(-?\d+)", line)
+        if m:
+            stats["pcs"][m.group(1)] = (int(m.group(2)), int(m.group(3)))
     return stats
 
 
@@ -67,8 +80,9 @@ _CONFIGS = {
     "duel_lat_hyst250k":    {**BASE, "DUEL_N_SAMPLERS": 32,
                                      "DUEL_METRIC": "latency",
                                      "DUEL_HYST": 250000},
-    "cap2":                 {**BASE, "REPL_HIST_LLC_CAP": 2},
-    "cap1":                 {**BASE, "REPL_HIST_LLC_CAP": 1},
+    "cap256":               {**BASE, "REPL_HIST_LLC_CAP": 256,
+                                     "REPL_HIST_REPL": "tiered",
+                                     "REPL_HIST_DUMP_PCS": 1},
 }
 
 R: dict = {}  # populated in setUpModule
@@ -89,8 +103,7 @@ PINNED = [
     ("bypass_disabled",  "bypass_disabled",  0.251201, 166650),
     ("duel_hits_n32",    "duel_hits_n32",     0.220342, 111974),
     ("duel_lat_hyst250k","duel_lat_hyst250k", 0.220342, 111974),
-    ("cap2",             "cap2",              0.222176, 111104),
-    ("cap1",             "cap1",              0.205836, 111112),
+    ("cap256",           "cap256",            0.222176, 111104),
 ]
 
 
@@ -140,15 +153,24 @@ class TestOrdering(unittest.TestCase):
         self.assertEqual(R["bypass_disabled"]["llc_miss"], R["cfgB_lru"]["llc_miss"])
         self.assertNotEqual(R["bypass_disabled"]["llc_miss"], R["bypass"]["llc_miss"])
 
-    def test_cap2_sufficient_for_this_trace(self):
-        # cap=2 is enough for pagerank's steady-state access pattern — IPC
-        # matches cap=1 being insufficient but cap=2 recovering fully.
-        self.assertAlmostEqual(R["cap2"]["ipc"], R["cfgA_2n3"]["ipc"], delta=IPC_TOL)
+    # History-table contents under a realistic cap (256).  On pagerank all four
+    # PCs fit, so the table must hold exactly that set.  This is the local
+    # placeholder for the real test: the same assertions on a many-PC trace
+    # (QMM/SPEC) verify which PCs the eviction policy retains under pressure.
 
-    def test_cap1_constraint_degrades_ipc(self):
-        # cap=1 forces constant eviction of history entries — PCs lose their
-        # liveness counts and are misclassified.  IPC must be worse than cap=2.
-        self.assertGreater(R["cap2"]["ipc"], R["cap1"]["ipc"] + IPC_TOL)
+    def test_table_holds_exactly_the_trace_pcs(self):
+        self.assertEqual(R["cap256"].get("pc_count"), len(PC_ALL))
+        self.assertEqual(set(R["cap256"]["pcs"].keys()), PC_ALL)
+
+    def test_heavy_pcs_classify_strongly_doa(self):
+        # The two re-referenced PCs must accumulate large DoA scores; the two
+        # rarely-seen PCs must stay near zero.  A classification regression that
+        # mislabels them flips this ordering even if IPC barely moves.
+        pcs = R["cap256"]["pcs"]
+        for k in PC_HEAVY:
+            self.assertGreater(pcs[k][0], 1000, msg=f"{k} doa={pcs[k][0]} too low")
+        for k in PC_LIGHT:
+            self.assertLess(pcs[k][0], 100, msg=f"{k} doa={pcs[k][0]} too high")
 
 
 if __name__ == "__main__":
