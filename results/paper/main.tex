@@ -55,10 +55,9 @@ blocks dominate (51--97\,\%), concentrated in a small number of load PCs.
 Building on this observation, we present \lru-Live, \srrip-Live, and \ipv-Live:
 liveness-guided replacement policies that steer insertion and promotion via
 per-PC saturating counters across three classes (\doa, mostly-dead, mostly-alive).
-The approach can be combined with per-PC \llc bypass without regressing bypass
-performance. For suites where guidance helps, a hardware-feasible history table with
-32--256~entries captures the full unbounded gain; QMM requires ${\sim}4096$
-entries due to its wider DoA PC footprint.
+The approach can be combined with per-PC \llc bypass without regressing replacement policy 
+performance. For suites where guidance helps, a history table with 256~entries
+captures the unbounded gain; QMM requires ${\sim}4096$ entries due to its wider DoA PC footprint.
 \end{abstract}
 
 % ─────────────────────────────────────────────────────────────────────────────
@@ -71,13 +70,13 @@ Some PCs consistently generate \emph{dead-on-arrival} (\doa) blocks ---
 evicted without any subsequent access --- while others rarely do.
 Standard policies like \lru and \srrip ignore this signal entirely.
 
-This paper describes \lru-Live, \srrip-Live, and \ipv-Live: a family of
+This paper introduces \lru-Live, \srrip-Live, and \ipv-Live: a family of
 liveness-guided replacement policies using two structurally decoupled per-PC
 counters to classify fills as \doa, mostly-dead, or mostly-alive. Each policy
-maps these classes to insertion depths and promotion rules native to its base
+maps these classes to insertion positions and promotion rules in accordance to the base
 policy, with set dueling choosing at runtime between conservative and aggressive
-\doa placement. Full bypass --- skipping \llc insertion entirely --- is the
-logical extreme.
+\doa placement. Full bypass --- skipping \llc insertion entirely --- is the extreme 
+of this idea.
 
 \begin{figure*}[b!]
 \centering
@@ -123,7 +122,7 @@ At fill time we classify the incoming block's \textsc{PC} against these counters
 $\text{doa}[pc] \geq \theta_{\mathrm{doa}}$ classifies as \doa (checked first);
 $\text{dead}[pc] \geq \theta_{\mathrm{dead}}$ classifies as mostly-dead; otherwise mostly-alive.
 Section~\ref{sec:results} sweeps $\theta_{\mathrm{doa}},\,\theta_{\mathrm{dead}} \in \{2, 4, 8, 16\}$.
-For SPEC, per-address indexing outperforms per-PC indexing; both are evaluated.
+Per-address indexing outperforms per-PC indexing; both are evaluated.
 In simulation the table is bounded to 256 elements.
 
 % ─────────────────────────────────────────────────────────────────────────────
@@ -138,24 +137,23 @@ worth exploiting. \srrip raises the \doa fraction relative to \lru (e.g.\
 less time to prove they are alive. \ipv lowers \doa but substantially
 inflates mostly-dead (up to 41\% for Ligra), indicating that IPV's graduated
 insertion vector delays eviction without converting those blocks into genuine
-cache residents. ML is the extreme case (97--98\% \doa under all policies);
-QMM shows the most headroom for liveness guidance (up to 13\% mostly-alive
-under \lru). This breakdown is ground truth; the policies below act on a
-weaker per-\textsc{PC} \emph{prediction} of it.
+cache residents. ML is the extreme case (97--98\% \doa under all policies).
 
 \paragraph{DoA evictions are concentrated in a few PCs.}
 The \doa signal is not only common but \emph{concentrated}. Ranking each PC by its
 \doa-eviction count, a small number of PCs account for the bulk of dead-on-arrival
-traffic. Table~\ref{tab:concentration} reports, per trace under \lru, how many PCs
+traffic. Table~\ref{tab:concentration} reports, under \lru, how many PCs
 are needed to cover 90\% of LLC \doa evictions. For GAP, GMS, ML and Ligra a mean of
 only 3--6 PCs suffices, and no single trace needs more than 14. SPEC averages
 $\sim$97 but ranges from 1 to 4833 PCs across traces, reflecting SPEC's
 heterogeneity. Only QMM consistently spreads its \doa traffic across thousands of
-PCs (3090--10504). This concentration is what lets a small per-\textsc{PC} history
-table capture the signal cheaply --- and it explains why QMM is the one suite that
-benefits from a larger table. The distribution is a workload property: which
-instructions issue dead accesses is determined by the access pattern, not the
-replacement policy, so the table shows \lru as a representative baseline.
+PCs (3090--10504).
+
+This concentration is what lets a small per-\textsc{PC} history table capture
+the signal cheaply --- and it indicates that QMM might benefit from a larger table.
+The distribution is a workload property: which instructions issue DoA demand loads is
+determined by the access pattern, not the replacement policy, so the table shows 
+\lru as a representative baseline.
 
 \paragraph{Both a high \doa fraction and high \llc pressure are required.}
 A high \doa fraction is necessary but not sufficient for liveness guidance to
@@ -173,8 +171,8 @@ room to act.
 The suites that benefit most --- GAP, ML (high-\textsc{MPKI} traces), and the
 pressured SPEC subset --- combine a high \doa fraction with \llc demand
 \textsc{MPKI}$\,\geq 5$.
-This joint condition defines the LLC-pressured subset used for design-choice
-experiments throughout this paper.
+This joint condition defines the LLC-pressured subset which are most informative 
+when making design-choice experiments throughout this paper.
 
 \begin{table}[b!]
 \centering
@@ -277,18 +275,15 @@ the \doa class.
 
 Increments are \emph{state-dependent}: the current classification of the \textsc{PC}
 determines a weight $\delta$ applied to the counter update
-($\delta=5$ in \textsc{MA}, $\delta=3$ in \textsc{MD}, $\delta=1$ in \doa);
-Algorithm~\ref{alg:counter_variant} gives the full update procedure.
+($\delta=5$ for \textit{mostly-alive}, $\delta=3$ for \textit{mostly-dead}, $\delta=1$ for \doa);
+Algorithm~\ref{alg:counter_variant} shows this update procedure.
 
 The weight is proportional to how long that class of block is expected to
 remain in cache, which is itself determined by the policy's insertion and
 promotion rules: mostly-alive blocks are inserted at high priority and
-promoted fully on hits, so they stay longest; \doa blocks are inserted near
-the eviction end and promoted least, so they leave soonest. A longer expected
-residence means the eviction carries more weight.
-
-\doa evictions update \emph{only} $\mathit{doa}[pc]$ to keep the counter semantics
-separate: the mostly-dead counter accumulates evidence only from non-\doa evictions.
+promoted fully on hits, so they are expected to stay longest; \doa blocks are inserted near
+the eviction position and promoted least, so they should logically be evicted soonest.
+A longer expected residence means the information at eviction should carry more weight.
 
 \iffalse  % FSM figure removed (explanatory only); behaviour is in Algorithm~\ref{alg:counter_variant}
 \begin{figure}[t]
@@ -346,6 +341,20 @@ separate: the mostly-dead counter accumulates evidence only from non-\doa evicti
 \end{algorithm}
 
 \begin{algorithm}[t]
+\caption{On fill: initialise block state and classify PC}
+\label{alg:on_fill}
+\begin{algorithmic}[1]
+\State $\mathit{fill\_cycle} \gets \mathit{current\_cycle}$
+\State $\mathit{accessed} \gets \textbf{false}$
+\If{$\mathit{doa}[pc] \geq \theta_{\mathrm{doa}}$} \Return \doa
+  \Comment{checked first; takes priority if both saturate}
+\ElsIf{$\mathit{md}[pc] \geq \theta_{\mathrm{md}}$} \Return mostly-dead
+\Else{} \Return mostly-alive
+\EndIf
+\end{algorithmic}
+\end{algorithm}
+
+\begin{algorithm}[t]
 \caption{On eviction: update PC counters}
 \label{alg:counter_variant}
 \begin{algorithmic}[1]
@@ -358,20 +367,6 @@ separate: the mostly-dead counter accumulates evidence only from non-\doa evicti
   \State $\mathit{md}[pc] \mathrel{+}= \delta$;\quad $\mathit{doa}[pc] \gets 0$
 \Else
   \State $\mathit{md}[pc] \gets 0$;\quad $\mathit{doa}[pc] \gets 0$
-\EndIf
-\end{algorithmic}
-\end{algorithm}
-
-\begin{algorithm}[t]
-\caption{On fill: initialise block state and classify PC}
-\label{alg:on_fill}
-\begin{algorithmic}[1]
-\State $\mathit{fill\_cycle} \gets \mathit{current\_cycle}$
-\State $\mathit{accessed} \gets \textbf{false}$
-\If{$\mathit{doa}[pc] \geq \theta_{\mathrm{doa}}$} \Return \doa
-  \Comment{checked first; takes priority if both saturate}
-\ElsIf{$\mathit{md}[pc] \geq \theta_{\mathrm{md}}$} \Return mostly-dead
-\Else{} \Return mostly-alive
 \EndIf
 \end{algorithmic}
 \end{algorithm}
@@ -398,9 +393,10 @@ re-referenced \doa block is only moved back to its insertion position rather
 than to full \textsc{MRU}, while a mostly-alive block that confirms its
 classification is promoted all the way.
 
-A more aggressive option for \doa blocks is to insert them at rank~0 --- the
+A more aggressive option for \doa blocks is to insert them as LRU --- the
 very bottom of the recency stack --- making them immediate eviction candidates
 that are displaced on the very next fill, regardless of set pressure.
+
 This is the \lru-Live analogue of inserting at $\text{RRPV}=\text{maxRRPV}$ in
 \srrip-Live and for \ipv-Live discussed below, and carries the same trade-off 
 between freeing capacity and risking a re-fetch on misclassification.
@@ -433,19 +429,19 @@ Mostly-alive & $0$                   & $0$                   & 2 & 0 & 2 & $2\!\
 \srrip-Live maps the liveness classes onto.
 
 A \doa-classified block has a maximum predicted distance, so inserting it
-at $\text{RRPV}=\text{maxRRPV}$ expresses that prediction in the policy's own
-language and ensures it is displaced first when a miss occurs.
-Hit promotion is only partial for \doa blocks because a single hit does not
-override a strong prediction; the block gains slightly more residency but
-remains vulnerable to eviction if the set comes under pressure again.
+at $\text{RRPV}=\text{maxRRPV}$ expresses that prediction in the policy's 
+language and ensures it is among the first blocks to be evicted when a miss occurs.
+Hit promotion is only partial for \doa blocks for the same reasons as \lru-Live;
+the block gains slightly more residency but remains vulnerable to eviction if
+the set comes under pressure again.
 
 Two insertion positions are considered for \doa blocks:
-Inserting at $\text{RRPV}=\text{maxRRPV}-1$ (the default behavior)
-makes no insertion-level distinction, so a misclassification at fill time
-causes no extra miss.
 Inserting at $\text{RRPV}=\text{maxRRPV}$ is only beneficial when the
 classifier is reliable as it also risks a re-fetch penalty as when \lru-Live
 is more aggressive.
+However, inserting at $\text{RRPV}=\text{maxRRPV}-1$ (the default behavior)
+makes no insertion-level distinction, so a misclassification at fill time
+causes no extra miss, which is desireable for unreliable DoA patterns.
 
 \subsection{IPV-Live}
 
@@ -460,16 +456,16 @@ full protection in one step, reflecting high confidence in their reuse.
 Two configurations are evaluated, applying the same trade-off described for
 \srrip-Live: a conservative vector $\{0,1,2,2,2\}$ and an aggressive
 vector $\{0,1,2,2,3\}$ that differ only in the \doa insertion position.
-Section~\ref{sec:setduelingsection} describes how we choose between them at runtime.
+The next section describes how we choose between them at runtime for each policy.
 
 \subsection{Set Dueling}
 \label{sec:setduelingsection}
 
 Because classifier accuracy varies by workload and is not known statically,
 neither insertion option is likely to always win. \emph{Set dueling} is a common 
-choice to resolve this. Here, it is done by running both configs on small sampler 
+method to resolve this issue. Here, it is done by running both configs on small sampler 
 subsets of  the \llc and steering the remaining follower sets toward whichever is 
-currently performing better at the moment.
+currently performing better.
 
 \paragraph{Hit-count signal.}
 A saturating \emph{policy selector} counter (\textsc{PSEL}) increments on a
@@ -512,23 +508,23 @@ block.
 \label{sec:bypassstate_policy}
 
 Each policy can insert \doa blocks progressively closer to the eviction end,
-but the logical extreme of this spectrum is to skip insertion entirely:
+so the logical extreme of this spectrum is to skip insertion entirely:
 a \doa-classified block is never placed in the \llc, so it cannot displace any
 live block regardless of set pressure.
-This applies to all three policies --- in each case, the step from the most
-aggressive insertion position to full bypass means the block is absent from the
-cache rather than merely near the eviction end.
+This applies to all three policies --- in each case, the difference is that we 
+go from inserting the block with high priority to be evicted, to avoiding to 
+insert the block entirely, which means that it ends up being absent from the cache altogether.
 
-The misprediction cost is the same as for aggressive insertion (a re-fetch from
+The misprediction cost is the same as for conservative insertion (a re-fetch from
 memory if the block is later referenced) but amplified, since there is no
 opportunity for the block to receive a hit while it waits near the eviction
 point.
 
 We use set dueling to decide between the default insertion position and bypass, 
-using the miss-latency signal to arbitrate per workload.
+using the miss-latency signal to arbitrate per-workload.
 The expectation is that elevated fill latency in the bypass-sampler sets
 reflects frequent re-fetches of mispredicted blocks, and that the duel will
-withhold bypass in those cases while applying it where fill latency remains low.
+avoid bypassing in those cases while applying it where fill latency remains low.
 
 \subsection{History Table Replacement}
 \label{sec:histrep}
