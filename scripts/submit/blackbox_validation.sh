@@ -26,9 +26,9 @@ SCENARIOS=(
 
 for scen in "${SCENARIOS[@]}"; do
   qsub -N "bb_${scen}" -j y \
-       -o "$LOGDIR/${scen}.full.log" \
+       -o "$LOGDIR/${scen}.log" \
        -v "SRC_ROOT=$ROOT,BIN_DIR=$ROOT/bin,TRACE=$TRACE,OUTPUT_DIR=$OUTPUT_DIR,GENERATE=1" \
-       -b y bash "$RUNNER" "$scen" full
+       -b y bash "$RUNNER" "$scen"
 done
 
 echo "Submitted ${#SCENARIOS[@]} gate jobs"
