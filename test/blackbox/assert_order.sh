@@ -22,10 +22,12 @@ B="${3:?usage: assert_order.sh <a> gt|lt <b>}"
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 OUT_DIR="${OUTPUT_DIR:-$HERE/test_outputs}"
 
+PHASE="${PHASE:-gate}"
+
 ipc_of() {
-  local scen="$1" f="$OUT_DIR/$1.out"
+  local scen="$1" f="$OUT_DIR/$1.$PHASE.out"
   if [ ! -f "$f" ]; then
-    GENERATE=0 "$HERE/run_scenario.sh" "$scen" >/dev/null 2>&1 || true
+    GENERATE=0 "$HERE/run_scenario.sh" "$scen" "$PHASE" >/dev/null 2>&1 || true
   fi
   # ROI cumulative IPC line: "CPU 0 cumulative IPC: 0.222176 instructions: ..."
   awk '/CPU 0 cumulative IPC:/ {print $5; exit}' "$f"
