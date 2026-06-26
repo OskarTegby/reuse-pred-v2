@@ -11,8 +11,8 @@
 # report against test/blackbox/expected/<scenario>.<phase>.out.
 #
 # Two phases, same warmup, different simulation length:
-#   gate  ~250K instructions (~3s)  — fast early check, the everyday loop
-#   full   2M  instructions (~25s)  — the thorough guard, gated on the gate
+#   gate   50M warmup + 50M sim (~4 min)  — early check at the midpoint
+#   full   50M warmup + 100M sim (~8 min) — full standard run, gated on the gate
 #
 # Because warmup is identical and only the simulation window differs, the gate
 # run is a true PREFIX of the full run: deterministic, so the first GATE_SIM
@@ -39,9 +39,9 @@ BIN_DIR="${BIN_DIR:-$ROOT/bin}"
 TRACE="${TRACE:-$ROOT/trace-files/pagerank.champsimtrace.xz}"
 EXPECTED_DIR="$HERE/expected"
 OUT_DIR="${OUTPUT_DIR:-$HERE/test_outputs}"
-WARMUP="${WARMUP:-1000000}"
-GATE_SIM="${GATE_SIM:-250000}"
-FULL_SIM="${FULL_SIM:-2000000}"
+WARMUP="${WARMUP:-50000000}"
+GATE_SIM="${GATE_SIM:-50000000}"
+FULL_SIM="${FULL_SIM:-100000000}"
 
 case "$PHASE" in
   gate) SIM="$GATE_SIM" ;;
@@ -127,7 +127,7 @@ GOLDEN="$EXPECTED_DIR/$SCEN.$PHASE.out"
 
 if [ "${GENERATE:-0}" = "1" ]; then
   cp "$ACTUAL" "$GOLDEN"
-  echo "GENERATED $GOLDEN"
+  echo "REFERENCE WRITTEN (no comparison): $GOLDEN"
   exit 0
 fi
 
