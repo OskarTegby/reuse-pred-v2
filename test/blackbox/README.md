@@ -13,7 +13,7 @@ Each **scenario** names a binary (`bin/champsim_{lru,srrip,ipv}_live`) plus a
 fixed environment, run on the deterministic `pagerank` trace (100 % DoA, four
 load PCs). The runner captures the **entire** ChampSim report, strips the one
 nondeterministic line (the wall-clock `Simulation time` suffix), and byte-diffs
-it against `expected/<scenario>.out`.
+it against `expected/<scenario>.<phase>.out`.
 
 The golden file pins everything — every cache counter, the liveness statistics,
 and (for the `*_cap256` scenarios) the `repl_hist` PC dump with each PC's DoA
@@ -27,12 +27,41 @@ followers converge to the winning config). The goldens pin absolute output;
 the invariants catch the orthogonal bug where a future change legitimately
 updates the goldens but inverts a relationship.
 
+## Two phases: gate and full
+
+Each scenario runs in two phases that share the same warmup and differ only in
+simulation length:
+
+| phase  | sim instrs | wall  | role                          |
+|--------|-----------:|------:|-------------------------------|
+| `gate` |       250K | ~3 s  | fast early check (everyday)   |
+| `full` |        2 M | ~25 s | thorough guard (pre-commit)   |
+
+The gate is a CTest **fixture setup**; the full **requires** it. If the gate
+fails, CTest skips that scenario's full automatically — no wasted 25 s on an
+already-broken config, and no separate long suite that gets forgotten.
+
+This is sound, not a shortcut: because warmup is identical and only the sim
+window differs, the gate run is a true **prefix** of the full run. The first
+250K ROI instructions are bit-identical whether you stop there or keep going,
+so "gate passed" *proves* nothing diverged through that point — only the tail
+can still differ, which is exactly what the full phase covers. The gate length
+was chosen so the policies already separate clearly (e.g. bypass IPC 0.296 vs
+2n3 0.225); tune `GATE_SIM` in `run_scenario.sh` if a new scenario needs longer
+to become distinguishable.
+
 ## Running
 
 ```sh
 cmake -S test/blackbox -B test/blackbox/cmake_build
-ctest --test-dir test/blackbox/cmake_build --output-on-failure
-ctest --test-dir test/blackbox/cmake_build -L scenarios   # golden diffs only
+
+# everyday loop: gates + invariants only, parallel (~15 s)
+ctest --test-dir test/blackbox/cmake_build -L "gate|invariants" -j8 --output-on-failure
+
+# thorough: gates then fulls (fulls auto-skipped where the gate failed)
+ctest --test-dir test/blackbox/cmake_build -j8 --output-on-failure
+
+ctest --test-dir test/blackbox/cmake_build -L full        # full diffs only
 ctest --test-dir test/blackbox/cmake_build -L invariants  # ordering checks only
 ```
 
@@ -41,11 +70,12 @@ not failed, so the suite is safe to run on a partial build.
 
 ## Regenerating goldens
 
-After an **intentional** behavior change, review the diff, then regenerate:
+After an **intentional** behavior change, review the diff, then regenerate both
+phases:
 
 ```sh
-GENERATE=1 bash test/blackbox/run_scenario.sh <scenario>   # one
-for s in <...>; do GENERATE=1 bash test/blackbox/run_scenario.sh $s; done
+GENERATE=1 bash test/blackbox/run_scenario.sh <scenario> gate
+GENERATE=1 bash test/blackbox/run_scenario.sh <scenario> full
 ```
 
 Commit the regenerated `expected/*.out` together with the code change so the
@@ -54,8 +84,8 @@ golden update is reviewable alongside what caused it.
 ## Adding a scenario
 
 1. Add a `case` arm in `run_scenario.sh` (binary + env).
-2. Add `cs_test(<name>)` in `CMakeLists.txt`.
-3. `GENERATE=1 bash run_scenario.sh <name>` and commit the new golden.
+2. Add `cs_scenario(<name>)` in `CMakeLists.txt`.
+3. Generate both phases (`gate` and `full`) and commit the new goldens.
 
 ## Note: the PC dump
 
