@@ -517,6 +517,11 @@ void CACHE::load_predictor_settings()
     if (const char* v = std::getenv("LIVENESS_BYPASS"); v && std::stoull(v))
       liveness_bypass = true;
     bypass_thd = getenv_uint64("BYPASS_THD", thd_doa);
+    if (const char* v = std::getenv("BYPASS_DUEL"); v && std::stoull(v)) {
+      bypass_duel_enable_ = true;
+      bypass_duel_ns_   = static_cast<int>(getenv_uint64("BYPASS_DUEL_N_SAMPLERS", 32));
+      bypass_duel_hyst_ = static_cast<int64_t>(getenv_uint64("BYPASS_DUEL_HYST", 0));
+    }
     if (const uint64_t rp = getenv_uint64("BYPASS_RESET_PERIOD", 0); rp > 0)
       repl_hist_pc.set_reset_period(rp);
     bypass_fire_reset_period_ = getenv_uint64("BYPASS_FIRE_RESET_PERIOD", 0);
@@ -702,6 +707,24 @@ bool CACHE::handle_fill(const PACKET& fill_mshr)
     }
   }
 
+  // Bypass set-dueling: accumulate miss latency per sampler arm so the duel
+  // can compare "bypass active" (arm B) vs "bypass suppressed" (arm A).
+  // Accumulated unconditionally for all demand fills (not WRITE) regardless of
+  // whether lv_bypass will fire — the PSEL measures overall cache performance,
+  // not just the DoA path.  bduel_use_b is then used below to gate lv_bypass.
+  bool bduel_use_b = false;
+  if (bypass_duel_enable_ && NAME == "LLC" && fill_mshr.type != WRITE) {
+    const uint32_t fill_set = get_set_index(fill_mshr.address);
+    const int step = bypass_duel_ns_ > 0
+                     ? static_cast<int>(NUM_SET) / bypass_duel_ns_ : 0;
+    const bool is_a = (step > 0 && static_cast<int>(fill_set) % step == 0);
+    const bool is_b = (step > 0 && static_cast<int>(fill_set) % step == step / 2);
+    if (is_a) bypass_duel_lat_a_ += static_cast<int64_t>(last_fill_latency);
+    if (is_b) bypass_duel_lat_b_ += static_cast<int64_t>(last_fill_latency);
+    const bool b_wins = (bypass_duel_lat_a_ - bypass_duel_lat_b_ > bypass_duel_hyst_);
+    bduel_use_b = is_b || (!is_a && step > 0 && b_wins);
+  }
+
   // Predictor bypass: only fires when a valid entry would be displaced
   // (way->valid distinguishes eviction from filling a free slot).
   // On predictor bypass we do not redirect through the existing bypass code
@@ -740,7 +763,14 @@ bool CACHE::handle_fill(const PACKET& fill_mshr)
         && fill_mshr.type != TRANSLATION && prop_ok
         && repl_hist_pc.classify(bypass_key, bypass_thd, 0) == liveness_class::doa;
     const bool lv_probe  = lv_doa && repl_hist_pc.should_probe(bypass_key);
-    const bool lv_bypass = lv_doa && !lv_probe;
+    // When bypass dueling is active, arm A sets never bypass; arm B sets and
+    // followers-using-B do.  This lets the PSEL compare the two policies and
+    // propagate the winner to followers.  Without dueling, bduel_use_b=false
+    // and the original liveness_bypass flag governs everything unchanged.
+    const bool lv_bypass = lv_doa && !lv_probe
+        && (!bypass_duel_enable_ || bduel_use_b);
+    if (bypass_duel_enable_ && lv_doa && !lv_probe && !bduel_use_b)
+      sim_stats.back().bypass_duel_suppressed++;
     if (lv_probe) sim_stats.back().liveness_probes++;
     if (lv_bypass) {
       sim_stats.back().liveness_bypasses++;
@@ -1360,6 +1390,7 @@ void CACHE::end_phase(unsigned finished_cpu)
   roi_stats.back().liveness_bypasses       = sim_stats.back().liveness_bypasses;
   roi_stats.back().liveness_probes         = sim_stats.back().liveness_probes;
   roi_stats.back().liveness_bypass_shadow_hits = sim_stats.back().liveness_bypass_shadow_hits;
+  roi_stats.back().bypass_duel_suppressed  = sim_stats.back().bypass_duel_suppressed;
 
   roi_stats.back().evictions    = sim_stats.back().evictions;
   roi_stats.back().doa          = sim_stats.back().doa;

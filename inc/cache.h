@@ -1403,6 +1403,7 @@ struct cache_stats {
   uint64_t liveness_bypasses = 0;    // LLC bypasses from repl_hist DoA classification
   uint64_t liveness_probes   = 0;    // DoA fills inserted as probes instead of bypassed (recheck)
   uint64_t liveness_bypass_shadow_hits = 0;  // re-references to bypassed blocks (confirmed bypass mistakes)
+  uint64_t bypass_duel_suppressed = 0; // DoA fills not bypassed because the duel selected arm A (no-bypass)
 
   // DoA liveness stats.
   // For every cache: evictions = valid blocks displaced; doa = those never accessed.
@@ -1593,6 +1594,15 @@ class CACHE : public champsim::operable, public MemoryRequestConsumer, public Me
                                     // at page or PC granularity.
   uint64_t bypass_fire_reset_period_{0}; // BYPASS_FIRE_RESET_PERIOD: reset scores every N bypass fires (global, legacy)
   uint64_t bypass_fire_count_{0};        // running count of bypass fires (for fire-based reset)
+
+  // Bypass set-dueling (BYPASS_DUEL=1 + LIVENESS_BYPASS=1).
+  // arm A: bypass suppressed; arm B: bypass active; followers adopt the lower-
+  // miss-latency arm.  Independent of the replacement-guidance PSEL in srrip_live.
+  bool     bypass_duel_enable_{false};
+  int      bypass_duel_ns_{0};       // BYPASS_DUEL_N_SAMPLERS (default 32 when enabled)
+  int64_t  bypass_duel_lat_a_{0};    // cumulative miss latency for arm-A sampler sets
+  int64_t  bypass_duel_lat_b_{0};    // cumulative miss latency for arm-B sampler sets
+  int64_t  bypass_duel_hyst_{0};     // BYPASS_DUEL_HYST: B must lead A by this margin to win
 
   // Classify block liveness based on repl_hist_pc counters for the fill PC.
   // Used by srrip_live and ipv_live replacement policies to guide insertion/promotion.
