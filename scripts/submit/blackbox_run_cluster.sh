@@ -27,7 +27,16 @@ EXPECTED_DIR="$REPO/test/blackbox/expected"
 LOCAL_OUT_DIR="$REPO/test/blackbox/test_outputs_cluster"
 POLL_INTERVAL=30
 
-ca() { ssh -o BatchMode=yes "$ABDET" "ssh otegby@castillo.inf.um.es '$*'" 2>/dev/null; }
+SCENARIOS=(
+  lru_default lru_2n3 lru_lru lru_bypass lru_bypass_off
+  lru_duel_hits lru_duel_lat_hyst lru_cap256
+  srrip_default srrip_mode3 srrip_mode4 srrip_mode5 srrip_mode7 srrip_mode8
+  srrip_cap256 srrip_duel_cfg0 srrip_bypass_fixed srrip_bypass_duel
+  ipv_default ipv_canonical ipv_ins3_comma ipv_ins3_colon ipv_cap256
+  duel_ipv_cfg0_ins2 duel_ipv_cfg0_ins3 duel_ipv_3way
+)
+
+ca() { ssh -o BatchMode=yes "$ABDET" "ssh otegby@castillo.inf.um.es '$*'"; }
 
 mkdir -p "$LOCAL_OUT_DIR"
 
@@ -52,9 +61,24 @@ echo "[$(date +%T)] Submitted $n_bb jobs (IDs: $(echo "$bb_ids" | tr '|' ' '))"
 
 # ── 3. Poll ───────────────────────────────────────────────────────────────
 echo "[$(date +%T)] Waiting (polling every ${POLL_INTERVAL}s)..."
-while true; do
-    running=$(ca "qstat -u otegby 2>/dev/null | awk 'NR>1{print \$1}'" \
+# SGE has a small delay between qsub returning and jobs appearing in qstat.
+# Wait until at least one submitted job is visible before entering the poll loop.
+for _i in $(seq 1 24); do
+    seen=$(ca "qstat -u otegby 2>/dev/null | awk 'NR>1{print \$1}'" \
         | grep -cE "^(${bb_ids})$" || true)
+    [ "$seen" -gt 0 ] && break
+    sleep 5
+done
+while true; do
+    qstat_out=$(ca "qstat -u otegby 2>/dev/null | awk 'NR>1{print \$1}'" 2>/dev/null || true)
+    # If qstat returned nothing at all (SSH failure), skip this poll rather than
+    # falsely declaring all jobs done.
+    if [ -z "$qstat_out" ]; then
+        echo "[$(date +%T)] qstat returned empty (SSH issue?), retrying..."
+        sleep "$POLL_INTERVAL"
+        continue
+    fi
+    running=$(echo "$qstat_out" | grep -cE "^(${bb_ids})$" || true)
     echo "[$(date +%T)] ${running}/${n_bb} jobs still in queue"
     [ "$running" -eq 0 ] && break
     sleep "$POLL_INTERVAL"
@@ -68,7 +92,9 @@ ssh "$ABDET" "ssh otegby@castillo.inf.um.es 'tar czf - -C $ROOT/test/blackbox/te
 # ── 5. Generate or verify ─────────────────────────────────────────────────
 if [ "$MODE" = generate ]; then
     echo "[$(date +%T)] Writing reference outputs to expected/..."
-    cp "$LOCAL_OUT_DIR"/*.out "$EXPECTED_DIR/"
+    for scen in "${SCENARIOS[@]}"; do
+        cp "$LOCAL_OUT_DIR/${scen}.out" "$EXPECTED_DIR/${scen}.out"
+    done
     git -C "$REPO" add test/blackbox/expected/
     git -C "$REPO" commit -m "test: update expected outputs from cluster full runs"
     echo "[$(date +%T)] Done — expected/ updated and committed."
@@ -78,8 +104,8 @@ else
     echo "  BLACK-BOX RESULTS (cluster / full)  "
     echo "══════════════════════════════════════"
     pass=0; fail=0
-    for expected in "$EXPECTED_DIR"/*.out; do
-        scen=$(basename "$expected" .out)
+    for scen in "${SCENARIOS[@]}"; do
+        expected="$EXPECTED_DIR/${scen}.out"
         actual="$LOCAL_OUT_DIR/${scen}.out"
         if [ ! -f "$actual" ]; then
             printf "  %-32s MISSING\n" "$scen"; ((fail++))
