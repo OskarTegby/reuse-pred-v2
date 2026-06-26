@@ -7,18 +7,18 @@
 # with zero tolerance.
 #
 # Two phases per scenario:
-#   <name>_gate   ~250K instructions (~3s)  — fast early check
-#   <name>_full    2M  instructions (~25s)  — thorough guard
+#   <name>_gate   50M warmup + 50M sim  (~4 min)  — early check at the midpoint
+#   <name>_full   50M warmup + 100M sim (~8 min)  — full standard run, gated on the gate
 #
 # The gate is a CTest fixture SETUP; the full REQUIRES it.  If the gate fails,
-# CTest skips the full automatically — no wasted 25s on an already-broken
+# CTest skips the full automatically — no wasted 8 min on an already-broken
 # scenario, and no separate long suite to forget to run.  Because warmup is
 # identical and only the sim window differs, the gate is a true prefix of the
-# full: passing the gate proves nothing diverged through instruction 250K.
+# full: passing the gate proves nothing diverged through the first 50M sim instructions.
 #
 # Usage:
 #   cmake -S test/blackbox -B test/blackbox/cmake_build
-#   ctest --test-dir test/blackbox/cmake_build -L gate -j8        # fast loop (~15s)
+#   ctest --test-dir test/blackbox/cmake_build -L gate -j8        # gate only (~13 min with 8 cores)
 #   ctest --test-dir test/blackbox/cmake_build -j8 --output-on-failure  # gate+full
 #   ctest --test-dir test/blackbox/cmake_build -L invariants      # ordering only
 #
@@ -41,13 +41,13 @@ set(ENV_COMMON "SRC_ROOT=${SRC_ROOT};OUTPUT_DIR=${OUT_DIR}")
 function(cs_scenario name)
   add_test(NAME ${name}_gate COMMAND bash ${RUNNER} ${name} gate)
   set_tests_properties(${name}_gate PROPERTIES
-    LABELS "gate" TIMEOUT 120 SKIP_RETURN_CODE 77
+    LABELS "gate" TIMEOUT 600 SKIP_RETURN_CODE 77
     FIXTURES_SETUP fx_${name}
     ENVIRONMENT "${ENV_COMMON}")
 
   add_test(NAME ${name}_full COMMAND bash ${RUNNER} ${name} full)
   set_tests_properties(${name}_full PROPERTIES
-    LABELS "full" TIMEOUT 300 SKIP_RETURN_CODE 77
+    LABELS "full" TIMEOUT 900 SKIP_RETURN_CODE 77
     FIXTURES_REQUIRED fx_${name}
     ENVIRONMENT "${ENV_COMMON}")
 endfunction()
@@ -58,7 +58,7 @@ endfunction()
 function(cs_order name a op b)
   add_test(NAME ${name} COMMAND bash ${ORDERER} ${a} ${op} ${b})
   set_tests_properties(${name} PROPERTIES
-    LABELS "invariants" TIMEOUT 300 SKIP_RETURN_CODE 77
+    LABELS "invariants" TIMEOUT 1200 SKIP_RETURN_CODE 77
     FIXTURES_REQUIRED "fx_${a};fx_${b}"
     ENVIRONMENT "${ENV_COMMON}")
 endfunction()
