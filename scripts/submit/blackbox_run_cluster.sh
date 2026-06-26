@@ -36,7 +36,16 @@ SCENARIOS=(
   duel_ipv_cfg0_ins2 duel_ipv_cfg0_ins3 duel_ipv_3way
 )
 
-ca() { ssh -o BatchMode=yes "$ABDET" "ssh otegby@castillo.inf.um.es '$*'"; }
+# Run a command on castillo via the abdet jump host.
+# The command is base64-encoded so it survives two layers of SSH quoting intact
+# — single quotes inside awk/grep programs would otherwise terminate a naive
+# single-quote wrapper and silently break the command.
+ca() {
+    local cmd b64
+    cmd="$*"
+    b64=$(printf '%s' "$cmd" | base64 -w0)
+    ssh -o BatchMode=yes "$ABDET" "ssh otegby@castillo.inf.um.es \"echo $b64 | base64 -d | bash\""
+}
 
 mkdir -p "$LOCAL_OUT_DIR"
 
@@ -108,13 +117,15 @@ else
         expected="$EXPECTED_DIR/${scen}.out"
         actual="$LOCAL_OUT_DIR/${scen}.out"
         if [ ! -f "$actual" ]; then
-            printf "  %-32s MISSING\n" "$scen"; ((fail++))
+            printf "  %-32s MISSING\n" "$scen"; fail=$((fail+1))
+        elif [ ! -f "$expected" ]; then
+            printf "  %-32s NO-REFERENCE\n" "$scen"; fail=$((fail+1))
         elif diff -q "$expected" "$actual" > /dev/null 2>&1; then
-            printf "  %-32s PASS\n" "$scen"; ((pass++))
+            printf "  %-32s PASS\n" "$scen"; pass=$((pass+1))
         else
             printf "  %-32s FAIL\n" "$scen"
             diff "$expected" "$actual" | head -20
-            ((fail++))
+            fail=$((fail+1))
         fi
     done
     echo ""
