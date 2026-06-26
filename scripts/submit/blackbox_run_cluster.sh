@@ -75,9 +75,9 @@ echo "════════════════════════�
 echo "  BLACK-BOX RESULTS (cluster gate phase)  "
 echo "══════════════════════════════════════════"
 pass=0; fail=0
-for expected in "$EXPECTED_DIR"/*.full.out; do
-    scen=$(basename "$expected" .full.out)
-    actual="$LOCAL_OUT_DIR/${scen}.full.out"
+for expected in "$EXPECTED_DIR"/*.out; do
+    scen=$(basename "$expected" .out)
+    actual="$LOCAL_OUT_DIR/${scen}.out"
     if [ ! -f "$actual" ]; then
         printf "  %-32s MISSING OUTPUT\n" "$scen"
         ((fail++))

@@ -2,36 +2,21 @@
 #
 # Black-box scenario runner for the liveness replacement policies.
 #
-#   Usage: run_scenario.sh <scenario> [gate|full]      # run + diff golden
-#          GENERATE=1 run_scenario.sh <scenario> [gate|full]  # write golden
+#   Usage: run_scenario.sh <scenario>          # run + compare
+#          GENERATE=1 run_scenario.sh <scenario>  # write reference output
 #
-# Each scenario names a binary + a fixed environment.  The runner executes
-# ChampSim on a single deterministic trace, strips the only nondeterministic
-# line (the wall-clock "Simulation time" suffix), and byte-compares the whole
-# report against test/blackbox/expected/<scenario>.<phase>.out.
-#
-# Two phases, same warmup, different simulation length:
-#   gate   50M warmup + 50M sim (~4 min)  — early check at the midpoint
-#   full   50M warmup + 100M sim (~8 min) — full standard run, gated on the gate
-#
-# Because warmup is identical and only the simulation window differs, the gate
-# run is a true PREFIX of the full run: deterministic, so the first GATE_SIM
-# ROI instructions are bit-identical whether you stop there or keep going.
-# "Gate passed" therefore proves nothing diverged through that point; only the
-# tail can still differ, which is what the full phase covers.
+# Each scenario names a binary + environment variables. The runner executes
+# ChampSim on a single deterministic trace (50M warmup + 100M sim), strips
+# the nondeterministic wall-clock line, and byte-compares the full report
+# against test/blackbox/expected/<scenario>.out.
 #
 # The guard is the full report, not a hand-picked metric: every cache counter
-# and every liveness statistic (LLC UNIQUE INSTRUCTION DOA, the repl_hist PC
-# dump, ...) is pinned.  A code change that compounds over the simulation moves
-# *some* number, and the diff catches it without anyone naming which one.
-#
-# Determinism is what makes a zero-tolerance golden diff valid: same binary +
-# same trace = bit-identical output (verified; only the timing line varies).
+# and every liveness statistic is pinned. A code change that shifts any number
+# will be caught without having to name which one.
 #
 set -euo pipefail
 
-SCEN="${1:?usage: run_scenario.sh <scenario> [gate|full]}"
-PHASE="${2:-full}"
+SCEN="${1:?usage: run_scenario.sh <scenario>}"
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT="${SRC_ROOT:-$(cd "$HERE/../.." && pwd)}"
@@ -40,19 +25,12 @@ TRACE="${TRACE:-$ROOT/trace-files/pagerank.champsimtrace.xz}"
 EXPECTED_DIR="$HERE/expected"
 OUT_DIR="${OUTPUT_DIR:-$HERE/test_outputs}"
 WARMUP="${WARMUP:-50000000}"
-GATE_SIM="${GATE_SIM:-50000000}"
-FULL_SIM="${FULL_SIM:-100000000}"
-
-case "$PHASE" in
-  gate) SIM="$GATE_SIM" ;;
-  full) SIM="$FULL_SIM" ;;
-  *) echo "run_scenario.sh: phase must be 'gate' or 'full', got '$PHASE'" >&2; exit 2 ;;
-esac
+SIM="${SIM:-100000000}"
 
 mkdir -p "$OUT_DIR" "$EXPECTED_DIR"
 
 # --- scenario definitions -------------------------------------------------
-# Set BIN (binary basename) and export the scenario's env.  Anything not set
+# Set BIN (binary basename) and export the scenario's env. Anything not set
 # here falls back to the binary's compiled-in default, which is the point of
 # the bare "*_default" scenarios: they guard the default code path.
 #
@@ -92,10 +70,8 @@ case "$SCEN" in
   srrip_mode8)        BIN=champsim_srrip_live; base; export SCORING_MODE=8 BHIST_MODE=pc SRRIP_LIVE_TARGET=llc ;;
   srrip_cap256)       BIN=champsim_srrip_live; base; export BHIST_MODE=pc SRRIP_LIVE_TARGET=llc REPL_HIST_LLC_CAP=256 REPL_HIST_REPL=tiered REPL_HIST_DUMP_PCS=1 ;;
   srrip_duel_cfg0)    BIN=champsim_srrip_live; base; export BHIST_MODE=pc SRRIP_LIVE_TARGET=llc DUEL_N_SAMPLERS=256 SRRIP_DOA_INS_RRPV=2 SRRIP_DOA_INS_RRPV_B=3 ;;
-  # bypass-duel: guidance off, bypass via set-dueling.
-  # arm A = plain SRRIP (no bypass), arm B = bypass active; followers adopt the
-  # lower-miss-latency arm.  On pagerank (100% DoA) arm B wins quickly.
   srrip_bypass_fixed) BIN=champsim_srrip_live; base; export BHIST_MODE=pc SRRIP_LIVE_TARGET=none LIVENESS_BYPASS=1 ;;
+  # arm A = plain SRRIP, arm B = bypass; followers adopt the lower-miss-latency arm.
   srrip_bypass_duel)  BIN=champsim_srrip_live; base; export BHIST_MODE=pc SRRIP_LIVE_TARGET=none LIVENESS_BYPASS=1 BYPASS_DUEL=1 BYPASS_DUEL_N_SAMPLERS=32 ;;
 
   # ---------------- IPV-Live ----------------
@@ -114,31 +90,30 @@ case "$SCEN" in
 esac
 
 BIN_PATH="$BIN_DIR/$BIN"
-if [ ! -x "$BIN_PATH" ]; then echo "SKIP $SCEN.$PHASE: binary not built: $BIN_PATH" >&2; exit 77; fi
-if [ ! -f "$TRACE" ];   then echo "SKIP $SCEN.$PHASE: trace not found: $TRACE"    >&2; exit 77; fi
+if [ ! -x "$BIN_PATH" ]; then echo "SKIP $SCEN: binary not found: $BIN_PATH" >&2; exit 77; fi
+if [ ! -f "$TRACE" ];   then echo "SKIP $SCEN: trace not found: $TRACE"       >&2; exit 77; fi
 
-ACTUAL="$OUT_DIR/$SCEN.$PHASE.out"
-GOLDEN="$EXPECTED_DIR/$SCEN.$PHASE.out"
+ACTUAL="$OUT_DIR/$SCEN.out"
+REFERENCE="$EXPECTED_DIR/$SCEN.out"
 
-# Run, then strip the nondeterministic wall-clock suffix.
 "$BIN_PATH" --warmup_instructions "$WARMUP" --simulation_instructions "$SIM" "$TRACE" 2>&1 \
   | sed -E 's/ \(Simulation time: [0-9]+ hr [0-9]+ min [0-9]+ sec\)//' \
   > "$ACTUAL"
 
 if [ "${GENERATE:-0}" = "1" ]; then
-  cp "$ACTUAL" "$GOLDEN"
-  echo "REFERENCE WRITTEN (no comparison): $GOLDEN"
+  cp "$ACTUAL" "$REFERENCE"
+  echo "REFERENCE WRITTEN (no comparison): $REFERENCE"
   exit 0
 fi
 
-if [ ! -f "$GOLDEN" ]; then
-  echo "FAIL $SCEN.$PHASE: no golden file ($GOLDEN). Run with GENERATE=1 to create it." >&2
+if [ ! -f "$REFERENCE" ]; then
+  echo "FAIL $SCEN: no reference file ($REFERENCE). Run with GENERATE=1 to create it." >&2
   exit 1
 fi
 
-if diff -u "$GOLDEN" "$ACTUAL"; then
-  echo "PASS $SCEN.$PHASE"
+if diff -u "$REFERENCE" "$ACTUAL"; then
+  echo "PASS $SCEN"
 else
-  echo "FAIL $SCEN.$PHASE: output diverged from golden" >&2
+  echo "FAIL $SCEN: output diverged from reference" >&2
   exit 1
 fi
