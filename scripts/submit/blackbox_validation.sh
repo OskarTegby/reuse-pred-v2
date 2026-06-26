@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
-# Submit black-box gate jobs on the cluster.
+# Submit black-box full jobs on the cluster.
 # Each job runs a scenario and saves output to test_outputs/.
 # Comparison against expected reference outputs is done locally by
 # blackbox_run_cluster.sh, not on the cluster.
 #
 # Usage (called by blackbox_run_cluster.sh, not directly):
-#   bash blackbox_validation.sh     # submit all 26 gate jobs
+#   bash blackbox_validation.sh     # submit all 26 full jobs
 set -euo pipefail
 
 ROOT=/home/users/otegby/ChampSim-dev
@@ -26,9 +26,9 @@ SCENARIOS=(
 
 for scen in "${SCENARIOS[@]}"; do
   qsub -N "bb_${scen}" -j y \
-       -o "$LOGDIR/${scen}.gate.log" \
+       -o "$LOGDIR/${scen}.full.log" \
        -v "SRC_ROOT=$ROOT,BIN_DIR=$ROOT/bin,TRACE=$TRACE,OUTPUT_DIR=$OUTPUT_DIR,GENERATE=1" \
-       -b y bash "$RUNNER" "$scen" gate
+       -b y bash "$RUNNER" "$scen" full
 done
 
 echo "Submitted ${#SCENARIOS[@]} gate jobs"
