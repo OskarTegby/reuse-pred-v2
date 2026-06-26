@@ -24,7 +24,7 @@ REPO="$(cd "$HERE/../.." && pwd)"
 
 ABDET=otegby@abdet.inf.um.es
 ROOT=/home/users/otegby/ChampSim-dev
-EXPECTED_DIR="$REPO/test/blackbox/expected_cluster"
+EXPECTED_DIR="$REPO/test/blackbox/expected"
 LOCAL_OUT_DIR="$REPO/test/blackbox/test_outputs_cluster"
 POLL_INTERVAL=30
 
