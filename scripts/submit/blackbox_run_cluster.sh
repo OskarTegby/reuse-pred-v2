@@ -95,6 +95,7 @@ ssh "$ABDET" "ssh otegby@castillo.inf.um.es 'tar czf - -C $ROOT/test/blackbox/te
 # ── 5. Generate or verify ─────────────────────────────────────────────────
 if [ "$MODE" = generate ]; then
     echo "[$(date +%T)] Writing reference outputs to expected/..."
+    mkdir -p "$EXPECTED_DIR"   # may not exist if all references were removed
     for scen in "${SCENARIOS[@]}"; do
         cp "$LOCAL_OUT_DIR/${scen}.out" "$EXPECTED_DIR/${scen}.out"
     done
