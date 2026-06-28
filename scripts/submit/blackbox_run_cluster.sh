@@ -7,7 +7,7 @@
 #
 # Workflow:
 #   1. Hold all queued (qw) jobs so bb_ jobs run first.
-#   2. Submit 26 full-phase jobs (50M warmup + 100M sim).
+#   2. Submit the full-phase jobs (50M warmup + 100M sim).
 #   3. Poll until done.
 #   4. Download outputs.
 #   5a. generate: copy to expected/, commit.
@@ -27,14 +27,8 @@ EXPECTED_DIR="$REPO/test/blackbox/expected"
 LOCAL_OUT_DIR="$REPO/test/blackbox/test_outputs_cluster"
 POLL_INTERVAL=30
 
-SCENARIOS=(
-  lru_default lru_2n3 lru_lru lru_bypass lru_bypass_off
-  lru_duel_hits lru_duel_lat_hyst lru_cap256
-  srrip_default srrip_mode3 srrip_mode4 srrip_mode5 srrip_mode7 srrip_mode8
-  srrip_cap256 srrip_duel_cfg0 srrip_bypass_fixed srrip_bypass_duel
-  ipv_default ipv_canonical ipv_ins3_comma ipv_ins3_colon ipv_cap256
-  duel_ipv_cfg0_ins2 duel_ipv_cfg0_ins3 duel_ipv_3way
-)
+# Scenario list is owned by run_scenario.sh (--list), the single source of truth.
+mapfile -t SCENARIOS < <(bash "$REPO/test/blackbox/run_scenario.sh" --list)
 
 # Run a command on castillo via the abdet jump host.
 # The command is base64-encoded so it survives two layers of SSH quoting intact

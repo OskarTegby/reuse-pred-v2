@@ -2,101 +2,118 @@
 #
 # Black-box scenario runner for the liveness replacement policies.
 #
-#   Usage: run_scenario.sh <scenario>          # run + compare
-#          GENERATE=1 run_scenario.sh <scenario>  # write reference output
+#   Usage: run_scenario.sh <scenario>            # run + compare
+#          GENERATE=1 run_scenario.sh <scenario> # write reference output
+#          run_scenario.sh --list                # print every scenario name
 #
-# Each scenario names a binary + environment variables. The runner executes
-# ChampSim on a single deterministic trace (50M warmup + 100M sim), strips
-# the nondeterministic wall-clock line, and byte-compares the full report
-# against test/blackbox/expected/<scenario>.out.
+# A scenario is  <policy>_<condition>_<trace>  and names a binary + environment,
+# run on one real trace (50M warmup + 100M sim). The runner captures the entire
+# ChampSim report, strips the one nondeterministic wall-clock line, and
+# byte-compares it against test/blackbox/expected/<scenario>.out.
 #
-# The guard is the full report, not a hand-picked metric: every cache counter
-# and every liveness statistic is pinned. A code change that shifts any number
-# will be caught without having to name which one.
+# Design (see README): instead of isolating one knob on a synthetic trace, the
+# matrix exercises every mechanism we developed AND kept, on workloads where
+# that mechanism is actually active:
+#
+#   policies   : lru / srrip / ipv          (the three liveness policies)
+#   conditions : base   - the non-liveness baseline policy (own reference point)
+#                fixed  - liveness, single fixed insertion config (no dueling)
+#                bypass - liveness with DoA blocks bypassing the LLC
+#                duel   - liveness with set dueling (each policy's kept metric)
+#   traces     : pr     - ligra PageRank      (graph DoA; bypass + aggressive arm)
+#                cactus - 607.cactuBSSN        (many PCs -> history table active;
+#                                               temporal reuse -> gentle arm wins)
+#                lbm    - 619.lbm              (streaming -> bypass big win)
+#                qmm    - srv_12               (many PCs, different workload)
+#
+# Determinism makes the full-report reference sufficient: any change to winner
+# selection, tier classification, or eviction moves some counter and the diff
+# catches it -- no separate winner-flip / threshold / eviction asserts needed.
 #
 set -euo pipefail
-
-SCEN="${1:?usage: run_scenario.sh <scenario>}"
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT="${SRC_ROOT:-$(cd "$HERE/../.." && pwd)}"
 BIN_DIR="${BIN_DIR:-$ROOT/bin}"
-TRACE="${TRACE:-$ROOT/trace-files/pagerank.champsimtrace.xz}"
 EXPECTED_DIR="$HERE/expected"
 OUT_DIR="${OUTPUT_DIR:-$HERE/test_outputs}"
 WARMUP="${WARMUP:-50000000}"
 SIM="${SIM:-100000000}"
+DPC3=/home/users/shared/traces/dpc3_traces
 
-mkdir -p "$OUT_DIR" "$EXPECTED_DIR"
+POLICIES=(lru srrip ipv)
+CONDITIONS=(base fixed bypass duel)
+TRACE_KEYS=(pr cactus lbm qmm)
 
-# --- scenario definitions -------------------------------------------------
-# Set BIN (binary basename) and export the scenario's env. Anything not set
-# here falls back to the binary's compiled-in default, which is the point of
-# the bare "*_default" scenarios: they guard the default code path.
-#
-# THD_DOA/THD_DEAD/SCORING_MODE form the canonical liveness baseline; the
-# pagerank trace is 100% DoA with four load PCs.
-
-unset_policy_env() {
-  unset SCORING_MODE LRU_LIVE_DOA_INS LRU_LIVE_ALLOW_BYPASS \
-        DUEL_N_SAMPLERS DUEL_N_CONFIGS DUEL_METRIC DUEL_HYST \
-        BHIST_MODE SRRIP_LIVE_TARGET SRRIP_DOA_INS_RRPV SRRIP_DOA_INS_RRPV_B \
-        IPV_DOA IPV_DOA_0 IPV_DOA_1 IPV_DOA_2 \
-        REPL_HIST_LLC_CAP REPL_HIST_REPL REPL_HIST_DUMP_PCS \
-        LIVENESS_BYPASS BYPASS_THD BYPASS_DUEL BYPASS_DUEL_N_SAMPLERS BYPASS_DUEL_HYST \
-        THD_DOA THD_DEAD 2>/dev/null || true
+# --- trace key -> path + that trace's per-suite mostly-dead threshold ---------
+trace_path() {
+  case "$1" in
+    pr)     echo "$ROOT/trace-files/ligra/ligra_PageRank.com-lj.ungraph.gcc_6.3.0_O3.drop_51000M.length_250M.champsimtrace.xz" ;;
+    cactus) echo "$DPC3/607.cactuBSSN_s-2421B.champsimtrace.xz" ;;
+    lbm)    echo "$DPC3/619.lbm_s-2676B.champsimtrace.xz" ;;
+    qmm)    echo "$ROOT/trace-files/QMM/srv_12.champsimtrace.xz" ;;
+    *) return 1 ;;
+  esac
 }
-unset_policy_env
+trace_dead() {            # per-suite THD_DEAD, matches the cluster sweeps
+  case "$1" in
+    pr) echo 16 ;; cactus|lbm) echo 4 ;; qmm) echo 2 ;; *) return 1 ;;
+  esac
+}
 
-base() { export THD_DOA=6 THD_DEAD=10 SCORING_MODE=5; }
+# --- emit the full scenario list (single source of truth) --------------------
+if [ "${1:-}" = "--list" ]; then
+  for p in "${POLICIES[@]}"; do for c in "${CONDITIONS[@]}"; do
+    for t in "${TRACE_KEYS[@]}"; do echo "${p}_${c}_${t}"; done
+  done; done
+  exit 0
+fi
 
-case "$SCEN" in
-  # ---------------- LRU-Live ----------------
-  lru_default)        BIN=champsim_lru_live ;;
-  lru_2n3)            BIN=champsim_lru_live; base; export LRU_LIVE_DOA_INS=2n3 ;;
-  lru_lru)            BIN=champsim_lru_live; base; export LRU_LIVE_DOA_INS=lru ;;
-  lru_bypass)         BIN=champsim_lru_live; base; export LRU_LIVE_DOA_INS=bypass ;;
-  lru_bypass_off)     BIN=champsim_lru_live; base; export LRU_LIVE_DOA_INS=bypass LRU_LIVE_ALLOW_BYPASS=0 ;;
-  lru_duel_hits)      BIN=champsim_lru_live; base; export DUEL_N_SAMPLERS=32 ;;
-  lru_duel_lat_hyst)  BIN=champsim_lru_live; base; export DUEL_N_SAMPLERS=32 DUEL_METRIC=latency DUEL_HYST=250000 ;;
-  lru_cap256)         BIN=champsim_lru_live; base; export REPL_HIST_LLC_CAP=256 REPL_HIST_REPL=tiered REPL_HIST_DUMP_PCS=1 ;;
+SCEN="${1:?usage: run_scenario.sh <policy>_<condition>_<trace>  (or --list)}"
+IFS=_ read -r POL COND TRC <<< "$SCEN"
 
-  # ---------------- SRRIP-Live ----------------
-  srrip_default)      BIN=champsim_srrip_live ;;
-  srrip_mode3)        BIN=champsim_srrip_live; base; export SCORING_MODE=3 BHIST_MODE=pc SRRIP_LIVE_TARGET=llc ;;
-  srrip_mode4)        BIN=champsim_srrip_live; base; export SCORING_MODE=4 BHIST_MODE=pc SRRIP_LIVE_TARGET=llc ;;
-  srrip_mode5)        BIN=champsim_srrip_live; base; export SCORING_MODE=5 BHIST_MODE=pc SRRIP_LIVE_TARGET=llc ;;
-  srrip_mode7)        BIN=champsim_srrip_live; base; export SCORING_MODE=7 BHIST_MODE=pc SRRIP_LIVE_TARGET=llc ;;
-  srrip_mode8)        BIN=champsim_srrip_live; base; export SCORING_MODE=8 BHIST_MODE=pc SRRIP_LIVE_TARGET=llc ;;
-  srrip_cap256)       BIN=champsim_srrip_live; base; export BHIST_MODE=pc SRRIP_LIVE_TARGET=llc REPL_HIST_LLC_CAP=256 REPL_HIST_REPL=tiered REPL_HIST_DUMP_PCS=1 ;;
-  srrip_duel_cfg0)    BIN=champsim_srrip_live; base; export BHIST_MODE=pc SRRIP_LIVE_TARGET=llc DUEL_N_SAMPLERS=256 SRRIP_DOA_INS_RRPV=2 SRRIP_DOA_INS_RRPV_B=3 ;;
-  srrip_bypass_fixed) BIN=champsim_srrip_live; base; export BHIST_MODE=pc SRRIP_LIVE_TARGET=none LIVENESS_BYPASS=1 ;;
-  # arm A = plain SRRIP, arm B = bypass; followers adopt the lower-miss-latency arm.
-  srrip_bypass_duel)  BIN=champsim_srrip_live; base; export BHIST_MODE=pc SRRIP_LIVE_TARGET=none LIVENESS_BYPASS=1 BYPASS_DUEL=1 BYPASS_DUEL_N_SAMPLERS=32 ;;
+TRACE="${TRACE:-$(trace_path "$TRC")}" || { echo "unknown trace key in '$SCEN'" >&2; exit 2; }
+DEAD="$(trace_dead "$TRC")"            || { echo "unknown trace key in '$SCEN'" >&2; exit 2; }
 
-  # ---------------- IPV-Live ----------------
-  ipv_default)        BIN=champsim_ipv_live ;;
-  ipv_canonical)      BIN=champsim_ipv_live; base; export SRRIP_LIVE_TARGET=llc ;;
-  ipv_ins3_comma)     BIN=champsim_ipv_live; base; export SRRIP_LIVE_TARGET=llc IPV_DOA=0,1,2,2,3 ;;
-  ipv_ins3_colon)     BIN=champsim_ipv_live; base; export SRRIP_LIVE_TARGET=llc IPV_DOA=0:1:2:2:3 ;;
-  ipv_cap256)         BIN=champsim_ipv_live; base; export SRRIP_LIVE_TARGET=llc REPL_HIST_LLC_CAP=256 REPL_HIST_REPL=tiered REPL_HIST_DUMP_PCS=1 ;;
+# liveness base shared by every non-baseline condition
+BASE_ENV=(SCORING_MODE=5 THD_DOA=6 "THD_DEAD=$DEAD" BHIST_MODE=pc SRRIP_LIVE_TARGET=llc)
 
-  # ---------------- set dueling ----------------
-  duel_ipv_cfg0_ins2) BIN=champsim_ipv_live; base; export SRRIP_LIVE_TARGET=llc DUEL_N_SAMPLERS=256 IPV_DOA_0=0,1,2,2,2 IPV_DOA_1=0,1,2,2,3 ;;
-  duel_ipv_cfg0_ins3) BIN=champsim_ipv_live; base; export SRRIP_LIVE_TARGET=llc DUEL_N_SAMPLERS=256 IPV_DOA_0=0,1,2,2,3 IPV_DOA_1=0,1,2,2,2 ;;
-  duel_ipv_3way)      BIN=champsim_ipv_live; base; export SRRIP_LIVE_TARGET=llc DUEL_N_SAMPLERS=256 DUEL_N_CONFIGS=3 IPV_DOA_0=0,1,2,2,2 IPV_DOA_1=0,1,2,2,3 IPV_DOA_2=0,1,1,2,3 ;;
+# --- (policy, condition) -> binary + env -------------------------------------
+ENVV=()
+case "${POL}_${COND}" in
+  # -------- LRU-Live (bypass is an insertion mode; duel = latency metric) -----
+  lru_base)    BIN=champsim_lru ;;
+  lru_fixed)   BIN=champsim_lru_live; ENVV=("${BASE_ENV[@]}" LRU_LIVE_DOA_INS=2n3) ;;
+  lru_bypass)  BIN=champsim_lru_live; ENVV=("${BASE_ENV[@]}" LRU_LIVE_DOA_INS=bypass) ;;
+  lru_duel)    BIN=champsim_lru_live; ENVV=("${BASE_ENV[@]}" LRU_LIVE_DOA_INS=2n3 LRU_LIVE_DOA_INS_B=lru DUEL_N_SAMPLERS=32 DUEL_METRIC=latency) ;;
+
+  # -------- SRRIP-Live (bypass via TARGET=none; duel = hit-count/PSEL) --------
+  srrip_base)   BIN=champsim_srrip ;;
+  srrip_fixed)  BIN=champsim_srrip_live; ENVV=("${BASE_ENV[@]}") ;;
+  srrip_bypass) BIN=champsim_srrip_live; ENVV=("${BASE_ENV[@]/SRRIP_LIVE_TARGET=llc/SRRIP_LIVE_TARGET=none}" LIVENESS_BYPASS=1) ;;
+  srrip_duel)   BIN=champsim_srrip_live; ENVV=("${BASE_ENV[@]}" SRRIP_DOA_INS_RRPV=2 SRRIP_DOA_HIT_RRPV=2 SRRIP_DOA_INS_RRPV_B=3 SRRIP_DOA_HIT_RRPV_B=0 DUEL_N_SAMPLERS=32) ;;
+
+  # -------- IPV-Live (ilB fixed; duel = ins2-vs-ins3, latency metric) ---------
+  ipv_base)    BIN=champsim_ipv ;;
+  ipv_fixed)   BIN=champsim_ipv_live; ENVV=("${BASE_ENV[@]}" IPV_DOA=0:1:2:2:3 IPV_MOSTLY_DEAD=0:1:1:2:2) ;;
+  ipv_bypass)  BIN=champsim_ipv_live; ENVV=("${BASE_ENV[@]/SRRIP_LIVE_TARGET=llc/SRRIP_LIVE_TARGET=none}" LIVENESS_BYPASS=1 IPV_DOA=0:1:2:2:3 IPV_MOSTLY_DEAD=0:1:1:2:2) ;;
+  ipv_duel)    BIN=champsim_ipv_live; ENVV=("${BASE_ENV[@]}" DUEL_N_CONFIGS=2 DUEL_N_SAMPLERS=32 IPV_DOA_0=0:1:2:2:2 IPV_DOA_1=0:1:2:2:3 IPV_MOSTLY_DEAD=0:1:1:2:2 DUEL_METRIC=latency) ;;
 
   *) echo "run_scenario.sh: unknown scenario '$SCEN'" >&2; exit 2 ;;
 esac
 
 BIN_PATH="$BIN_DIR/$BIN"
-if [ ! -x "$BIN_PATH" ]; then echo "SKIP $SCEN: binary not found: $BIN_PATH" >&2; exit 77; fi
-if [ ! -f "$TRACE" ];   then echo "SKIP $SCEN: trace not found: $TRACE"       >&2; exit 77; fi
+[ -x "$BIN_PATH" ] || { echo "SKIP $SCEN: binary not found: $BIN_PATH" >&2; exit 77; }
+[ -f "$TRACE" ]    || { echo "SKIP $SCEN: trace not found: $TRACE"       >&2; exit 77; }
 
+mkdir -p "$OUT_DIR" "$EXPECTED_DIR"
 ACTUAL="$OUT_DIR/$SCEN.out"
 REFERENCE="$EXPECTED_DIR/$SCEN.out"
 
-"$BIN_PATH" --warmup_instructions "$WARMUP" --simulation_instructions "$SIM" "$TRACE" 2>&1 \
+# ${ENVV[@]+...} guard: expanding an empty array under `set -u` errors on
+# bash < 4.4 (the cluster), which the `base` condition (no env) would trip.
+env ${ENVV[@]+"${ENVV[@]}"} "$BIN_PATH" \
+    --warmup_instructions "$WARMUP" --simulation_instructions "$SIM" "$TRACE" 2>&1 \
   | sed -E 's/ \(Simulation time: [0-9]+ hr [0-9]+ min [0-9]+ sec\)//' \
   > "$ACTUAL"
 
