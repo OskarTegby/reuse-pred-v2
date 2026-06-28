@@ -30,6 +30,7 @@
 #include <unordered_map>
 #include <unordered_set>
 #include <string>
+#include <tuple>
 #include <vector>
 
 #include "champsim.h"
@@ -295,6 +296,24 @@ public:
   // thd_doa: used to flag shadow hits where dead_count >= thd_doa — recovered
   // classification that the bounded table missed.
   void print_stats(const char* prefix, uint64_t thd_doa = 0, uint64_t thd_dead = 0) const {
+    // TEMPORARY (testing): dump the PCs currently resident in the history table,
+    // sorted by key for determinism. Opt-in via REPL_HIST_DUMP_PCS=1 so normal
+    // runs are unaffected. Lets black-box tests verify which PCs survive under a
+    // realistic cap on many-PC traces (QMM/SPEC), where the eviction policy is
+    // actually exercised.
+    if (const char* d = std::getenv("REPL_HIST_DUMP_PCS"); d && d[0] == '1') {
+      std::vector<std::tuple<uint64_t, int64_t, int64_t>> dump;
+      if (unbounded_) {
+        for (const auto& [k, v] : unmap_) dump.emplace_back(k, v.second, v.first);
+      } else {
+        for (const auto& e : entries_)
+          if (e.valid) dump.emplace_back(e.key, e.score, e.md_score);
+      }
+      std::sort(dump.begin(), dump.end());
+      printf("%s repl_hist PCS: count=%zu\n", prefix, dump.size());
+      for (const auto& [k, sc, md] : dump)
+        printf("%s repl_hist PC: key=0x%lx doa=%ld md=%ld\n", prefix, k, sc, md);
+    }
     if (unbounded_) {
       printf("%s repl_hist: unbounded (%zu entries)  scoring_mode=%d\n",
              prefix, unmap_.size(), scoring_mode_);
@@ -1384,6 +1403,7 @@ struct cache_stats {
   uint64_t liveness_bypasses = 0;    // LLC bypasses from repl_hist DoA classification
   uint64_t liveness_probes   = 0;    // DoA fills inserted as probes instead of bypassed (recheck)
   uint64_t liveness_bypass_shadow_hits = 0;  // re-references to bypassed blocks (confirmed bypass mistakes)
+  uint64_t bypass_duel_suppressed = 0; // DoA fills not bypassed because the duel selected arm A (no-bypass)
 
   // DoA liveness stats.
   // For every cache: evictions = valid blocks displaced; doa = those never accessed.
@@ -1574,6 +1594,15 @@ class CACHE : public champsim::operable, public MemoryRequestConsumer, public Me
                                     // at page or PC granularity.
   uint64_t bypass_fire_reset_period_{0}; // BYPASS_FIRE_RESET_PERIOD: reset scores every N bypass fires (global, legacy)
   uint64_t bypass_fire_count_{0};        // running count of bypass fires (for fire-based reset)
+
+  // Bypass set-dueling (BYPASS_DUEL=1 + LIVENESS_BYPASS=1).
+  // arm A: bypass suppressed; arm B: bypass active; followers adopt the lower-
+  // miss-latency arm.  Independent of the replacement-guidance PSEL in srrip_live.
+  bool     bypass_duel_enable_{false};
+  int      bypass_duel_ns_{0};       // BYPASS_DUEL_N_SAMPLERS (default 32 when enabled)
+  int64_t  bypass_duel_lat_a_{0};    // cumulative miss latency for arm-A sampler sets
+  int64_t  bypass_duel_lat_b_{0};    // cumulative miss latency for arm-B sampler sets
+  int64_t  bypass_duel_hyst_{0};     // BYPASS_DUEL_HYST: B must lead A by this margin to win
 
   // Classify block liveness based on repl_hist_pc counters for the fill PC.
   // Used by srrip_live and ipv_live replacement policies to guide insertion/promotion.
