@@ -57,6 +57,53 @@ Source: old `ipv_live_vs_base_20260614/ml` vs new `eval_theta6_fixed/duel_lat`, 
 The +11.2-pt swing comes from latency dueling selecting the safe arm instead of
 committing to deep `ins@3` insertion that punished mispredicted-dead blocks.
 
+### 1d. Is set dueling worth it? (duel vs fixed configs, θ=6)
+Each insertion config and the duel, as speedup vs **own baseline**.
+Source: `lru_live_theta6_20260624`, `srrip_live_theta6_20260623`; baselines
+`lru_live_vs_base/lru_base` (6 suites, dpc3=35) and `baselines/srrip` (7 suites).
+
+**LRU-Live vs LRU** (cfgA=2n3 gentle, cfgB=lru aggressive):
+
+| suite | cfgA | cfgB | duel |
+|-------|------|------|------|
+| dpc3  | +2.82 | +1.86 | +2.01 |
+| gap   | +3.97 | +7.14 | +6.85 |
+| gms   | +0.15 | −1.40 | −1.20 |
+| ligra | +3.01 | +2.18 | +4.12 |
+| ml    | +2.36 | +3.19 | +2.95 |
+| qmm   | +1.42 | +2.97 | +2.83 |
+
+**SRRIP-Live vs SRRIP** (cfgA=ins@2 gentle, cfgB=ins@3 aggressive):
+
+| suite | cfgA | cfgB | duel |
+|-------|------|------|------|
+| dpc3  | −0.07 | +0.51 | +1.14 |
+| gap   | −0.87 | +6.03 | +6.21 |
+| gms   | −0.21 | −0.57 | +0.10 |
+| ligra | −0.26 | −1.87 | +1.36 |
+| ml    | +0.06 | +1.36 | +1.45 |
+| qmm   | +0.16 | +1.32 | +0.19 |
+| google| +0.17 | −0.61 | +0.10 |
+
+**Overall vs the best deployable *single global* config** (equal-weight across suites):
+
+| config | LRU-Live | SRRIP-Live |
+|--------|---------|-----------|
+| cfgA everywhere | +2.28% | −0.15% |
+| cfgB everywhere | +2.63% | +0.86% |
+| **DUEL** | **+2.90%** | **+1.49%** |
+
+**Finding: dueling beats the best single global config for BOTH policies** — by
++0.27 pp (LRU-Live, vs cfgB) and +0.63 pp (SRRIP-Live, vs cfgB). No single fixed
+config is best on every suite (LRU: cfgA owns dpc3/gms, cfgB owns gap/ml/qmm), so
+the duel's per-set selection recovers most of both groups. Dueling helps SRRIP-Live
+more because its arms are more divergent: on ligra/gms **both** fixed arms trail the
+baseline yet the duel is positive — only per-set selection can do that.
+
+> ⚠ The correct non-dueling baseline is **one global config**, not a per-suite
+> oracle. Comparing the duel to a "best-fixed" that switches arms per suite is not
+> a realizable hardware design and understates dueling's value.
+
 ---
 
 ## 2. The 9-config aspect decomposition (SRRIP-Live)
