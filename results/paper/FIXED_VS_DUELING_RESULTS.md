@@ -5,7 +5,7 @@ Tracking doc for the liveness replacement-policy results, comparing the
 **set-dueling** studies (two insertion configs, adaptively selected per set).
 
 All speedups are **% IPC**, SimPoint-weighted on SPEC/dpc3 traces, flat geomean
-elsewhere. Last updated 2026-06-27.
+elsewhere. Last updated 2026-06-29.
 
 ---
 
@@ -131,41 +131,90 @@ contrasts isolating each design lever (% = variant vs its proper baseline):
 
 ---
 
-## 3. Dueling DoA-threshold sweeps
+## 3. DoA-threshold sweeps (complete)
 
-Goal: does set dueling let a policy use a more aggressive `THD_DOA` than the
-fixed-config optimum (because the duel falls back to gentle insertion on the
-pain-point sets)? `THD_DEAD` = min(per-suite, `THD_DOA`) (clamped) for LRU/SRRIP;
-unclamped per-suite for IPV (matches its existing sweep).
+Goal: does set dueling let a policy tolerate a more **aggressive** `THD_DOA`?
 
-### 3a. Fixed-config LRU-Live threshold optima (reference)
-Source: `allsuites_thd_phase2_20260617` + `phase3_20260618` (single config). Best `THD_DOA` per suite:
+**Direction (important):** a block is classified DoA when its score **≥ `THD_DOA`**,
+so **low `THD_DOA` = aggressive** (more blocks become DoA) and **high = conservative**
+(fewer DoA, behaves closer to the base policy). `THD_DOA=2` is the most aggressive
+swept, `30` the most conservative. `THD_DEAD` = min(per-suite, `THD_DOA`) (clamped)
+for LRU/SRRIP; unclamped per-suite for IPV.
 
-| dpc3 | gap | gms | ligra | ml | qmm | google |
-|------|-----|-----|-------|----|----|--------|
-| **20** | 2 | 30 | 2 | 2 | 2 | 6 |
+All three sweeps are **complete**: 251 traces × every threshold (full dpc3=95,
+google included). Values are **SimPoint-weighted geomean absolute IPC** per suite
+(higher = better; ★ = best threshold for that suite). The `norm` row is the geomean
+of each suite's IPC ÷ that suite's best (1.000 = best in *every* suite), giving the
+deployable cross-suite optimum. Source: `{lru,srrip}_live_thd_duel_20260627`,
+`ipv_thd_fixed_ins3_20260627`.
 
-dpc3 has a sharp +4.3% peak at doa20 that forces the global optimum high.
+### 3a. LRU-Live (dueling, latency metric)
 
-### 3b. LRU-Live dueling threshold sweep — speedup vs LRU base
-Source: `lru_live_thd_duel_20260627` (+ doa6 anchor from `lru_live_theta6/duel`).
-dpc3 = 35-subset; google omitted (no LRU base). doa25/30 still completing.
+| suite | doa2 | doa4 | doa8 | doa16 | doa20 | doa25 | doa30 | best |
+|-------|------|------|------|-------|-------|-------|-------|------|
+| dpc3  | 1.331 | 1.333 | 1.331 | 1.331 | 1.331 | 1.333 | 1.334★ | 30 (flat) |
+| gap   | 0.310★ | 0.310 | 0.304 | 0.302 | 0.302 | 0.301 | 0.301 | **2 (aggr)** |
+| gms   | 1.156 | 1.158 | 1.165 | 1.169 | 1.169 | 1.171 | 1.172★ | 30 (cons) |
+| ligra | 0.610 | 0.611★ | 0.609 | 0.605 | 0.605 | 0.605 | 0.603 | **4 (aggr)** |
+| ml    | 1.842 | 1.858 | 1.859 | 1.860 | 1.860 | 1.862 | 1.863★ | 30 (cons) |
+| qmm   | 1.961 | 1.959 | 1.968★ | 1.964 | 1.963 | 1.960 | 1.957 | 8 (aggr) |
+| google| 0.460 | 0.462 | 0.473 | 0.480 | 0.480 | 0.480 | 0.481★ | 30 (cons) |
+| **norm** | 0.989 | 0.991 | 0.993 | **0.993** | 0.993 | 0.993 | 0.993 | **→ ~16** |
 
-| suite | doa2 | doa4 | doa6 | doa8 | doa16 | doa20 |
-|-------|------|------|------|------|-------|-------|
-| dpc3  | +2.60 | **+2.84** | +2.01 | +2.22 | +2.12 | +2.16 |
-| gap   | **+8.84** | +8.54 | +6.85 | +6.65 | +5.84 | +5.78 |
-| gms   | −1.74 | −1.55 | −1.20 | −1.03 | −0.64 | −0.63 |
-| ligra | +4.77 | **+4.95** | +4.12 | +4.63 | +4.02 | +3.98 |
-| ml    | +2.08 | +2.97 | +2.95 | +3.04 | **+3.13** | +3.10 |
-| qmm   | +2.42 | +2.32 | **+2.83** | +2.76 | +2.54 | +2.53 |
+### 3b. SRRIP-Live (dueling, hit-count/PSEL metric)
 
-**Key finding — dueling de-sensitizes dpc3:** under fixed-config dpc3 demanded
-doa20 (+4.3% cliff); under dueling it is **flat across all thresholds** (+2.0 to
-+2.8%, best at the *aggressive* doa4). The per-set duel telemetry confirms the
-mechanism: cfgA (gentle `2n3`) wins on dpc3's sensitive SPEC traces, cfgB
-(aggressive `lru`) wins on streaming. gap stays strongly aggressive; gms has no
-headroom (negative); google (not shown here) resists aggressive thresholds.
+| suite | doa2 | doa4 | doa8 | doa16 | doa20 | doa25 | doa30 | best |
+|-------|------|------|------|-------|-------|-------|-------|------|
+| dpc3  | 1.345 | 1.345 | 1.346 | 1.346 | 1.347★ | 1.346 | 1.346 | 20 (flat) |
+| gap   | 0.314 | 0.314 | 0.316★ | 0.311 | 0.309 | 0.307 | 0.306 | **8 (aggr)** |
+| gms   | 1.183 | 1.183 | 1.186 | 1.186 | 1.187★ | 1.186 | 1.186 | 20 |
+| ligra | 0.592 | 0.597 | 0.600 | 0.604 | 0.605 | 0.605 | 0.606★ | 30 (cons) |
+| ml    | 1.825 | 1.826 | 1.829 | 1.828 | 1.829 | 1.827 | 1.833★ | 30 (cons) |
+| qmm   | 1.965 | 1.965 | 1.968 | 1.970 | 1.970 | 1.970 | 1.971★ | 30 (cons) |
+| google| 0.479 | 0.479 | 0.481 | 0.482 | 0.482 | 0.483 | 0.483★ | 30 (cons) |
+| **norm** | 0.993 | 0.994 | **0.997** | 0.997 | 0.996 | 0.995 | 0.995 | **→ ~8** |
+
+### 3c. IPV-Live (fixed ins3, **no dueling** — the sensitivity contrast)
+
+| suite | doa2 | doa4 | doa6 | doa8 | doa16 | doa20 | doa25 | doa30 | best |
+|-------|------|------|------|------|-------|-------|-------|-------|------|
+| dpc3  | 1.325 | 1.332 | 1.337 | 1.339 | 1.343 | 1.344 | 1.344 | 1.346★ | 30 |
+| gap   | 0.310 | 0.310 | 0.316★ | 0.316 | 0.312 | 0.311 | 0.310 | 0.309 | 6 (aggr) |
+| gms   | 1.163 | 1.169 | 1.178 | 1.181 | 1.186 | 1.186 | 1.187 | 1.187★ | 30 |
+| ligra | 0.571 | 0.571 | 0.580 | 0.582 | 0.587 | 0.587 | 0.591 | 0.593★ | 30 |
+| ml    | 1.681 | 1.829 | 1.831 | 1.832 | 1.834 | 1.834★ | 1.831 | 1.831 | 20 |
+| qmm   | 1.983 | 1.983 | 1.996 | 1.995 | 1.998★ | 1.998 | 1.997 | 1.996 | 16 |
+| google| 0.470 | 0.470 | 0.480 | 0.480 | 0.488 | 0.488 | 0.490 | 0.495★ | 30 |
+| **norm** | 0.966 | 0.980 | 0.990 | 0.991 | 0.994 | 0.994 | 0.995 | **0.996** | **→ 30** |
+
+### 3d. Findings (corrected direction)
+
+- **The optimum is moderate-to-conservative, not aggressive.** The low point of
+  every curve is the *aggressive* end (`doa2`); best-on-average is LRU-Live **~16**,
+  SRRIP-Live **~8**, IPV-fixed **30**.
+- **Dueling de-risks aggression — the real de-sensitization result.** The penalty
+  for running the most aggressive threshold (`doa2`) vs that policy's best:
+
+  | | doa2 penalty | note |
+  |---|---|---|
+  | IPV-Live **fixed** (no duel) | **−3.0%** | ml collapses to 1.681 |
+  | LRU-Live **dueling** | **−0.4%** | flat plateau 8–30 |
+
+  Dueling doesn't make aggressive *better*; it makes aggressive *safe* (gentle-arm
+  fallback absorbs the pain-point sets). Without dueling the aggressive end is a
+  cliff; with it, ~free.
+- **dpc3 is de-sensitized.** Under fixed-config dpc3 demanded a high threshold
+  (+4.3% cliff at doa20); under dueling it is **flat** (1.331–1.334, argmax is
+  noise-level). The earlier cliff is gone.
+- **Per-suite split holds, mechanistically sensible:** streaming/graph prefer
+  *aggressive* (gap 2, ligra 4, qmm 8 — genuinely dead blocks); reuse-heavy prefer
+  *conservative* (gms, ml, google 30 — aggressive DoA evicts blocks they reuse).
+- **For the size-study rerun:** adopt a single moderate global **THD_DOA ≈ 16**
+  (LRU-Live). Dueling means leaning aggressive (down to ~8) to chase streaming/bypass
+  benefit costs <0.5% — a freedom the fixed policy does not have.
+
+> Prior §3b (speedup vs LRU base, dpc3=35-subset, google omitted) is superseded by
+> the complete full-95 + google absolute-IPC curves above.
 
 ---
 
@@ -184,15 +233,17 @@ headroom (negative); google (not shown here) resists aggressive thresholds.
 
 ---
 
-## 5. In-flight (launched 2026-06-27)
+## 5. Threshold-sweep status (launched 2026-06-27)
 
-| study | result dir | thresholds | tasks | status |
-|-------|-----------|-----------|-------|--------|
-| LRU-Live dueling thd | `lru_live_thd_duel_20260627` | {2,4,8,16,20,25,30} | 1,764 | doa25/30 tail |
-| SRRIP-Live dueling thd | `srrip_live_thd_duel_20260627` | {2,4,8,16,20,25,30} | 1,764 | running |
-| IPV-Live doa2 fill | `ipv_thd_doa2_20260627` | {2} | 148 | running |
+| study | result dir | thresholds | status |
+|-------|-----------|-----------|--------|
+| LRU-Live dueling thd | `lru_live_thd_duel_20260627` | {2,4,8,16,20,25,30} | **complete** (251/thd) → §3a |
+| SRRIP-Live dueling thd | `srrip_live_thd_duel_20260627` | {2,4,8,16,20,25,30} | **complete** (251/thd) → §3b |
+| IPV-Live fixed-ins3 thd | `ipv_thd_fixed_ins3_20260627` | {2,4,6,8,16,20,25,30} | **complete** (251/thd) → §3c |
 
-Scripts: `scripts/submit/{lru,srrip}_live_thd_duel.sh`, `ipv_thd_doa2.sh`.
+Scripts: `scripts/submit/{lru,srrip}_live_thd_duel.sh`, `ipv_thd_fixed_ins3.sh`.
+All curves extracted via last-`cumulative IPC` per `champsim.out`, weighted with
+`spec_weights.py`.
 
 ---
 
@@ -212,7 +263,8 @@ Scripts: `scripts/submit/{lru,srrip}_live_thd_duel.sh`, `ipv_thd_doa2.sh`.
 
 ## 7. Open items
 
-- [ ] Pick dueling-era optimal `THD_DOA` per suite once 3a–3c complete (all policies).
-- [ ] Confirm whether SRRIP/IPV de-sensitize like LRU-Live's dpc3.
-- [ ] Optionally fill LRU/IPV own-base on full dpc3 (95) + google.
-- [ ] Feed chosen thresholds into the size-study rerun (clean binary + dueling).
+- [x] Pick dueling-era optimal `THD_DOA` — §3: LRU-Live ~16, SRRIP-Live ~8 (both flat).
+- [x] Confirm SRRIP/IPV de-sensitize — SRRIP-Live dueling is flat like LRU; IPV-fixed
+      (no duel) is the sensitive contrast (doa2 −3%, ml cliff), quantifying dueling's value.
+- [ ] Feed chosen threshold (THD_DOA ≈ 16, LRU-Live, dueling) into the size-study rerun.
+- [ ] Optionally fill LRU/IPV own-base on full dpc3 (95) + google (for §1 vs-base, not §3).
