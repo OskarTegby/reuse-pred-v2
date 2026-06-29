@@ -27,6 +27,10 @@ EXPECTED_DIR="$REPO/test/blackbox/expected"
 LOCAL_OUT_DIR="$REPO/test/blackbox/test_outputs_cluster"
 CHECK="$REPO/test/blackbox/check_progress.sh"
 POLL_INTERVAL=30
+HOLD_MAX=600        # seconds: release held jobs once bb jobs start, or after this
+                   # long regardless -- never strangle the cluster on a slow/stuck
+                   # bb job for the whole verification.
+RELEASED=0
 
 # Scenario list is owned by run_scenario.sh (--list), the single source of truth.
 mapfile -t SCENARIOS < <(bash "$REPO/test/blackbox/run_scenario.sh" --list)
@@ -61,13 +65,44 @@ jobs_in_queue() {
     echo "$raw" | grep -cE "^(${bb_ids})$" || true
 }
 
-# Release the queued jobs held in step 1 (uses $qw_jobs, set there).
+# Release the queued jobs held in step 1 (uses $qw_jobs, set there). Idempotent:
+# safe to call from the poll loop and again at the end.
 qrls_held() {
+    [ "$RELEASED" = 1 ] && return 0
+    RELEASED=1
     [ -n "${qw_jobs:-}" ] || return 0
     echo ""
     echo "[$(date +%T)] Releasing held jobs..."
     ca "qrls $qw_jobs 2>&1 | grep -c 'modified hold'" || true
     echo "[$(date +%T)] Done."
+}
+
+# Count submitted bb_ jobs still WAITING (qw state) -- not yet started. Echoes -1
+# on an SSH/qstat blip so a transient failure is not misread as "all started".
+bb_waiting() {
+    local raw
+    raw=$(ca "qstat -u otegby 2>/dev/null | awk 'NR>1 && \$5 ~ /qw/{print \$1}'" 2>/dev/null || true)
+    [ -z "$raw" ] && { echo "-1"; return; }
+    echo "$raw" | grep -cE "^(${bb_ids})$" || true
+}
+
+# Release the held jobs as soon as every bb job has started (none left waiting),
+# or after HOLD_MAX seconds regardless. The hold only exists to let bb jobs grab
+# slots promptly; keeping it for the whole verification means one slow or stuck
+# bb job strangles the rest of the cluster for hours. START_TS is set after submit.
+maybe_release() {
+    [ "$RELEASED" = 0 ] || return 0
+    [ -n "${qw_jobs:-}" ] || { RELEASED=1; return 0; }
+    local waiting elapsed
+    waiting=$(bb_waiting)
+    elapsed=$(( $(date +%s) - START_TS ))
+    if [ "$waiting" = 0 ]; then
+        echo "[$(date +%T)] All bb jobs started; releasing held jobs (not waiting for verification)."
+        qrls_held
+    elif [ "$elapsed" -ge "$HOLD_MAX" ]; then
+        echo "[$(date +%T)] HOLD_MAX (${HOLD_MAX}s) reached; releasing held jobs so the cluster is not strangled."
+        qrls_held
+    fi
 }
 
 # ── 1. Hold queued jobs ───────────────────────────────────────────────────
@@ -97,6 +132,7 @@ bb_ids=$(echo "$submit_out" | grep -oP '(?<=job )\d+' | tr '\n' '|')
 bb_ids="${bb_ids%|}"
 n_bb=$(echo "$submit_out" | grep -c 'has been submitted')
 echo "[$(date +%T)] Submitted $n_bb jobs (IDs: $(echo "$bb_ids" | tr '|' ' '))"
+START_TS=$(date +%s)   # for HOLD_MAX in maybe_release
 
 # ── 3. Wait for jobs to register ──────────────────────────────────────────
 # SGE has a small delay between qsub returning and jobs appearing in qstat.
@@ -112,6 +148,7 @@ if [ "$MODE" = generate ]; then
     while true; do
         running=$(jobs_in_queue)
         [ "$running" -ge 0 ] && echo "[$(date +%T)] ${running}/${n_bb} jobs still in queue"
+        maybe_release
         [ "$running" -eq 0 ] && break
         sleep "$POLL_INTERVAL"
     done
@@ -165,6 +202,9 @@ while true; do
         fi
     done
     echo "[$(date +%T)] pending:$np running:$nr soft:$ns full:$nx FAIL:$nf"
+    # Release the held cluster jobs as soon as the bb jobs have started, so a slow
+    # or stuck bb job cannot keep the rest of the cluster strangled.
+    maybe_release
     # Done when every scenario is terminal (fully verified, failed, or no ref).
     [ "$((nx+nf+nz))" -eq "${#SCENARIOS[@]}" ] && break
     # Safety net: if the queue drained but some scenario never completed (a job

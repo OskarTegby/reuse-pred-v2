@@ -76,6 +76,11 @@ That driver holds queued jobs, submits the full suite, and then either copies th
 finished outputs into `expected/` (generate) or **incrementally verifies** them
 (verify, the default).
 
+The hold only exists to let the bb jobs grab slots promptly, so it is released as
+soon as every bb job has **started running** (or after `HOLD_MAX`, default 600s,
+regardless) — *not* at the end of verification. Otherwise one slow or stuck bb job
+would keep the rest of the cluster held for hours.
+
 ### Incremental verification
 
 In verify mode the driver does not wait for jobs to finish before judging them.
