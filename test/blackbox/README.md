@@ -72,8 +72,32 @@ bash scripts/submit/blackbox_run_cluster.sh            # verify against expected
 bash scripts/submit/blackbox_run_cluster.sh generate   # regenerate expected/ + commit
 ```
 
-That driver holds queued jobs, submits the full suite, polls, downloads, and then
-either diffs against `expected/` or copies into it.
+That driver holds queued jobs, submits the full suite, and then either copies the
+finished outputs into `expected/` (generate) or **incrementally verifies** them
+(verify, the default).
+
+### Incremental verification
+
+In verify mode the driver does not wait for jobs to finish before judging them.
+Each poll it pulls the partial outputs and classifies every scenario against its
+reference with `check_progress.sh`:
+
+| State | Meaning |
+|---|---|
+| `PENDING` | no usable output yet |
+| `RUNNING` | output is a correct prefix of the reference, < 50M sim done |
+| `SOFT_PASS` | correct prefix **and** the 50M-sim heartbeat reached — most likely to pass |
+| `FULL_PASS` | output matches the reference exactly — fully verified |
+| `FAIL` | a completed line diverged from the reference |
+
+Because every non-wallclock line is deterministic, a partial output is a clean
+line-prefix of the reference: any mismatch in an already-written line is a real
+failure, caught the moment it appears rather than after the full run. On `FAIL`
+the driver prints the diff and cancels the doomed job (`qdel bb_<scenario>`). The
+soft-pass milestone is the heartbeat at 100,000,000 total instructions — 50M
+warmup plus 50M of the 100M simulation, i.e. half the run verified and on-track.
+The run ends when every scenario is `FULL_PASS`/`FAIL`; the final report requires
+`FULL_PASS` for all.
 
 ## Regenerating reference outputs
 

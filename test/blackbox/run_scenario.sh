@@ -112,9 +112,14 @@ REFERENCE="$EXPECTED_DIR/$SCEN.out"
 
 # ${ENVV[@]+...} guard: expanding an empty array under `set -u` errors on
 # bash < 4.4 (the cluster), which the `base` condition (no env) would trip.
+# sed -u (line-buffered) is required, not cosmetic: ChampSim flushes every
+# heartbeat (std::endl), but without -u sed block-buffers its writes, so the
+# output file stays empty mid-run and incremental verification (check_progress.sh)
+# sees no progress until the process exits. -u streams each stripped line to the
+# file as it is produced. Output content is identical either way.
 env ${ENVV[@]+"${ENVV[@]}"} "$BIN_PATH" \
     --warmup_instructions "$WARMUP" --simulation_instructions "$SIM" "$TRACE" 2>&1 \
-  | sed -E 's/ \(Simulation time: [0-9]+ hr [0-9]+ min [0-9]+ sec\)//' \
+  | sed -u -E 's/ \(Simulation time: [0-9]+ hr [0-9]+ min [0-9]+ sec\)//' \
   > "$ACTUAL"
 
 if [ "${GENERATE:-0}" = "1" ]; then
