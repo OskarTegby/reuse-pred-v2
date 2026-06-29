@@ -22,15 +22,17 @@ import sys
 ROOT = os.path.join(os.path.dirname(__file__), "..", "..")
 RESULTS = os.path.join(ROOT, "results")
 
-# Same canonical directories as scripts/analysis/plot_liveness_rates.py,
-# minus Google (Table 1 does not include it). See FIGURE_PROVENANCE.md.
+# Same canonical directories as scripts/analysis/plot_liveness_rates.py.
+# Google is sourced from its Figure 1 run (liveness_char_20260608_0006/google),
+# which carries the LIVENESS_CHAR=1 per-PC dump. See FIGURE_PROVENANCE.md.
 SUITES = {
-    "GAP":   "livchar_unified_20260616_1249/gap",
-    "GMS":   "livchar_unified_20260616_1249/gms",
-    "ML":    "livchar_unified_20260616_1249/ml",
-    "Ligra": "livchar_unified_20260616_1249/ligra",
-    "DPC3":  "livchar_dpc3full_20260616_1251/dpc3",
-    "QMM":   "livchar_unified_20260616_1249/qmm",
+    "GAP":    "livchar_unified_20260616_1249/gap",
+    "GMS":    "livchar_unified_20260616_1249/gms",
+    "ML":     "livchar_unified_20260616_1249/ml",
+    "Ligra":  "livchar_unified_20260616_1249/ligra",
+    "DPC3":   "livchar_dpc3full_20260616_1251/dpc3",
+    "QMM":    "livchar_unified_20260616_1249/qmm",
+    "Google": "liveness_char_20260608_0006/google",
 }
 
 DOA_PAT = re.compile(r"doa=(\d+)")
@@ -82,7 +84,7 @@ def aggregate(suite_dir):
 if __name__ == "__main__":
     print("%-8s %4s %8s %10s %10s" % ("Suite", "n", "min", "mean", "max"))
     print("-" * 44)
-    for name in ["GAP", "GMS", "ML", "Ligra", "DPC3", "QMM"]:
+    for name in ["GAP", "GMS", "ML", "Ligra", "DPC3", "QMM", "Google"]:
         dirname = SUITES[name]
         agg = aggregate(dirname)
         if agg is None:

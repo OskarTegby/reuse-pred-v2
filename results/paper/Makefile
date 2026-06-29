@@ -5,7 +5,7 @@ all: pdf
 pdf:
 	@mkdir -p build
 	pdflatex -interaction=nonstopmode -output-directory=build main.tex > /dev/null 2>&1 || true
-	cp references.bib build/
+	cp references.bib IEEEtranS.bst build/
 	cd build && bibtex main > /dev/null 2>&1 || true
 	pdflatex -interaction=nonstopmode -output-directory=build main.tex > /dev/null 2>&1 || true
 	pdflatex -interaction=nonstopmode -output-directory=build main.tex > /dev/null 2>&1 || true

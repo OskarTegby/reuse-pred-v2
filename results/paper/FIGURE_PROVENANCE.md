@@ -352,8 +352,11 @@ suite's traces. It backs the paper's "DoA evictions are concentrated in a few PC
 claim (`main.tex` lines ~129–138) — the concentration is the empirical basis for
 using a small per-PC history table rather than per-block/per-address tracking.
 
-Six suites only — **Google is not in this table** (it is in Figure 1). Published
-values (`main.tex` lines ~150-157):
+Seven suites. **Google added 2026-06-29** from its Figure 1 run
+(`liveness_char_20260608_0006/google`, 43 traces, which carries the
+`LIVENESS_CHAR=1` per-PC dump — `blocks_in_sample=2`, all 43 files have the block).
+Google is the least concentrated suite (mean ~28.6k PCs, max 49,254), even more
+diffuse than QMM. Published values:
 
 | Suite | Min | Mean | Max |
 |---|---|---|---|
@@ -363,6 +366,7 @@ values (`main.tex` lines ~150-157):
 | Ligra | 2 | 5.6 | 14 |
 | DPC3 | 1 | 96.7 | 4,833 |
 | QMM | 3,090 | 4,354 | 10,504 |
+| Google | 246 | 28,576 | 49,254 |
 
 ### Data dependency
 
