@@ -76,10 +76,16 @@ That driver holds queued jobs, submits the full suite, and then either copies th
 finished outputs into `expected/` (generate) or **incrementally verifies** them
 (verify, the default).
 
-The hold only exists to let the bb jobs grab slots promptly, so it is released as
-soon as every bb job has **started running** (or after `HOLD_MAX`, default 600s,
-regardless) — *not* at the end of verification. Otherwise one slow or stuck bb job
-would keep the rest of the cluster held for hours.
+The held jobs are released as soon as **every bb job has launched** (none left
+waiting for a slot) — not when they finish. The hold only exists to get the bb
+jobs started ahead of the queue; once none are waiting, the already-running bb
+jobs keep their slots and the queue resumes behind them. Releasing strictly at
+"none waiting" is both starvation-free (no queued bb job loses its slot to the
+resumed queue) and strangle-free (a hung *running* job does not delay the release,
+since the trigger is launch, not completion). Separately, a watchdog cancels any
+running bb job whose streamed output has not advanced for `STUCK_TIMEOUT` (default
+900s) so the verify loop can finish; diverged jobs are still cancelled immediately
+on the first mismatching line.
 
 ### Incremental verification
 
