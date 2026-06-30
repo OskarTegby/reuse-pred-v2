@@ -22,9 +22,10 @@
 # wait for completion to know a run has diverged.
 #
 # Soft-pass milestone: ChampSim heartbeats count *total* instructions
-# (warmup+sim). With a 50M warmup, "50M warmup + 50M of the 100M simulation"
-# is the heartbeat at 100,000,000 total instructions -- half the simulation
-# verified and on-track, hence "most likely to pass".
+# (warmup+sim). With a 50M warmup, "50M warmup + 30M of the 100M simulation"
+# is the heartbeat at 80,000,000 total instructions -- ~a third of the sim
+# verified and on-track, hence "most likely to pass". (30M chosen over 50M to
+# surface the soft pass ~2 heartbeats / ~25% sooner.)
 set -euo pipefail
 
 actual="${1:?usage: check_progress.sh <actual.out> <expected.out>}"
@@ -51,11 +52,13 @@ if ! diff -q <(head -n "$k" "$expected") <(head -n "$k" "$actual") >/dev/null 2>
   echo "FAIL"; exit 0
 fi
 
-# Correct prefix so far. Soft pass once the 50M-sim heartbeat has been emitted
-# (a Heartbeat line with >= 100,000,000 total instructions, i.e. 9 digits
-# starting with 1). Anchored to "Heartbeat" so the "Simulation Instructions:
-# 100000000" header and "Simulation finished" lines do not match.
-if grep -qE '^Heartbeat CPU 0 instructions: 1[0-9]{8} ' "$actual"; then
+# Correct prefix so far. Soft pass once the 30M-sim heartbeat has been emitted
+# (a Heartbeat line with >= 80,000,000 total instructions: 8 digits starting 8 or
+# 9 = 80M-99M, or 9 digits = >=100M). Warmup tops out at 50M and the 60M/70M sim
+# heartbeats start 5/6/7, so none of those match. Anchored to "Heartbeat" so the
+# "Simulation Instructions: 100000000" header and "Simulation finished" lines do
+# not match.
+if grep -qE '^Heartbeat CPU 0 instructions: ([89][0-9]{7}|1[0-9]{8}) ' "$actual"; then
   echo "SOFT_PASS"
 else
   echo "RUNNING"

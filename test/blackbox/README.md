@@ -96,8 +96,8 @@ reference with `check_progress.sh`:
 | State | Meaning |
 |---|---|
 | `PENDING` | no usable output yet |
-| `RUNNING` | output is a correct prefix of the reference, < 50M sim done |
-| `SOFT_PASS` | correct prefix **and** the 50M-sim heartbeat reached — most likely to pass |
+| `RUNNING` | output is a correct prefix of the reference, < 30M sim done |
+| `SOFT_PASS` | correct prefix **and** the 30M-sim heartbeat reached — most likely to pass |
 | `FULL_PASS` | output matches the reference exactly — fully verified |
 | `FAIL` | a completed line diverged from the reference |
 
@@ -105,8 +105,9 @@ Because every non-wallclock line is deterministic, a partial output is a clean
 line-prefix of the reference: any mismatch in an already-written line is a real
 failure, caught the moment it appears rather than after the full run. On `FAIL`
 the driver prints the diff and cancels the doomed job (`qdel bb_<scenario>`). The
-soft-pass milestone is the heartbeat at 100,000,000 total instructions — 50M
-warmup plus 50M of the 100M simulation, i.e. half the run verified and on-track.
+soft-pass milestone is the heartbeat at 80,000,000 total instructions — 50M
+warmup plus 30M of the 100M simulation, i.e. ~a third of the run verified and
+on-track (30M surfaces the soft pass ~2 heartbeats / ~25% sooner than 50M).
 The run ends when every scenario is `FULL_PASS`/`FAIL`; the final report requires
 `FULL_PASS` for all.
 
