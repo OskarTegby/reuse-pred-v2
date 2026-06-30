@@ -165,7 +165,7 @@ fi
 # reference. A diverged run is reported (and its job cancelled) the moment a
 # completed line mismatches -- no need to wait for the full simulation.
 echo "[$(date +%T)] Incremental verification (poll ${POLL_INTERVAL}s)."
-echo "  states: PENDING < RUNNING < SOFT_PASS (>=30M sim, on track) < FULL_PASS;  FAIL = diverged"
+echo "  states: PENDING < RUNNING < SOFT_PASS (>=20M sim, on track) < FULL_PASS;  FAIL = diverged"
 declare -A PREV LINES STALL_SINCE
 while true; do
     download_partials
@@ -197,7 +197,7 @@ while true; do
         # Announce each scenario's state transition once.
         if [ "${PREV[$scen]:-}" != "$st" ]; then
             case "$st" in
-                SOFT_PASS) echo "  [$(date +%T)] SOFT PASS  $scen — >=30M sim verified, on track";;
+                SOFT_PASS) echo "  [$(date +%T)] SOFT PASS  $scen — >=20M sim verified, on track";;
                 FULL_PASS) echo "  [$(date +%T)] FULL PASS  $scen — fully verified";;
                 FAIL)
                     echo "  [$(date +%T)] FAIL       $scen — diverged from expected:"

@@ -12,8 +12,8 @@
 #   NO-REFERENCE  expected file is missing
 #   PENDING       no usable actual output yet (job not started / empty)
 #   FAIL          a completed line of actual differs from expected -> diverged
-#   RUNNING       actual is a correct prefix of expected, but < 50M sim done
-#   SOFT_PASS     correct prefix AND the 50M-sim milestone reached -> likely to pass
+#   RUNNING       actual is a correct prefix of expected, but < the soft milestone
+#   SOFT_PASS     correct prefix AND the soft milestone reached -> likely to pass
 #   FULL_PASS     actual matches expected exactly -> fully verified
 #
 # Why a prefix is sufficient: every line of the ChampSim report except the
@@ -21,15 +21,19 @@
 # difference in an already-written line is a real failure -- there is no need to
 # wait for completion to know a run has diverged.
 #
-# Soft-pass milestone: ChampSim heartbeats count *total* instructions
-# (warmup+sim). With a 50M warmup, "50M warmup + 30M of the 100M simulation"
-# is the heartbeat at 80,000,000 total instructions -- ~a third of the sim
-# verified and on-track, hence "most likely to pass". (30M chosen over 50M to
-# surface the soft pass ~2 heartbeats / ~25% sooner.)
+# Soft-pass milestone: ChampSim heartbeats count *total* instructions (warmup+sim)
+# and fire every 10M. "Soft pass" means enough has been verified that the run will
+# most likely pass. It is a single tunable constant (SOFT_MILESTONE below):
+# lowering it surfaces the soft pass sooner (each 10M earlier ~ one heartbeat).
 set -euo pipefail
 
 actual="${1:?usage: check_progress.sh <actual.out> <expected.out>}"
 expected="${2:?usage: check_progress.sh <actual.out> <expected.out>}"
+
+# --- soft-pass milestone (tunable) -------------------------------------------
+WARMUP_INSTRS=50000000
+SOFT_SIM_INSTRS=20000000                            # 20M of the 100M sim
+SOFT_MILESTONE=$((WARMUP_INSTRS + SOFT_SIM_INSTRS)) # = 70,000,000 total
 
 [ -f "$expected" ] || { echo "NO-REFERENCE"; exit 0; }
 [ -s "$actual" ]   || { echo "PENDING";      exit 0; }
@@ -52,13 +56,15 @@ if ! diff -q <(head -n "$k" "$expected") <(head -n "$k" "$actual") >/dev/null 2>
   echo "FAIL"; exit 0
 fi
 
-# Correct prefix so far. Soft pass once the 30M-sim heartbeat has been emitted
-# (a Heartbeat line with >= 80,000,000 total instructions: 8 digits starting 8 or
-# 9 = 80M-99M, or 9 digits = >=100M). Warmup tops out at 50M and the 60M/70M sim
-# heartbeats start 5/6/7, so none of those match. Anchored to "Heartbeat" so the
-# "Simulation Instructions: 100000000" header and "Simulation finished" lines do
-# not match.
-if grep -qE '^Heartbeat CPU 0 instructions: ([89][0-9]{7}|1[0-9]{8}) ' "$actual"; then
+# Correct prefix so far. Soft pass once a heartbeat at >= SOFT_MILESTONE total
+# instructions has been emitted. Heartbeat lines are
+# "Heartbeat CPU 0 instructions: <N> cycles: ..."; field 5 is N. A single awk
+# emits the largest N seen, or 0 if there are no heartbeats yet -- it always
+# exits 0 (a grep with no match would exit 1 and, under set -e + pipefail, abort
+# this substitution). The "^Heartbeat" anchor excludes the "Simulation
+# Instructions:" header and "Simulation finished" lines.
+maxhb=$(awk '/^Heartbeat CPU 0 instructions:/ { if ($5+0 > m) m=$5+0 } END { print m+0 }' "$actual")
+if [ "$maxhb" -ge "$SOFT_MILESTONE" ]; then
   echo "SOFT_PASS"
 else
   echo "RUNNING"

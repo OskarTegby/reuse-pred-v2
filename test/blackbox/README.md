@@ -22,7 +22,7 @@ mechanism where it engages, not a knob in isolation on a synthetic trace.
 | | `duel` | liveness with set dueling, at each policy's kept metric (LRU/IPV: miss-latency; SRRIP: hit-count/PSEL) |
 | **trace** | `pr` — ligra PageRank | graph DoA: exercises bypass and the aggressive duel arm |
 | | `cactus` — 607.cactuBSSN | many PCs → history table active; temporal reuse → the gentle arm wins |
-| | `lbm` — 619.lbm | streaming → bypass has a large impact |
+| | `bwaves` — 603.bwaves | streaming → bypass has a large impact (~4× faster to simulate than lbm) |
 | | `qmm` — srv_12 | many PCs, a different workload from cactus |
 
 A scenario is named `<policy>_<condition>_<trace>` (e.g. `lru_duel_cactus`). The
@@ -96,8 +96,8 @@ reference with `check_progress.sh`:
 | State | Meaning |
 |---|---|
 | `PENDING` | no usable output yet |
-| `RUNNING` | output is a correct prefix of the reference, < 30M sim done |
-| `SOFT_PASS` | correct prefix **and** the 30M-sim heartbeat reached — most likely to pass |
+| `RUNNING` | output is a correct prefix of the reference, < 20M sim done |
+| `SOFT_PASS` | correct prefix **and** the 20M-sim heartbeat reached — most likely to pass |
 | `FULL_PASS` | output matches the reference exactly — fully verified |
 | `FAIL` | a completed line diverged from the reference |
 
@@ -105,9 +105,10 @@ Because every non-wallclock line is deterministic, a partial output is a clean
 line-prefix of the reference: any mismatch in an already-written line is a real
 failure, caught the moment it appears rather than after the full run. On `FAIL`
 the driver prints the diff and cancels the doomed job (`qdel bb_<scenario>`). The
-soft-pass milestone is the heartbeat at 80,000,000 total instructions — 50M
-warmup plus 30M of the 100M simulation, i.e. ~a third of the run verified and
-on-track (30M surfaces the soft pass ~2 heartbeats / ~25% sooner than 50M).
+soft-pass milestone is the heartbeat at 70,000,000 total instructions — 50M
+warmup plus 20M of the 100M simulation. It is a single tunable constant
+(`SOFT_MILESTONE` in `check_progress.sh`); lowering it surfaces the soft pass
+sooner (each 10M earlier ~ one heartbeat).
 The run ends when every scenario is `FULL_PASS`/`FAIL`; the final report requires
 `FULL_PASS` for all.
 
