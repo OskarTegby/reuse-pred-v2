@@ -23,7 +23,8 @@
 #   traces     : pr     - ligra PageRank      (graph DoA; bypass + aggressive arm)
 #                cactus - 607.cactuBSSN        (many PCs -> history table active;
 #                                               temporal reuse -> gentle arm wins)
-#                lbm    - 619.lbm              (streaming -> bypass big win)
+#                bwaves - 603.bwaves           (streaming -> bypass; ~4x faster to
+#                                               simulate than lbm, same coverage)
 #                qmm    - srv_12               (many PCs, different workload)
 #
 # Determinism makes the full-report reference sufficient: any change to winner
@@ -43,21 +44,21 @@ DPC3=/home/users/shared/traces/dpc3_traces
 
 POLICIES=(lru srrip ipv)
 CONDITIONS=(base fixed bypass duel)
-TRACE_KEYS=(pr cactus lbm qmm)
+TRACE_KEYS=(pr cactus bwaves qmm)
 
 # --- trace key -> path + that trace's per-suite mostly-dead threshold ---------
 trace_path() {
   case "$1" in
     pr)     echo "$ROOT/trace-files/ligra/ligra_PageRank.com-lj.ungraph.gcc_6.3.0_O3.drop_51000M.length_250M.champsimtrace.xz" ;;
     cactus) echo "$DPC3/607.cactuBSSN_s-2421B.champsimtrace.xz" ;;
-    lbm)    echo "$DPC3/619.lbm_s-2676B.champsimtrace.xz" ;;
+    bwaves) echo "$DPC3/603.bwaves_s-891B.champsimtrace.xz" ;;
     qmm)    echo "$ROOT/trace-files/QMM/srv_12.champsimtrace.xz" ;;
     *) return 1 ;;
   esac
 }
 trace_dead() {            # per-suite THD_DEAD, matches the cluster sweeps
   case "$1" in
-    pr) echo 16 ;; cactus|lbm) echo 4 ;; qmm) echo 2 ;; *) return 1 ;;
+    pr) echo 16 ;; cactus|bwaves) echo 4 ;; qmm) echo 2 ;; *) return 1 ;;
   esac
 }
 
