@@ -49,8 +49,8 @@ int recency_version()
 }
 
 struct RecencyChar {
-  // The mechanism: one 2-bit state per resident block, updated online.
-  std::vector<uint8_t> state;      // 0=dead 1=mid_lru 2=mid_mru 3=live
+  // The 2-bit state lives on each block (BLOCK::eviction_state); here we only
+  // tally the final state at eviction.
   uint64_t st_count[4] = {};       // eviction tally by final state (the classification)
   // Test oracle: raw last-hit data to re-derive the selected version offline.
   std::vector<uint32_t> hitcnt;    // demand hits on the currently resident block
@@ -78,7 +78,6 @@ void CACHE::initialize_replacement()
   if (char_enabled()) {
     auto& c = ::rc[this];
     const std::size_t n = NUM_SET * NUM_WAY;
-    c.state.assign(n, 0);
     c.hitcnt.assign(n, 0);
     c.lastrank.assign(n, 0);
     c.rank_one.assign(NUM_WAY, 0);
@@ -102,7 +101,7 @@ uint32_t CACHE::find_victim(uint32_t triggering_cpu, uint64_t instr_id, uint32_t
   if (char_enabled() && current_set[way].valid) {
     auto& c = ::rc[this];
     const std::size_t s = set * NUM_WAY + way;
-    c.st_count[c.state[s]]++;               // the mechanism's classification
+    c.st_count[current_set[way].eviction_state]++;   // the block's own 2-bit state
     if (c.hitcnt[s] == 0)                    // oracle (version-independent)
       c.never_hit++;
     else if (c.hitcnt[s] == 1)
@@ -131,12 +130,13 @@ void CACHE::update_replacement_state(uint32_t triggering_cpu, uint32_t set, uint
         for (uint32_t w = 0; w < NUM_WAY; ++w)
           if (luc[base + w] < mine)
             ++rank;
-        c.state[s] = next_state(c.state[s], rank, NUM_WAY);  // the mechanism
+        // The mechanism: update this block's own 2-bit state from its recency rank.
+        block[s].eviction_state = next_state(block[s].eviction_state, rank, NUM_WAY);
         c.lastrank[s] = rank;                                // oracle
         ++c.hitcnt[s];
       } else {
         // Fill: reset the incoming block's state and oracle fields.
-        c.state[s] = 0;
+        block[s].eviction_state = 0;
         c.hitcnt[s] = 0;
         c.lastrank[s] = 0;
       }
