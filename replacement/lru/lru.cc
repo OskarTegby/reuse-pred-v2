@@ -61,14 +61,43 @@ struct RecencyChar {
 };
 std::map<CACHE*, RecencyChar> rc;
 
-// Update a block's 2-bit state on a demand hit at recency rank r (out of n ways).
+// The four liveness states, ordered dead -> live (the 2-bit value on each block).
+enum RState : uint8_t { DEAD = 0, MID_LRU = 1, MID_MRU = 2, LIVE = 3 };
+
+// Compute a block's new state on a demand hit, given its current state `cur` and
+// the recency rank `r` of this hit (0 = LRU end .. n-1 = MRU end) in an n-way set.
+// A block is reset to DEAD on fill (elsewhere); this only runs on hits.
 uint8_t next_state(uint8_t cur, uint32_t r, uint32_t n)
 {
+  // Where in the recency stack did this hit land?
+  const bool at_mru_top  = (r == n - 1);   // still the most-recently-used block
+  const bool in_mru_half = (r >= n / 2);   // nearer the MRU end than the LRU end
+  const bool deep_in_lru = (r < n / 4);    // deep in the LRU quarter, nearly evicted
+
   switch (recency_version()) {
-    case 1:  return (r == n - 1) ? 3 : (r >= n / 2) ? 2 : 1;
-    case 3:  return (r < n / 4) ? 0 : (r < n / 2) ? 1 : (r < n - 1) ? 2 : 3;
-    default: return (cur == 0) ? (r < n / 2 ? 1 : 2) : 3; // V2
+    case 1:
+      // V1: classify by where THIS hit landed; each hit overwrites, so the final
+      // state reflects the last hit. Top of stack = live, else by half.
+      if (at_mru_top)  return LIVE;
+      if (in_mru_half) return MID_MRU;
+      return MID_LRU;
+
+    case 2:
+      // V2: the first hit picks a middle state by half; ANY later hit (the block
+      // is no longer DEAD) promotes it to live ("hot"). Rank is ignored after the
+      // first hit -- this is the only version that reads `cur`.
+      if (cur != DEAD) return LIVE;
+      return in_mru_half ? MID_MRU : MID_LRU;
+
+    case 3:
+      // V3: like V1, but a hit deep in the LRU quarter is treated as still-dead
+      // (too close to eviction to signal liveness) -- a softer DEAD than V1/V2.
+      if (deep_in_lru) return DEAD;
+      if (at_mru_top)  return LIVE;
+      if (in_mru_half) return MID_MRU;
+      return MID_LRU;
   }
+  return DEAD;  // unreachable: recency_version() is clamped to {1,2,3}
 }
 } // namespace
 
