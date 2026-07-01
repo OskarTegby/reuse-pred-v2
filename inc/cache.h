@@ -1482,6 +1482,7 @@ class CACHE : public champsim::operable, public MemoryRequestConsumer, public Me
     uint64_t install_cycle   = 0; // cycle when block was installed (for halflife classification)
     uint64_t last_hit_cycle  = 0; // cycle of most recent hit (0 = never hit)
     liveness_class ins_class = liveness_class::mostly_alive; // class predicted at fill time
+    uint32_t hit_count = 0; // hits received while resident (liveness lifespan characterization)
   };
   using set_type = std::vector<BLOCK>;
 
@@ -1621,6 +1622,12 @@ class CACHE : public champsim::operable, public MemoryRequestConsumer, public Me
   struct PCLivenessEntry { uint64_t total = 0, doa = 0, mostly_dead = 0, mostly_alive = 0; };
   bool liveness_char_enable = false;
   std::unordered_map<uint64_t, PCLivenessEntry> pc_liveness_char;
+  // Per-predicted-class (ins_class) lifespan/reuse characterization (LIVENESS_CHAR=1).
+  // Index 0=DoA, 1=mostly_dead, 2=mostly_alive. Aggregates over the run at eviction.
+  uint64_t ins_life_sum_[3] = {};   // sum of residency cycles
+  uint64_t ins_life_cnt_[3] = {};   // evicted blocks
+  uint64_t ins_hit_sum_[3]  = {};   // sum of hits received while resident
+  uint64_t ins_accessed_[3] = {};   // blocks reused at least once
   void record_liveness_char(uint64_t pc, uint64_t install_cycle,
                             uint64_t last_hit_cycle, uint64_t evict_cycle,
                             bool accessed);
