@@ -77,6 +77,13 @@ TRACE="${TRACE:-$(trace_path "$TRC")}" || { echo "unknown trace key in '$SCEN'" 
 BASE_ENV=(THD_DOA=6 BHIST_MODE=pc SRRIP_LIVE_TARGET=llc)
 # 'addr' condition: address-keyed history table, bounded to 4K with lfu_doa eviction.
 ADDR_ENV=(REPL_HIST_MODE=addr REPL_HIST_LLC_CAP=4096 REPL_HIST_REPL=lfu_doa)
+# 'bypass' for SRRIP/IPV-Live: DoA blocks skip the LLC instead of being inserted.
+# SRRIP_LIVE_TARGET=none turns off the in-cache liveness insert (so we flip it out
+# of BASE_ENV) and LIVENESS_BYPASS=1 enables the bypass path. (LRU-Live expresses
+# bypass differently, as the LRU_LIVE_DOA_INS=bypass insertion mode.)
+BYPASS_ENV=("${BASE_ENV[@]/SRRIP_LIVE_TARGET=llc/SRRIP_LIVE_TARGET=none}" LIVENESS_BYPASS=1)
+# IPV-Live's kept "ilB" insertion vector.
+IPV_VEC=(IPV_DOA=0:1:2:2:3)
 
 # --- (policy, condition) -> binary + env -------------------------------------
 ENVV=()
@@ -91,16 +98,16 @@ case "${POL}_${COND}" in
   # -------- SRRIP-Live (bypass via TARGET=none; duel = hit-count/PSEL) --------
   srrip_base)   BIN=champsim_srrip ;;
   srrip_fixed)  BIN=champsim_srrip_live; ENVV=("${BASE_ENV[@]}") ;;
-  srrip_bypass) BIN=champsim_srrip_live; ENVV=("${BASE_ENV[@]/SRRIP_LIVE_TARGET=llc/SRRIP_LIVE_TARGET=none}" LIVENESS_BYPASS=1) ;;
+  srrip_bypass) BIN=champsim_srrip_live; ENVV=("${BYPASS_ENV[@]}") ;;
   srrip_duel)   BIN=champsim_srrip_live; ENVV=("${BASE_ENV[@]}" SRRIP_DOA_INS_RRPV=2 SRRIP_DOA_HIT_RRPV=2 SRRIP_DOA_INS_RRPV_B=3 SRRIP_DOA_HIT_RRPV_B=0 DUEL_N_SAMPLERS=32) ;;
   srrip_addr)   BIN=champsim_srrip_live; ENVV=("${BASE_ENV[@]}" "${ADDR_ENV[@]}") ;;
 
   # -------- IPV-Live (ilB fixed; duel = ins2-vs-ins3, latency metric) ---------
   ipv_base)    BIN=champsim_ipv ;;
-  ipv_fixed)   BIN=champsim_ipv_live; ENVV=("${BASE_ENV[@]}" IPV_DOA=0:1:2:2:3) ;;
-  ipv_bypass)  BIN=champsim_ipv_live; ENVV=("${BASE_ENV[@]/SRRIP_LIVE_TARGET=llc/SRRIP_LIVE_TARGET=none}" LIVENESS_BYPASS=1 IPV_DOA=0:1:2:2:3) ;;
+  ipv_fixed)   BIN=champsim_ipv_live; ENVV=("${BASE_ENV[@]}" "${IPV_VEC[@]}") ;;
+  ipv_bypass)  BIN=champsim_ipv_live; ENVV=("${BYPASS_ENV[@]}" "${IPV_VEC[@]}") ;;
   ipv_duel)    BIN=champsim_ipv_live; ENVV=("${BASE_ENV[@]}" DUEL_N_CONFIGS=2 DUEL_N_SAMPLERS=32 IPV_DOA_0=0:1:2:2:2 IPV_DOA_1=0:1:2:2:3 DUEL_METRIC=latency) ;;
-  ipv_addr)    BIN=champsim_ipv_live; ENVV=("${BASE_ENV[@]}" IPV_DOA=0:1:2:2:3 "${ADDR_ENV[@]}") ;;
+  ipv_addr)    BIN=champsim_ipv_live; ENVV=("${BASE_ENV[@]}" "${IPV_VEC[@]}" "${ADDR_ENV[@]}") ;;
 
   *) echo "run_scenario.sh: unknown scenario '$SCEN'" >&2; exit 2 ;;
 esac
