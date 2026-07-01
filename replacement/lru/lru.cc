@@ -11,19 +11,24 @@ namespace
 {
 std::map<CACHE*, std::vector<uint64_t>> last_used_cycles;
 
-// ---- Recency-at-last-hit characterization (LIVENESS_CHAR=1) ------------------
-// Purely observational. For each resident block we record the recency-stack rank
-// at its most recent hit (0 = LRU, N-1 = MRU) plus two sticky bits — was it ever
-// hit while in the LRU half, and while in the MRU half. At eviction we tally the
-// block into a last-hit-rank histogram and a 2x2 half-bit table. This feeds a
-// four-state, recency-based liveness breakdown (a recency-based Figure 1):
-//   never hit            -> DoA
-//   hit only in one half -> the two middle states
-//   hit in both halves   -> "hot"
-// and the rank histogram supports finer cuts (MRU-top, soft-dead bottom region).
+// ---- Recency-based liveness classification (LIVENESS_CHAR=1) -----------------
+// Each resident block carries a 2-bit state, set online as it is accessed —
+// exactly the mechanism a real implementation would use (no timestamps, no
+// offline post-processing). On a demand hit we read the block's recency-stack
+// rank (0 = LRU .. N-1 = MRU) and update its state per the selected version:
 //
-// It never influences victim selection or the last-use update below, so IPC is
-// bit-identical to plain LRU; when LIVENESS_CHAR is unset it does nothing.
+//   state: 0=dead  1=mid_lru  2=mid_mru  3=live      (reset to 0 on fill)
+//   V1  st = (rank==N-1) ? 3 : (rank>=N/2) ? 2 : 1
+//   V2  st = (st==0) ? (rank<N/2 ? 1 : 2) : 3           // 2nd+ hit -> hot
+//   V3  st = (rank<N/4) ? 0 : (rank<N/2 ? 1 : (rank<N-1 ? 2 : 3))
+//
+// RECENCY_VERSION selects the version (default 2). At eviction the block's final
+// state is tallied. Purely observational — never influences victim choice or the
+// last-use update, so IPC is bit-identical to plain LRU.
+//
+// The raw last-hit-rank histogram is also recorded, but ONLY as a test oracle:
+// re-deriving the selected version from it offline must reproduce the online
+// state counts (a check of the state machine). It is dropped in the guidance build.
 bool char_enabled()
 {
   static const bool e = [] {
@@ -33,19 +38,38 @@ bool char_enabled()
   return e;
 }
 
+int recency_version()
+{
+  static const int v = [] {
+    const char* e = std::getenv("RECENCY_VERSION");
+    const int x = (e && *e) ? std::atoi(e) : 2;
+    return (x == 1 || x == 2 || x == 3) ? x : 2;
+  }();
+  return v;
+}
+
 struct RecencyChar {
+  // The mechanism: one 2-bit state per resident block, updated online.
+  std::vector<uint8_t> state;      // 0=dead 1=mid_lru 2=mid_mru 3=live
+  uint64_t st_count[4] = {};       // eviction tally by final state (the classification)
+  // Test oracle: raw last-hit data to re-derive the selected version offline.
   std::vector<uint32_t> hitcnt;    // demand hits on the currently resident block
-  std::vector<uint32_t> lastrank;  // recency rank (0=LRU..N-1=MRU) at its last hit
-  std::vector<uint8_t>  lru_bit;   // ever hit while in the LRU half of the stack
-  std::vector<uint8_t>  mru_bit;   // ever hit while in the MRU half of the stack
-  // Last-hit rank histograms, split by hit count so the count-based "hot" rule
-  // (V2: >=2 hits) and the rank-based rules (V1/V3) are both derivable offline.
+  std::vector<uint32_t> lastrank;  // recency rank at its last hit
   std::vector<uint64_t> rank_one;   // exactly one hit, by that hit's rank
   std::vector<uint64_t> rank_multi; // two or more hits, by last-hit rank
-  uint64_t never_hit = 0;          // evicted without ever being hit (DoA)
-  uint64_t half[2][2] = {};        // [lru_bit][mru_bit] sticky-bit tally at eviction
+  uint64_t never_hit = 0;          // evicted without ever being hit
 };
 std::map<CACHE*, RecencyChar> rc;
+
+// Update a block's 2-bit state on a demand hit at recency rank r (out of n ways).
+uint8_t next_state(uint8_t cur, uint32_t r, uint32_t n)
+{
+  switch (recency_version()) {
+    case 1:  return (r == n - 1) ? 3 : (r >= n / 2) ? 2 : 1;
+    case 3:  return (r < n / 4) ? 0 : (r < n / 2) ? 1 : (r < n - 1) ? 2 : 3;
+    default: return (cur == 0) ? (r < n / 2 ? 1 : 2) : 3; // V2
+  }
+}
 } // namespace
 
 void CACHE::initialize_replacement()
@@ -54,10 +78,9 @@ void CACHE::initialize_replacement()
   if (char_enabled()) {
     auto& c = ::rc[this];
     const std::size_t n = NUM_SET * NUM_WAY;
+    c.state.assign(n, 0);
     c.hitcnt.assign(n, 0);
     c.lastrank.assign(n, 0);
-    c.lru_bit.assign(n, 0);
-    c.mru_bit.assign(n, 0);
     c.rank_one.assign(NUM_WAY, 0);
     c.rank_multi.assign(NUM_WAY, 0);
   }
@@ -74,22 +97,18 @@ uint32_t CACHE::find_victim(uint32_t triggering_cpu, uint64_t instr_id, uint32_t
   assert(victim < end);
   const auto way = static_cast<uint32_t>(std::distance(begin, victim)); // cast protected by prior asserts
 
-  // Tally the outgoing block's recency characterization before it is replaced.
-  // Only real evictions (a valid resident block) count, so cold-start fills into
-  // empty ways are excluded.
+  // Tally the outgoing block before it is replaced. Only real evictions (a valid
+  // resident block) count, so cold-start fills into empty ways are excluded.
   if (char_enabled() && current_set[way].valid) {
     auto& c = ::rc[this];
     const std::size_t s = set * NUM_WAY + way;
-    if (c.hitcnt[s] == 0) {
+    c.st_count[c.state[s]]++;               // the mechanism's classification
+    if (c.hitcnt[s] == 0)                    // oracle (version-independent)
       c.never_hit++;
-      c.half[0][0]++;
-    } else {
-      if (c.hitcnt[s] == 1)
-        c.rank_one[c.lastrank[s]]++;
-      else
-        c.rank_multi[c.lastrank[s]]++;
-      c.half[c.lru_bit[s]][c.mru_bit[s]]++;
-    }
+    else if (c.hitcnt[s] == 1)
+      c.rank_one[c.lastrank[s]]++;
+    else
+      c.rank_multi[c.lastrank[s]]++;
   }
   return way;
 }
@@ -105,26 +124,21 @@ void CACHE::update_replacement_state(uint32_t triggering_cpu, uint32_t set, uint
       const auto& luc = ::last_used_cycles[this];
       if (hit) {
         // Recency rank at this (demand) hit, read BEFORE the last-use bump below:
-        // rank = number of ways in the set more recently used than this one,
-        // 0 = LRU end, N-1 = MRU end.
+        // rank = number of ways more recently used than this one (0=LRU..N-1=MRU).
         const uint64_t mine = luc[s];
         const std::size_t base = set * NUM_WAY;
         uint32_t rank = 0;
         for (uint32_t w = 0; w < NUM_WAY; ++w)
           if (luc[base + w] < mine)
             ++rank;
-        c.lastrank[s] = rank;
-        if (rank < NUM_WAY / 2)
-          c.lru_bit[s] = 1;
-        else
-          c.mru_bit[s] = 1;
+        c.state[s] = next_state(c.state[s], rank, NUM_WAY);  // the mechanism
+        c.lastrank[s] = rank;                                // oracle
         ++c.hitcnt[s];
       } else {
-        // Fill: reset the incoming block's characterization state.
+        // Fill: reset the incoming block's state and oracle fields.
+        c.state[s] = 0;
         c.hitcnt[s] = 0;
         c.lastrank[s] = 0;
-        c.lru_bit[s] = 0;
-        c.mru_bit[s] = 0;
       }
     }
     // Mark the way as being used on the current cycle
@@ -140,9 +154,11 @@ void CACHE::replacement_final_stats()
   if (it == ::rc.end())
     return;
   const auto& c = it->second;
+  printf("%s RECENCY_STATE v=%d dead=%lu mid_lru=%lu mid_mru=%lu live=%lu\n", NAME.c_str(), recency_version(), c.st_count[0], c.st_count[1], c.st_count[2],
+         c.st_count[3]);
+  // Test oracle: raw last-hit histogram (re-derive the version offline to check).
   printf("%s RECENCY_LASTHIT BEGIN\n", NAME.c_str());
   printf("  n_ways=%u never_hit=%lu\n", NUM_WAY, c.never_hit);
-  printf("  half L0M0=%lu L0M1=%lu L1M0=%lu L1M1=%lu\n", c.half[0][0], c.half[0][1], c.half[1][0], c.half[1][1]);
   printf("  lasthit_rank_hist_one");
   for (uint32_t r = 0; r < NUM_WAY; ++r)
     printf(" r%u=%lu", r, c.rank_one[r]);
