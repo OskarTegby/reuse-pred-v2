@@ -669,6 +669,23 @@ void CACHE::print_liveness_char() const
            pc, e.total, e.doa, e.mostly_dead, e.mostly_alive);
   }
   printf("%s LIVENESS_CHAR END\n", NAME.c_str());
+
+  // Aggregate per-predicted-class (ins_class) lifespan/reuse + MD->DoA scoring rate.
+  static const char* const CN[3] = {"DoA", "MD", "MA"};
+  printf("%s LIVENESS_LIFESPAN BEGIN\n", NAME.c_str());
+  for (int c = 0; c < 3; ++c) {
+    const uint64_t n = ins_life_cnt_[c];
+    printf("  class=%s n=%lu mean_lifespan=%.1f reuse_rate=%.4f mean_hits=%.4f\n",
+           CN[c], n,
+           n ? static_cast<double>(ins_life_sum_[c]) / static_cast<double>(n) : 0.0,
+           n ? static_cast<double>(ins_accessed_[c]) / static_cast<double>(n) : 0.0,
+           n ? static_cast<double>(ins_hit_sum_[c]) / static_cast<double>(n) : 0.0);
+  }
+  const auto& hs = repl_hist_pc.get_stats();
+  printf("  trans MA->MD=%lu MD->DoA=%lu md_doa_rate=%.4f\n",
+         hs.trans_ma_md, hs.trans_md_doa,
+         hs.trans_ma_md ? static_cast<double>(hs.trans_md_doa) / static_cast<double>(hs.trans_ma_md) : 0.0);
+  printf("%s LIVENESS_LIFESPAN END\n", NAME.c_str());
 }
 
 bool CACHE::handle_fill(const PACKET& fill_mshr)
@@ -864,9 +881,16 @@ bool CACHE::handle_fill(const PACKET& fill_mshr)
 
       if (way->valid) {
         sim_stats.back().evictions++;
-        if (liveness_char_enable)
+        if (liveness_char_enable) {
+          const int ci = static_cast<int>(way->ins_class);
+          const uint64_t ls = (current_cycle >= way->install_cycle) ? current_cycle - way->install_cycle : 0;
+          ins_life_sum_[ci] += ls;
+          ins_life_cnt_[ci] += 1;
+          ins_hit_sum_[ci]  += way->hit_count;
+          ins_accessed_[ci] += way->accessed ? 1u : 0u;
           record_liveness_char(way->ip, way->install_cycle, way->last_hit_cycle,
                                current_cycle, way->accessed);
+        }
         if (!way->accessed) {
           sim_stats.back().doa++;
           // LLC only: reverse-STLB lookup — find the STLB entry for this block's
@@ -924,6 +948,7 @@ bool CACHE::handle_fill(const PACKET& fill_mshr)
       way->install_cycle  = current_cycle;
       way->last_hit_cycle = current_cycle;
       way->ins_class = classify_block_liveness(fill_mshr.address, fill_mshr.ip);
+      way->hit_count = 0;
 
       metadata_thru =
           impl_prefetcher_cache_fill(pkt_address, get_set_index(fill_mshr.address), way_idx, fill_mshr.type == PREFETCH, evicting_address, metadata_thru);
@@ -1002,8 +1027,10 @@ bool CACHE::try_hit(const PACKET& handle_pkt)
     // classification based on genuine reads only. Both fields are used solely
     // by the LLC/STLB liveness mechanism.
     if (handle_pkt.type != WRITE) {
-      if (NAME == "cpu0_STLB" || NAME == "LLC")
+      if (NAME == "cpu0_STLB" || NAME == "LLC") {
         way->accessed = true;
+        way->hit_count++;
+      }
       way->last_hit_cycle = current_cycle;
     }
 
