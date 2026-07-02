@@ -689,6 +689,33 @@ spread. The policies frequently \emph{disagree}: \srrip-Live wins decisively on
 kernels and \texttt{mcf} where \srrip-Live is slightly negative. No single policy
 dominates per-workload, motivating the suite-level threshold optimisation.
 
+\begin{figure*}[t!]
+\centering
+\begin{minipage}[t]{0.48\textwidth}
+  \centering
+  \includegraphics[width=\linewidth]{../plots/lru_live_threshold_normalized_duel.png}
+  \caption{DoA threshold sensitivity for \lru-Live with set dueling: geomean
+    IPC speedup vs.\ \lru per suite, normalised to each suite's own peak
+    across the sweep. Y-axis is broken (dashed = crosses the break) to show
+    Google's and SPEC's low-$\theta$ values without compressing the rest. GMS
+    omitted (crosses zero; see text).}
+  \label{fig:doa_thd}
+\end{minipage}
+\hfill
+\begin{minipage}[t]{0.48\textwidth}
+  \centering
+  \includegraphics[width=\linewidth]{../plots/lru_live_size_sensitivity.png}
+  \caption{\llc history table size sensitivity for \lru-Live, at each suite's own
+    optimal $\theta_{\mathrm{doa}}$ (GAP=2, Ligra=4, QMM=8, ML/Google/SPEC=30).
+    Y-axis: each suite's geomean IPC speedup vs.\ plain \lru at that capacity,
+    normalised to its own speedup at 16{,}384 entries (100\% = the unbounded
+    ceiling). GMS is omitted: its guidance contribution is marginal even at
+    its own best threshold ($+0.23\%$), too small to say anything meaningful
+    about capacity sensitivity.}
+  \label{fig:size_sensitivity}
+\end{minipage}
+\end{figure*}
+
 \subsection{Set dueling}
 \label{sec:setdueling}
 
@@ -741,41 +768,8 @@ uniformly.
 \subsection{Threshold sensitivity}
 \label{sec:thd_sens}
 
-\begin{figure}[t!]
-\centering
-\includegraphics[width=\linewidth]{../plots/lru_live_threshold_normalized_duel.png}
-\caption{Per-suite DoA threshold sensitivity for \lru-Live \emph{with set
-  dueling} (latency metric, cfgA=2n3 vs.\ cfgB=lru): each suite's geomean IPC
-  speedup over plain \lru as a function of $\theta_{\mathrm{doa}}$
-  (\llc-only guidance, mode-5 falling-weight scoring, unbounded PC-keyed
-  history table), normalised to its own peak value across the sweep (100\% =
-  that suite's best threshold). Y-axis is broken (dashed segments cross the
-  break) to show Google's and SPEC's negative/near-zero low-$\theta$ values
-  without compressing the other four suites; the axis is cut at $-50\%$, so
-  Google's most extreme point ($-70.0\%$ at $\theta_{\mathrm{doa}}=2$) is
-  off-frame and indicated only by its dashed approach. Each curve is over
-  the suite's full trace set; SPEC is SimPoint-weighted. GMS is omitted: it
-  crosses from negative to positive across the sweep, so normalising by its
-  (small, positive) peak produces extreme, uninformative percentages; its
-  absolute behaviour is discussed in the text below.}
-\label{fig:doa_thd}
-\end{figure}
-
 \subsection{History table size sensitivity}
 \label{sec:llcsize}
-
-\begin{figure}[t!]
-\centering
-\includegraphics[width=\linewidth]{../plots/lru_live_size_sensitivity.png}
-\caption{\llc history table size sensitivity for \lru-Live, at each suite's own
-  optimal $\theta_{\mathrm{doa}}$ (GAP=2, Ligra=4, QMM=8, ML/Google/SPEC=30).
-  Y-axis: each suite's geomean IPC speedup vs.\ plain \lru at that capacity,
-  normalised to its own speedup at 16{,}384 entries (100\% = the unbounded
-  ceiling). GMS is omitted: its guidance contribution is marginal even at
-  its own best threshold ($+0.23\%$), too small to say anything meaningful
-  about capacity sensitivity.}
-\label{fig:size_sensitivity}
-\end{figure}
 
 Figure~\ref{fig:doa_thd} sweeps the DoA threshold $\theta_{\mathrm{doa}}$ for
 \lru-Live \emph{with set dueling} on every suite, each curve normalised to

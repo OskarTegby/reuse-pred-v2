@@ -17,6 +17,7 @@ from pathlib import Path
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
+from matplotlib.patches import ConnectionPatch
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(Path(__file__).parent))
@@ -56,20 +57,24 @@ def get_ipc(path):
     return None
 
 
-# Break the y-axis inside the empty band between the two panels. No suite has
-# a normalised value between GAP_LOW and GAP_HIGH at any theta, so nothing
-# real is hidden by the break itself. GAP_HIGH must stay below the lowest
-# real point above the gap (SPEC at theta=2, 24.1%). BOTTOM_MIN is capped at
-# -50 as requested; this does clip Google's most extreme points (-70.0% at
-# theta=2, -54.2% at theta=4) at the bottom frame edge.
+# Break the y-axis across the whole empty band between the two panels
+# (-50 to 20): no suite has a normalised value in that range at any theta,
+# so nothing real is hidden. Below -50 the bottom panel continues so
+# Google's real data (down to -70.0% at theta=2) still renders in full.
 GAP_HIGH = 20
-GAP_LOW = 15
-BOTTOM_MIN = -50
+GAP_LOW = -50
+BOTTOM_MIN = -73
+
+
+# theta=16 is the best universal compromise across suites: it is the
+# threshold at which every suite's worst-case (min over suites) % of peak is
+# highest (66.1%, vs. e.g. 61.9% at theta=30 or 36.4% at theta=8).
+BEST_OVERALL_THD = 16
 
 
 def main():
     fig, (ax_top, ax_bot) = plt.subplots(
-        2, 1, sharex=True, figsize=(7, 5.2),
+        2, 1, sharex=True, figsize=(7, 4.2),
         gridspec_kw={"height_ratios": [3, 1.4], "hspace": 0.08})
     report = {}
 
@@ -121,14 +126,38 @@ def main():
         ys = [vals[thd] / peak * 100.0 for thd in THRESHOLDS if thd in vals]
 
         # Segments that cross the empty gap between the two panels are drawn
-        # dashed (on both axes, naturally clipped to each one's ylim); segments
-        # that stay entirely within one panel's range are solid.
+        # dashed: the partial segment within each panel (up to where it
+        # crosses that panel's own edge), plus a ConnectionPatch bridging the
+        # two exit/entry points through the gap itself, so the dashed line
+        # visibly spans the break rather than stopping at one panel's edge.
+        # Segments that stay entirely within one panel's range are solid.
         for i in range(len(xs) - 1):
-            x_seg, y_seg = xs[i:i + 2], ys[i:i + 2]
-            crossing = (min(y_seg) <= GAP_LOW) and (max(y_seg) >= GAP_HIGH)
-            style = "--" if crossing else "-"
-            for ax in (ax_top, ax_bot):
-                ax.plot(x_seg, y_seg, color=COLORS[suite], linestyle=style, linewidth=1.6)
+            (x1, y1), (x2, y2) = (xs[i], ys[i]), (xs[i + 1], ys[i + 1])
+            crossing = (min(y1, y2) <= GAP_LOW) and (max(y1, y2) >= GAP_HIGH)
+            if not crossing:
+                for ax in (ax_top, ax_bot):
+                    ax.plot([x1, x2], [y1, y2], color=COLORS[suite], linewidth=1.6)
+                continue
+
+            # Which endpoint is on top, which is on the bottom.
+            if y1 >= y2:
+                (x_top_pt, y_top_pt), (x_bot_pt, y_bot_pt) = (x1, y1), (x2, y2)
+            else:
+                (x_top_pt, y_top_pt), (x_bot_pt, y_bot_pt) = (x2, y2), (x1, y1)
+
+            frac_top = (y_top_pt - GAP_HIGH) / (y_top_pt - y_bot_pt)
+            x_at_top_edge = x_top_pt + (x_bot_pt - x_top_pt) * frac_top
+            frac_bot = (y_top_pt - GAP_LOW) / (y_top_pt - y_bot_pt)
+            x_at_bot_edge = x_top_pt + (x_bot_pt - x_top_pt) * frac_bot
+
+            ax_top.plot([x_top_pt, x_at_top_edge], [y_top_pt, GAP_HIGH],
+                        color=COLORS[suite], linestyle="--", linewidth=1.6)
+            ax_bot.plot([x_at_bot_edge, x_bot_pt], [GAP_LOW, y_bot_pt],
+                        color=COLORS[suite], linestyle="--", linewidth=1.6)
+            fig.add_artist(ConnectionPatch(
+                xyA=(x_at_top_edge, GAP_HIGH), coordsA=ax_top.transData,
+                xyB=(x_at_bot_edge, GAP_LOW), coordsB=ax_bot.transData,
+                color=COLORS[suite], linestyle="--", linewidth=1.6))
         for ax in (ax_top, ax_bot):
             ax.plot(xs, ys, color=COLORS[suite], marker=MARKERS[suite],
                     markersize=5, linewidth=0, label=label)
@@ -139,12 +168,17 @@ def main():
         ax.set_xticks(THRESHOLDS)
         ax.tick_params(labelsize=9)
         ax.grid(axis="y", linestyle=":", alpha=0.4)
-    ax_bot.set_yticks([0, -25, -50])
+    ax_bot.set_yticks([-50, -60, -70])
     ax_top.spines["bottom"].set_visible(False)
     ax_bot.spines["top"].set_visible(False)
     ax_top.tick_params(labeltop=False, bottom=False)
     ax_bot.xaxis.tick_bottom()
     ax_top.axhline(100, color="black", linestyle="--", linewidth=0.8, alpha=0.5)
+    for ax in (ax_top, ax_bot):
+        ax.axvline(BEST_OVERALL_THD, color="black", linestyle=":", linewidth=1.2, alpha=0.7, zorder=0)
+    ax_top.annotate(r"best overall: $\theta_{\mathrm{doa}}=16$",
+                     xy=(BEST_OVERALL_THD, 102), xytext=(BEST_OVERALL_THD + 0.6, 40),
+                     fontsize=7.5, ha="left", va="top")
 
     d = 0.015
     kwargs = dict(transform=ax_top.transAxes, color="black", clip_on=False, linewidth=1)
@@ -156,11 +190,10 @@ def main():
 
     ax_bot.set_xlabel(r"DoA threshold $\theta_{\mathrm{doa}}$", fontsize=10)
     fig.text(0.02, 0.55, "% of peak speedup", va="center", rotation="vertical", fontsize=10)
-    handles, labels = ax_top.get_legend_handles_labels()
-    fig.legend(handles, labels, frameon=False, fontsize=9, ncol=6,
-               loc="lower center", bbox_to_anchor=(0.53, -0.02))
+    ax_bot.legend(frameon=True, framealpha=1, edgecolor="black",
+                  fontsize=8, ncol=2, loc="lower right")
 
-    fig.tight_layout(rect=(0.03, 0.06, 1, 1))
+    fig.tight_layout(rect=(0.03, 0, 1, 1))
     out = ROOT / "results" / "plots" / "lru_live_threshold_normalized_duel.png"
     fig.savefig(out, dpi=150, bbox_inches="tight")
     print("wrote", out)
