@@ -1366,6 +1366,10 @@ void CACHE::begin_phase()
   // Reset history table stats so ROI counts are clean (exclude warmup).
   phist.reset_stats();
   bhist_flat.reset_stats();
+
+  // pc_liveness_char (LIVENESS_CHAR's per-PC breakdown) is otherwise never
+  // reset, so it silently accumulates across the warmup/ROI boundary.
+  pc_liveness_char.clear();
 }
 
 void CACHE::end_phase(unsigned finished_cpu)
