@@ -4,11 +4,26 @@
 import difflib
 import os
 import subprocess
+import sys
 
 
 def ensure_dir(path):
     if not os.path.isdir(path):
         os.makedirs(path)
+
+
+def is_executable_file(path):
+    return os.path.isfile(path) and os.access(path, os.X_OK)
+
+
+def require(condition, message, exit_code):
+    if not condition:
+        sys.stderr.write(message + "\n")
+        sys.exit(exit_code)
+
+
+def env_flag(name):
+    return os.environ.get(name, "0") == "1"
 
 
 def stream_subprocess_to_file(cmd, env, out_path, transform_line=None):

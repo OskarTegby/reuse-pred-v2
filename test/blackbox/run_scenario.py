@@ -16,7 +16,10 @@ import os
 import shutil
 import sys
 
-from fileutils import ensure_dir, stream_subprocess_to_file, diff_lines
+from fileutils import (
+    ensure_dir, is_executable_file, require, env_flag,
+    stream_subprocess_to_file, diff_lines,
+)
 from scenario_config import (
     BIN_DIR, EXPECTED_DIR, OUT_DIR, WARMUP, SIM,
     POLICIES, CONDITIONS, TRACE_KEYS, TRACE_PATHS,
@@ -55,13 +58,12 @@ def resolve_binary_and_env(pol, cond):
     return binary, env
 
 
+SKIP = 77  # ctest's SKIP_RETURN_CODE (see CMakeLists.txt).
+
+
 def check_prereqs(bin_path, trace, scen):
-    if not (os.path.isfile(bin_path) and os.access(bin_path, os.X_OK)):
-        sys.stderr.write("SKIP %s: binary not found: %s\n" % (scen, bin_path))
-        sys.exit(77)  # 77 is ctest's SKIP_RETURN_CODE (see CMakeLists.txt).
-    if not os.path.isfile(trace):
-        sys.stderr.write("SKIP %s: trace not found: %s\n" % (scen, trace))
-        sys.exit(77)
+    require(is_executable_file(bin_path), "SKIP %s: binary not found: %s" % (scen, bin_path), SKIP)
+    require(os.path.isfile(trace), "SKIP %s: trace not found: %s" % (scen, trace), SKIP)
 
 
 def run_binary(bin_path, trace, env_vars, actual_path):
@@ -79,10 +81,9 @@ def write_reference(actual_path, reference_path):
 
 
 def compare_to_reference(actual_path, reference_path, scen):
-    if not os.path.isfile(reference_path):
-        sys.stderr.write("FAIL %s: no reference file (%s). Run with GENERATE=1 to create it.\n"
-                          % (scen, reference_path))
-        sys.exit(1)
+    require(os.path.isfile(reference_path),
+            "FAIL %s: no reference file (%s). Run with GENERATE=1 to create it."
+            % (scen, reference_path), 1)
     diff = diff_lines(reference_path, actual_path)
     if diff is None:
         print("PASS %s" % scen)
@@ -124,12 +125,8 @@ def output_paths(scen):
             os.path.join(EXPECTED_DIR, scen + ".out"))
 
 
-def generating():
-    return os.environ.get("GENERATE", "0") == "1"
-
-
 def finish(actual_path, reference_path, scen):
-    if generating():
+    if env_flag("GENERATE"):
         write_reference(actual_path, reference_path)
         return 0
     compare_to_reference(actual_path, reference_path, scen)
