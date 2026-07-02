@@ -21,6 +21,7 @@ from pathlib import Path
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
+from matplotlib.lines import Line2D
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(Path(__file__).parent))
@@ -50,6 +51,7 @@ def get_ipc(path):
 
 def main():
     fig, ax = plt.subplots(figsize=(7, 4.2))
+    plotted = []
 
     for suite, label in SUITES.items():
         base_dir = ROOT / "results" / "baselines" / "lru" / suite
@@ -85,7 +87,8 @@ def main():
         xs = [CAPS.index(cap) for cap in CAPS if cap in cap_pct]
         ys = [cap_pct[cap] / ceiling * 100.0 for cap in CAPS if cap in cap_pct]
         ax.plot(xs, ys, color=COLORS[suite], marker=MARKERS[suite],
-                markersize=5, linewidth=1.6, label=label)
+                markersize=5, linewidth=1.6)
+        plotted.append((suite, label))
 
     ax.axhline(100, color="black", linestyle="--", linewidth=0.8, alpha=0.5)
     ax.set_xlabel("LLC history table capacity (entries)", fontsize=10)
@@ -93,7 +96,13 @@ def main():
     ax.set_xticks(range(len(CAPS)))
     ax.set_xticklabels(["8", "16", "32", "64", "128", "256", "512", "1K", "2K", "4K", "8K", "16K"], fontsize=8)
     ax.tick_params(axis="y", labelsize=9)
-    ax.legend(frameon=False, fontsize=9, loc="lower right")
+
+    # Marker-only legend icons (no line through them), matching Figure 2's style.
+    handles = [Line2D([0], [0], color=COLORS[suite], marker=MARKERS[suite],
+                      markersize=5, linewidth=0, label=label)
+               for suite, label in plotted]
+    ax.legend(handles=handles, frameon=True, framealpha=1, edgecolor="black",
+              fontsize=8, ncol=2, loc="lower right")
     ax.grid(axis="y", linestyle=":", alpha=0.4)
 
     fig.tight_layout()
