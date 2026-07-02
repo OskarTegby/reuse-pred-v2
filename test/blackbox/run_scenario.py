@@ -41,7 +41,7 @@ def parse_scenario(scen):
     return parts[0], parts[1], parts[2]
 
 
-def fragment_value(frag):
+def resolve_fragment(frag):
     return frag if isinstance(frag, dict) else STATIC_FRAGMENTS[frag]
 
 
@@ -52,7 +52,7 @@ def resolve_binary_and_env(pol, cond):
     binary, fragments = entry
     env = {}
     for frag in fragments:
-        env.update(fragment_value(frag))
+        env.update(resolve_fragment(frag))
     return binary, env
 
 
@@ -65,9 +65,9 @@ def check_prereqs(bin_path, trace, scen):
         sys.exit(77)
 
 
-def run_binary(bin_path, trace, envv, actual_path):
+def run_binary(bin_path, trace, env_vars, actual_path):
     env = os.environ.copy()
-    env.update(envv)
+    env.update(env_vars)
     cmd = [bin_path, "--warmup_instructions", WARMUP,
            "--simulation_instructions", SIM, trace]
     proc = subprocess.Popen(cmd, env=env, stdout=subprocess.PIPE,
@@ -105,27 +105,29 @@ def compare_to_reference(actual_path, reference_path, scen):
     sys.exit(1)
 
 
+def unknown_scenario(scen):
+    sys.stderr.write("unknown scenario '%s'\n" % scen)
+    return None
+
+
 def resolve_scenario(scen):
-    """Parse+resolve a scenario name to (bin_path, trace, envv), or None
+    """Parse+resolve a scenario name to (bin_path, trace, env_vars), or None
     (having written a message to stderr) if any part of it is unknown."""
     parsed = parse_scenario(scen)
     if parsed is None:
-        sys.stderr.write("unknown scenario '%s'\n" % scen)
-        return None
+        return unknown_scenario(scen)
     pol, cond, trc = parsed
 
     if trc not in TRACE_PATHS:
-        sys.stderr.write("unknown trace key in '%s'\n" % scen)
-        return None
+        return unknown_scenario(scen)
 
-    binary, envv = resolve_binary_and_env(pol, cond)
+    binary, env_vars = resolve_binary_and_env(pol, cond)
     if binary is None:
-        sys.stderr.write("unknown scenario '%s'\n" % scen)
-        return None
+        return unknown_scenario(scen)
 
     trace = os.environ.get("TRACE") or TRACE_PATHS[trc]
     bin_path = os.path.join(BIN_DIR, binary)
-    return bin_path, trace, envv
+    return bin_path, trace, env_vars
 
 
 def ensure_dir(path):
@@ -133,26 +135,35 @@ def ensure_dir(path):
         os.makedirs(path)
 
 
+def output_paths(scen):
+    ensure_dir(OUT_DIR)
+    ensure_dir(EXPECTED_DIR)
+    return (os.path.join(OUT_DIR, scen + ".out"),
+            os.path.join(EXPECTED_DIR, scen + ".out"))
+
+
+def generating():
+    return os.environ.get("GENERATE", "0") == "1"
+
+
+def finish(actual_path, reference_path, scen):
+    if generating():
+        write_reference(actual_path, reference_path)
+        return 0
+    compare_to_reference(actual_path, reference_path, scen)
+    return 0
+
+
 def run_scenario(scen):
     resolved = resolve_scenario(scen)
     if resolved is None:
         return 2
-    bin_path, trace, envv = resolved
+    bin_path, trace, env_vars = resolved
     check_prereqs(bin_path, trace, scen)
 
-    ensure_dir(OUT_DIR)
-    ensure_dir(EXPECTED_DIR)
-    actual_path = os.path.join(OUT_DIR, scen + ".out")
-    reference_path = os.path.join(EXPECTED_DIR, scen + ".out")
-
-    run_binary(bin_path, trace, envv, actual_path)
-
-    if os.environ.get("GENERATE", "0") == "1":
-        write_reference(actual_path, reference_path)
-        return 0
-
-    compare_to_reference(actual_path, reference_path, scen)
-    return 0
+    actual_path, reference_path = output_paths(scen)
+    run_binary(bin_path, trace, env_vars, actual_path)
+    return finish(actual_path, reference_path, scen)
 
 
 def main(argv):
