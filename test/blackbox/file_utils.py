@@ -13,6 +13,13 @@ def ensure_dir(path):
         os.makedirs(path)
 
 
+def output_paths(out_dir, expected_dir, name, suffix=".out"):
+    ensure_dir(out_dir)
+    ensure_dir(expected_dir)
+    return (os.path.join(out_dir, name + suffix),
+            os.path.join(expected_dir, name + suffix))
+
+
 def is_executable_file(path):
     return os.path.isfile(path) and os.access(path, os.X_OK)
 

@@ -15,8 +15,8 @@
 import os
 import sys
 
-from file_utils import ensure_dir, is_executable_file, require, env_flag, \
-    stream_subprocess_to_file, write_reference, compare_to_reference
+from file_utils import is_executable_file, require, env_flag, \
+    stream_subprocess_to_file, output_paths, write_reference, compare_to_reference
 from scenario import EXPECTED_DIR, OUT_DIR, WARMUP, SIM, WALLCLOCK_RE
 from scenario_utils import list_scenarios, resolve_scenario
 
@@ -37,13 +37,6 @@ def run_binary(bin_path, trace, env_vars, actual_path):
                                lambda line: WALLCLOCK_RE.sub("", line))
 
 
-def output_paths(scen):
-    ensure_dir(OUT_DIR)
-    ensure_dir(EXPECTED_DIR)
-    return (os.path.join(OUT_DIR, scen + ".out"),
-            os.path.join(EXPECTED_DIR, scen + ".out"))
-
-
 def finish(actual_path, reference_path, scen):
     if env_flag("GENERATE"):
         write_reference(actual_path, reference_path)
@@ -59,7 +52,7 @@ def run_scenario(scen):
     bin_path, trace, env_vars = resolved
     check_prereqs(bin_path, trace, scen)
 
-    actual_path, reference_path = output_paths(scen)
+    actual_path, reference_path = output_paths(OUT_DIR, EXPECTED_DIR, scen)
     run_binary(bin_path, trace, env_vars, actual_path)
     return finish(actual_path, reference_path, scen)
 
