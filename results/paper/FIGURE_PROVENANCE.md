@@ -355,6 +355,80 @@ that edit was uncommitted and never produced a working figure.
 
 ---
 
+## Figure 2 — `fig:doa_thd` (`results/plots/lru_live_threshold_normalized.png`)
+
+> **Corrected 2026-07-02.** This figure and Figure 3 were switched from
+> SRRIP-Live/vs-SRRIP to LRU-Live/vs-LRU on 2026-07-01, but the regenerated PNGs
+> got caught in a `git stash` during a branch switch and were never applied —
+> same incident as Figure 7 (see that section). The stash's copy of this figure
+> also turned out to be incomplete: its threshold sweep omitted
+> $\theta_{\mathrm{doa}}=6$, the paper's own calibrated default, so it couldn't
+> be used to recompute this section's prose. The actual data was already
+> sitting locally and unused: `scripts/analysis/plot_lru_live_threshold.py`
+> (committed, but never wired into the paper) reads
+> `results/allsuites_thd_phase{2,3}_202606{17,18}_*/llc/lru_live/doa{N}` (all
+> thresholds present, including 6) against `results/baselines/lru/{suite}`. That
+> script produces the plain absolute-speedup version and was intentionally left
+> unmodified (it "was already fine"). Per author direction the figure actually
+> used in the paper is normalised the same way as Figure 3 — each suite to its
+> own peak across the sweep — so a second script,
+> `plot_lru_live_threshold_normalized.py`, was added rather than changing the
+> first one's style. GMS is excluded from the normalized figure: it crosses
+> from negative to positive across the sweep, so dividing by its small
+> positive peak produces extreme, uninformative percentages (as low as
+> $-250\%$); its absolute behaviour is still covered in the prose.
+
+### Regeneration
+```bash
+python3 scripts/analysis/plot_lru_live_threshold_normalized.py
+```
+Output: `results/plots/lru_live_threshold_normalized.png`. All source
+directories are present locally (see script docstring for exact paths).
+`plot_lru_live_threshold.py` (absolute, all 7 suites, unmodified) remains
+available for reference but is not used by the paper.
+
+### What changed from the superseded SRRIP-Live version
+
+The old figure claimed GAP "peaks sharply at $\theta_{\mathrm{doa}}=6$" and
+motivated the default on that basis. The real LRU-Live data shows a different
+shape: GAP, ML, and QMM peak at $\theta_{\mathrm{doa}}=2$ (100% by
+construction in the normalised figure) and decline monotonically; SPEC,
+Google, and Ligra stay within ${\approx}10$ points of their own peak
+throughout, each reaching it (or within noise of it) around
+$\theta_{\mathrm{doa}}=6$; GMS is the one that improves with a *higher*
+threshold, crossing from negative to positive around 6 in absolute terms.
+The $\theta_{\mathrm{doa}}=6$ default is still adopted, but the prose now
+argues for it as a cross-suite compromise rather than a single suite's peak.
+
+---
+
+## Figure 3 — `fig:size_sensitivity` (`results/plots/lru_live_size_sensitivity.png`)
+
+> **Corrected 2026-07-02.** Same lost-stash incident as Figure 2. The stashed
+> copy also turned out to be an abandoned draft
+> (`results/plots/size_sensitivity_draft.png`, still on disk, literally titled
+> "DRAFT — dpc3 pending"), not a finished figure. The real, complete dataset
+> was found on the cluster: `results/lru_live_size_peakthd_20260630_2127/`
+> (each suite swept at its own optimal $\theta_{\mathrm{doa}}$ from Figure 2 —
+> GAP=2, Ligra=4, QMM=8, ML/Google/SPEC=30 — across 12 capacities, 8 to
+> 16,384 entries). Verified 100% complete (every suite × capacity cell has
+> `Simulation finished` in every trace) before downloading; now stored locally
+> at that same path (68 MB). GMS is excluded from this sweep entirely: its
+> guidance result is negative at every threshold (Figure 2), so there was
+> nothing to show on a capacity axis. Per author direction, each suite's curve
+> is normalised to its own speedup at cap=16,384 (100% = the unbounded
+> ceiling), rather than plotted as absolute geomean speedup vs LRU.
+
+### Regeneration
+```bash
+python3 scripts/analysis/plot_lru_live_size_sensitivity.py
+```
+Output: `results/plots/lru_live_size_sensitivity.png`. Reads
+`results/lru_live_size_peakthd_20260630_2127/cap{N}/{suite}/{trace}` against
+`results/baselines/lru/{suite}/{trace}`, both present locally.
+
+---
+
 ## Table 1 — `tab:concentration` (per-PC DoA concentration, "n90")
 
 ### What it shows

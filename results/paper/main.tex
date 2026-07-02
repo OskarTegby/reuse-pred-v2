@@ -739,12 +739,16 @@ uniformly.
 
 \begin{figure}[t!]
 \centering
-\includegraphics[width=\linewidth]{../plots/doa_threshold.png}
-\caption{Per-suite DoA threshold sensitivity: \srrip-Live geomean IPC speedup over
-  pure \srrip as a function of $\theta_{\mathrm{doa}}$ (\llc-only guidance, mode-5
-  falling-weight scoring, PC-keyed history table). Each curve is over the suite's
-  full trace set; SPEC is SimPoint-weighted. The dashed line marks the default
-  $\theta_{\mathrm{doa}}=6$.}
+\includegraphics[width=\linewidth]{../plots/lru_live_threshold_normalized.png}
+\caption{Per-suite DoA threshold sensitivity for \lru-Live: each suite's
+  geomean IPC speedup over plain \lru as a function of $\theta_{\mathrm{doa}}$
+  (\llc-only guidance, mode-5 falling-weight scoring, unbounded PC-keyed
+  history table), normalised to its own peak value across the sweep (100\% =
+  that suite's best threshold). Each curve is over the suite's full trace
+  set; SPEC is SimPoint-weighted. GMS is omitted: it crosses from negative to
+  positive across the sweep, so normalising by its (small, positive) peak
+  produces extreme, uninformative percentages; its absolute behaviour is
+  discussed in the text below.}
 \label{fig:doa_thd}
 \end{figure}
 
@@ -753,45 +757,62 @@ uniformly.
 
 \begin{figure}[t!]
 \centering
-\includegraphics[width=\linewidth]{../plots/size_sensitivity.png}
-\caption{\llc history table size sensitivity per suite (\srrip-Live,
-  $\theta{=}6/10$, tiered replacement). Y-axis: absolute geomean IPC speedup
-  vs pure \srrip. Open markers at~$\infty$ show the true unbounded result
-  (same binary, no capacity limit).}
+\includegraphics[width=\linewidth]{../plots/lru_live_size_sensitivity.png}
+\caption{\llc history table size sensitivity for \lru-Live, at each suite's own
+  optimal $\theta_{\mathrm{doa}}$ (GAP=2, Ligra=4, QMM=8, ML/Google/SPEC=30).
+  Y-axis: each suite's geomean IPC speedup vs.\ plain \lru at that capacity,
+  normalised to its own speedup at 16{,}384 entries (100\% = the unbounded
+  ceiling). GMS is omitted: its guidance contribution is marginal even at
+  its own best threshold ($+0.23\%$), too small to say anything meaningful
+  about capacity sensitivity.}
 \label{fig:size_sensitivity}
 \end{figure}
 
 Figure~\ref{fig:doa_thd} sweeps the DoA threshold $\theta_{\mathrm{doa}}$ for
-\srrip-Live on every suite, reported as geomean IPC speedup over pure \srrip.
-Three behaviours emerge. GAP --- the largest single-suite gain --- peaks sharply
-at $\theta_{\mathrm{doa}}=6$ ($+6.1\%$) and declines as the threshold rises,
-because its mostly-alive blocks are misclassified \doa when the counter saturates
-too slowly. Most suites instead rise monotonically and plateau by
-$\theta_{\mathrm{doa}}\approx16$ (SPEC, GMS, Google, QMM, ML), where a higher bar
-suppresses spurious \doa classifications at a small cost in responsiveness. ML
-shows the cost of an over-aggressive threshold directly: at $\theta_{\mathrm{doa}}=2$
-it loses $-5.8\%$, recovering to $+1.7\%$ by $\theta_{\mathrm{doa}}=4$. Ligra is
-the holdout, remaining slightly negative until $\theta_{\mathrm{doa}}\approx25$.
-We adopt $\theta_{\mathrm{doa}}=6$ as the default: it captures GAP's optimum and
-sits within ${\approx}1\%$ of the plateau for the SPEC and server suites, trading
-a small amount of headroom on the graph suites for robustness on the suite with
-the most to gain.
+\lru-Live on every suite, each curve normalised to that suite's own peak
+speedup across the sweep. GAP, ML, and QMM peak at the lowest threshold
+tested ($\theta_{\mathrm{doa}}=2$, $100\%$ by construction) and decline
+monotonically as the threshold rises, reaching $69.7\%$, $87.3\%$, and
+$61.8\%$ of peak respectively by $\theta_{\mathrm{doa}}=30$: a lower bar
+classifies blocks \doa sooner, so these suites are best served by the most
+aggressive setting available. SPEC, Google, and Ligra instead stay within
+${\approx}10$ points of their peak across the whole sweep, each reaching
+$100\%$ (or within noise of it) around $\theta_{\mathrm{doa}}=6$. GMS is the
+exception that benefits from a \emph{higher} threshold, and is omitted from
+the figure for exactly that reason (see caption): in absolute terms it is
+clearly harmful at $\theta_{\mathrm{doa}}=2$ ($-0.58\%$), crosses to roughly
+breakeven by $\theta_{\mathrm{doa}}=6$ ($-0.05\%$), and keeps improving
+through $\theta_{\mathrm{doa}}=30$ ($+0.23\%$). We adopt
+$\theta_{\mathrm{doa}}=6$ as the default: it sits at or near $100\%$ of peak
+for the flat suites, still retains most of the early gain for the declining
+suites ($85.7\%$, $97.2\%$, and $89.4\%$ of peak for GAP, ML, and QMM), and
+is the point where GMS stops being clearly harmful --- a reasonable single
+compromise across suites whose optima otherwise point in opposite
+directions.
 
-We sweep the \llc history table capacity from 8 to 4096 entries (\srrip-Live,
-$\theta_\text{LLC}{=}6$, $\theta_\text{dead}{=}10$, tiered table replacement).
-The y-axis is the absolute geomean IPC speedup over pure \srrip.
+We sweep the \llc history table capacity from 8 to 16{,}384 entries
+(\lru-Live, each suite at its own optimal $\theta_{\mathrm{doa}}$ from
+Figure~\ref{fig:doa_thd}, tiered table replacement), normalising each suite's
+curve to its own speedup at cap=16{,}384 (treated as the unbounded ceiling,
+$100\%$). GMS is omitted: even at its own best threshold its guidance
+contribution is marginal ($+0.23\%$, Figure~\ref{fig:doa_thd}), too small to
+say anything meaningful about capacity sensitivity.
 
-Figure~\ref{fig:size_sensitivity} reveals three qualitatively different behaviours.
-GAP and ML converge to their unbounded speedup by cap=32--64: their \doa traffic
-is concentrated in only a handful of PCs (Table~\ref{tab:concentration}), so a
-tiny table captures the entire signal.
-QMM needs a much larger table: at cap=8 the benefit is negligible (${\approx}0\%$),
-growing monotonically to $+1.5\%$ at cap=4096, because QMM's \doa traffic is
-spread across ${\sim}35$K unique PCs and warm-misses at small capacities keep
-those PCs mis-classified as mostly-alive.
-GMS and Ligra show no net benefit from liveness guidance at any table size
-($-0.6\%$ and $-2.0\%$ throughout), consistent with their near-zero or negative
-replacement-guidance contribution in Figure~\ref{fig:live_vs_base}.
+Figure~\ref{fig:size_sensitivity} shows two qualitatively different
+behaviours. GAP, Ligra, and ML reach ${\approx}90\%$ of their ceiling by
+cap=32 and are within noise of $100\%$ by cap=256 ($86.7\%\to98.2\%\to99.2\%$,
+$81.5\%\to93.3\%\to99.7\%$, and $87.9\%\to100.5\%\to99.6\%$ respectively, from
+cap=8 to 32 to 256): their \doa traffic is concentrated in only a handful of
+PCs (Table~\ref{tab:concentration}), so a small table already captures nearly
+the whole signal. SPEC needs more capacity and is noisier along the
+way (dipping to $41.6\%$ at cap=64 after reaching $70.8\%$ at cap=16), but
+still reaches $91.7\%$ by cap=256 and is effectively converged by cap=1024.
+QMM and Google are qualitatively different: both stay below $20\%$ of their
+ceiling through cap=256 and don't cross $50\%$ until cap=2K--4K, only
+reaching their full gain at the largest capacity tested, because their \doa
+traffic is spread across tens of thousands of unique PCs and small capacities
+evict most of those PCs before they accumulate enough evidence to be
+classified \doa.
 
 \begin{figure*}[t!]
 \centering
@@ -1051,7 +1072,7 @@ per-PC entry aggregates every fill issued by the same load instruction into a
 single counter, whereas a per-address entry on these workloads is rarely
 updated more than once before its block is evicted.
 
-SPEC (DPC3) is the exception: per-PC guidance alone reaches only $+0.40\%$,
+SPEC is the exception: per-PC guidance alone reaches only $+0.40\%$,
 and per-address edges slightly ahead at $+0.73\%$. This is a marked change
 from the combined bypass\,+\,replacement result (\S\ref{sec:perf}), where
 per-PC led SPEC by $+17.3\%$ to $+3.0\%$ --- indicating that per-PC's
