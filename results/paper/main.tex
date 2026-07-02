@@ -146,8 +146,9 @@ traffic. Table~\ref{tab:concentration} reports, under \lru, how many PCs
 are needed to cover 90\% of LLC \doa evictions. For GAP, GMS, ML and Ligra a mean of
 only 3--6 PCs suffices, and no single trace needs more than 14. SPEC averages
 $\sim$97 but ranges from 1 to 4833 PCs across traces, reflecting SPEC's
-heterogeneity. Only QMM consistently spreads its \doa traffic across thousands of
-PCs (3090--10504).
+heterogeneity. QMM and Google are the least concentrated: QMM spreads its \doa
+traffic across thousands of PCs (3090--10504), and Google across tens of
+thousands (246--49254), making it the most diffuse suite of all.
 
 This concentration is what lets a small per-\textsc{PC} history table capture
 the signal cheaply --- and it indicates that QMM might benefit from a larger table.
@@ -189,6 +190,7 @@ ML    & 1       & 4.6     & 10       \\
 Ligra & 2       & 5.6     & 14       \\
 SPEC  & 1       & 96.7    & 4{,}833  \\
 QMM   & 3{,}090 & 4{,}354 & 10{,}504 \\
+Google & 246    & 28{,}576 & 49{,}254 \\
 \bottomrule
 \end{tabular}
 \end{table}
@@ -532,8 +534,8 @@ avoid bypassing in those cases while applying it where fill latency remains low.
 A hardware history table is bounded in capacity; we fix it at 256~entries.
 For most suites this is ample: DoA traffic concentrates in fewer than
 15~PCs per trace (Table~\ref{tab:concentration}), so the table never fills.
-The exceptions are SPEC and QMM, where many PCs contribute DoA traffic and
-eviction pressure is real.
+The exceptions are SPEC, QMM, and Google, where many PCs contribute DoA
+traffic and eviction pressure is real.
 
 When the table is full and a new PC arrives, an existing entry must be
 removed.
@@ -553,9 +555,11 @@ is preserved at the cost of less-established entries, and a PC that
 accumulates enough dead evidence to cross a classification threshold
 automatically gains protection.
 
-We evaluate both on SPEC and QMM; the remaining five suites converge to their
-unbounded gain well below 256~entries, making the eviction policy immaterial
-there.
+We evaluate both on SPEC and QMM; the four graph and ML suites (GAP, GMS,
+Ligra, ML) converge to their unbounded gain well below 256~entries, making
+the eviction policy immaterial there. Google shares the wide-footprint
+profile of SPEC and QMM (Table~\ref{tab:concentration}) and is subject to
+the same eviction pressure.
 
 % ─────────────────────────────────────────────────────────────────────────────
 \section{Experimental Setup}
