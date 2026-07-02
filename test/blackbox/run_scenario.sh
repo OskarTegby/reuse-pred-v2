@@ -1,39 +1,12 @@
 #!/usr/bin/env bash
 #
-# Black-box scenario runner for the liveness replacement policies.
+# Black-box scenario runner for the liveness replacement policies. A scenario
+# is <policy>_<condition>_<trace>; see README for what each axis covers and
+# why these particular traces were picked.
 #
 #   Usage: run_scenario.sh <scenario>            # run + compare
 #          GENERATE=1 run_scenario.sh <scenario> # write reference output
 #          run_scenario.sh --list                # print every scenario name
-#
-# A scenario is  <policy>_<condition>_<trace>  and names a binary + environment,
-# run on one real trace (50M warmup + 100M sim). The runner captures the entire
-# ChampSim report, strips the one nondeterministic wall-clock line, and
-# byte-compares it against test/blackbox/expected/<scenario>.out.
-#
-# Design (see README): instead of isolating one knob on a synthetic trace, the
-# matrix exercises every mechanism we developed AND kept, on workloads where
-# that mechanism is actually active:
-#
-#   policies   : lru / srrip / ipv          (the three liveness policies)
-#   conditions : base   - the non-liveness baseline policy (own reference point)
-#                fixed  - liveness, single fixed insertion config (no dueling)
-#                bypass - liveness with DoA blocks bypassing the LLC
-#                duel   - liveness with set dueling (each policy's kept metric)
-#                addr   - liveness with per-ADDRESS history indexing (bounded 4K,
-#                         lfu_doa eviction) -- guards the per-address ablation used
-#                         in the paper and the bounded-table eviction path
-#   traces     : pr     - ligra PageRank      (graph DoA; bypass + aggressive arm)
-#                cactus - 607.cactuBSSN_s-3477B (many PCs -> history table active;
-#                                               temporal reuse -> gentle arm wins,
-#                                               cfgA by +55%; faster slice than 2421B)
-#                bwaves - 603.bwaves           (streaming -> bypass; ~4x faster to
-#                                               simulate than lbm, same coverage)
-#                qmm    - srv_12               (many PCs, different workload)
-#
-# Determinism makes the full-report reference sufficient: any change to winner
-# selection, tier classification, or eviction moves some counter and the diff
-# catches it -- no separate winner-flip / threshold / eviction asserts needed.
 #
 set -euo pipefail
 
@@ -50,7 +23,6 @@ POLICIES=(lru srrip ipv)
 CONDITIONS=(base fixed bypass duel addr)
 TRACE_KEYS=(pr cactus bwaves qmm)
 
-# --- trace key -> path --------------------------------------------------------
 trace_path() {
   case "$1" in
     pr)     echo "$ROOT/trace-files/ligra/ligra_PageRank.com-lj.ungraph.gcc_6.3.0_O3.drop_51000M.length_250M.champsimtrace.xz" ;;
@@ -61,38 +33,24 @@ trace_path() {
   esac
 }
 
-# --- emit every scenario name: <policy>_<condition>_<trace> ------------------
-# The single source of truth: CMakeLists.txt and the cluster drivers all call
-# this (via --list) instead of defining the matrix themselves.
 list_scenarios() {
   for p in "${POLICIES[@]}"; do for c in "${CONDITIONS[@]}"; do
     for t in "${TRACE_KEYS[@]}"; do echo "${p}_${c}_${t}"; done
   done; done
 }
 
-# --- split "<policy>_<condition>_<trace>" into the POL/COND/TRC globals ------
 parse_scenario() {
   IFS=_ read -r POL COND TRC <<< "$1"
 }
 
-# --- shared env-var fragments, reused across several (policy,condition) cells
-# Sets the globals BASE_ENV / ADDR_ENV / BYPASS_ENV / IPV_VEC, consumed by the
-# per-policy resolvers below.
 build_env_fragments() {
-  # liveness base shared by every non-baseline condition
   BASE_ENV=(THD_DOA=6 BHIST_MODE=pc SRRIP_LIVE_TARGET=llc)
-  # 'addr' condition: address-keyed history table, bounded to 4K with lfu_doa eviction.
   ADDR_ENV=(REPL_HIST_MODE=addr REPL_HIST_LLC_CAP=4096 REPL_HIST_REPL=lfu_doa)
-  # 'bypass' for SRRIP/IPV-Live: DoA blocks skip the LLC instead of being inserted.
-  # SRRIP_LIVE_TARGET=none turns off the in-cache liveness insert (so we flip it out
-  # of BASE_ENV) and LIVENESS_BYPASS=1 enables the bypass path. (LRU-Live expresses
-  # bypass differently, as the LRU_LIVE_DOA_INS=bypass insertion mode.)
+  # LRU-Live expresses bypass as an insertion mode instead; see resolve_lru_env.
   BYPASS_ENV=("${BASE_ENV[@]/SRRIP_LIVE_TARGET=llc/SRRIP_LIVE_TARGET=none}" LIVENESS_BYPASS=1)
-  # IPV-Live's kept "ilB" insertion vector.
   IPV_VEC=(IPV_DOA=0:1:2:2:3)
 }
 
-# -------- LRU-Live (bypass is an insertion mode; duel = latency metric) -----
 resolve_lru_env() {
   local cond="$1" scen="$2"
   case "$cond" in
@@ -105,7 +63,6 @@ resolve_lru_env() {
   esac
 }
 
-# -------- SRRIP-Live (bypass via TARGET=none; duel = hit-count/PSEL) --------
 resolve_srrip_env() {
   local cond="$1" scen="$2"
   case "$cond" in
@@ -118,7 +75,6 @@ resolve_srrip_env() {
   esac
 }
 
-# -------- IPV-Live (ilB fixed; duel = ins2-vs-ins3, latency metric) ---------
 resolve_ipv_env() {
   local cond="$1" scen="$2"
   case "$cond" in
@@ -131,9 +87,6 @@ resolve_ipv_env() {
   esac
 }
 
-# --- (policy, condition) -> binary + env --------------------------------------
-# Sets the globals BIN and ENVV by dispatching to the matching per-policy
-# resolver above.
 resolve_binary_and_env() {
   local pol="$1" cond="$2" scen="$3"
   build_env_fragments
@@ -146,37 +99,31 @@ resolve_binary_and_env() {
   esac
 }
 
-# --- bail out (exit 77 = ctest "skipped") if the binary or trace is missing --
+# 77 is ctest's SKIP_RETURN_CODE (see CMakeLists.txt).
 check_prereqs() {
   local bin_path="$1" trace="$2" scen="$3"
   [ -x "$bin_path" ] || { echo "SKIP $scen: binary not found: $bin_path" >&2; exit 77; }
   [ -f "$trace" ]    || { echo "SKIP $scen: trace not found: $trace"    >&2; exit 77; }
 }
 
-# --- run the binary under ENVV, writing the stripped report to `actual` ------
-# ${ENVV[@]+...} guard: expanding an empty array under `set -u` errors on
-# bash < 4.4 (the cluster), which the `base` condition (no env) would trip.
-# sed -u (line-buffered) is required, not cosmetic: ChampSim flushes every
-# heartbeat (std::endl), but without -u sed block-buffers its writes, so the
-# output file stays empty mid-run and incremental verification (check_progress.sh)
-# sees no progress until the process exits. -u streams each stripped line to the
-# file as it is produced. Output content is identical either way.
 run_binary() {
   local bin_path="$1" trace="$2" actual="$3"
+  # ${ENVV[@]+...}: expanding an empty array under `set -u` fails on bash < 4.4
+  # (the cluster), which the `base` condition (empty ENVV) would hit.
+  # sed -u: without line buffering, `actual` stays empty until the process
+  # exits, breaking check_progress.sh's incremental verification.
   env ${ENVV[@]+"${ENVV[@]}"} "$bin_path" \
       --warmup_instructions "$WARMUP" --simulation_instructions "$SIM" "$trace" 2>&1 \
     | sed -u -E 's/ \(Simulation time: [0-9]+ hr [0-9]+ min [0-9]+ sec\)//' \
     > "$actual"
 }
 
-# --- GENERATE=1: snapshot `actual` as the new reference, no comparison ------
 write_reference() {
   local actual="$1" reference="$2"
   cp "$actual" "$reference"
   echo "REFERENCE WRITTEN (no comparison): $reference"
 }
 
-# --- compare `actual` against `reference`; exit 1 with a diff on mismatch ---
 compare_to_reference() {
   local actual="$1" reference="$2" scen="$3"
   if [ ! -f "$reference" ]; then
