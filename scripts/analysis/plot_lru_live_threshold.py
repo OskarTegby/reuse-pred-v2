@@ -2,7 +2,7 @@
 """DoA threshold sensitivity for LRU-Live (vs LRU baseline).
 
 Per-suite geomean IPC speedup over plain LRU as a function of THD_DOA.
-DPC3 uses SimPoint-weighted geomean; all others use flat geomean.
+SPEC uses SimPoint-weighted geomean; all others use flat geomean.
 
 Data sources:
   numerator : allsuites_thd_phase{2,3}/llc/lru_live/doa{N}/{suite}/{trace}
@@ -36,7 +36,7 @@ THD = {
 }
 THRESHOLDS = sorted(THD)
 
-SUITES = {"dpc3": "DPC3 (SPEC)", "gap": "GAP", "gms": "GMS", "google": "Google",
+SUITES = {"dpc3": "SPEC", "gap": "GAP", "gms": "GMS", "google": "Google",
           "ligra": "Ligra", "ml": "ML", "qmm": "QMM"}
 WEIGHTED = {"dpc3"}
 COLORS  = {"dpc3": "#8c564b", "gap": "#1f77b4", "gms": "#ff7f0e", "google": "#17becf",
@@ -101,7 +101,7 @@ def main():
             continue
 
         ax.plot(xs, ys, color=COLORS[suite], marker=MARKERS[suite],
-                markersize=5, linewidth=1.6, label=f"{label} (n={len(common)})")
+                markersize=5, linewidth=1.6, label=label)
 
     ax.axhline(0, color="black", linewidth=0.6, alpha=0.3)
     ax.set_xlabel(r"DoA threshold $\theta_{\mathrm{doa}}$", fontsize=10)

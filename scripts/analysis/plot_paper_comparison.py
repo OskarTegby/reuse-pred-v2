@@ -14,7 +14,7 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
 
-SUITES   = ["GAP", "Ligra", "ML", "QMM", "Google", "DPC3", "GMS"]
+SUITES   = ["GAP", "Ligra", "ML", "QMM", "Google", "SPEC", "GMS"]
 PERPC    = [6.12, 4.95, 2.83, 2.53, 2.34, 0.40, -0.63]        # per-PC, unbounded
 PADDR    = [1.41, -0.03, 0.80, 0.76, -0.37, 0.73, -0.19]      # per-address, unbounded
 PADDR_4K = [-0.07, 0.0, 0.0, 0.17, 0.0, 0.0, -0.02]           # per-address, 4096-entry cap
