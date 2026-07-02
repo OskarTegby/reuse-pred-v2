@@ -56,6 +56,17 @@ def get_ipc(path):
     return None
 
 
+# Break the y-axis inside the empty band between the two panels. No suite has
+# a normalised value between GAP_LOW and GAP_HIGH at any theta, so nothing
+# real is hidden by the break itself. GAP_HIGH must stay below the lowest
+# real point above the gap (SPEC at theta=2, 24.1%). BOTTOM_MIN is capped at
+# -50 as requested; this does clip Google's most extreme points (-70.0% at
+# theta=2, -54.2% at theta=4) at the bottom frame edge.
+GAP_HIGH = 20
+GAP_LOW = 15
+BOTTOM_MIN = -50
+
+
 def main():
     fig, (ax_top, ax_bot) = plt.subplots(
         2, 1, sharex=True, figsize=(7, 5.2),
@@ -108,16 +119,27 @@ def main():
 
         xs = [thd for thd in THRESHOLDS if thd in vals]
         ys = [vals[thd] / peak * 100.0 for thd in THRESHOLDS if thd in vals]
+
+        # Segments that cross the empty gap between the two panels are drawn
+        # dashed (on both axes, naturally clipped to each one's ylim); segments
+        # that stay entirely within one panel's range are solid.
+        for i in range(len(xs) - 1):
+            x_seg, y_seg = xs[i:i + 2], ys[i:i + 2]
+            crossing = (min(y_seg) <= GAP_LOW) and (max(y_seg) >= GAP_HIGH)
+            style = "--" if crossing else "-"
+            for ax in (ax_top, ax_bot):
+                ax.plot(x_seg, y_seg, color=COLORS[suite], linestyle=style, linewidth=1.6)
         for ax in (ax_top, ax_bot):
             ax.plot(xs, ys, color=COLORS[suite], marker=MARKERS[suite],
-                    markersize=5, linewidth=1.6, label=label)
+                    markersize=5, linewidth=0, label=label)
 
-    ax_top.set_ylim(45, 102)
-    ax_bot.set_ylim(-78, 15)
+    ax_top.set_ylim(GAP_HIGH, 102)
+    ax_bot.set_ylim(BOTTOM_MIN, GAP_LOW)
     for ax in (ax_top, ax_bot):
         ax.set_xticks(THRESHOLDS)
         ax.tick_params(labelsize=9)
         ax.grid(axis="y", linestyle=":", alpha=0.4)
+    ax_bot.set_yticks([0, -25, -50])
     ax_top.spines["bottom"].set_visible(False)
     ax_bot.spines["top"].set_visible(False)
     ax_top.tick_params(labeltop=False, bottom=False)
@@ -134,9 +156,11 @@ def main():
 
     ax_bot.set_xlabel(r"DoA threshold $\theta_{\mathrm{doa}}$", fontsize=10)
     fig.text(0.02, 0.55, "% of peak speedup", va="center", rotation="vertical", fontsize=10)
-    ax_top.legend(frameon=False, fontsize=8, ncol=2, loc="lower left")
+    handles, labels = ax_top.get_legend_handles_labels()
+    fig.legend(handles, labels, frameon=False, fontsize=9, ncol=6,
+               loc="lower center", bbox_to_anchor=(0.53, -0.02))
 
-    fig.tight_layout(rect=(0.03, 0, 1, 1))
+    fig.tight_layout(rect=(0.03, 0.06, 1, 1))
     out = ROOT / "results" / "plots" / "lru_live_threshold_normalized_duel.png"
     fig.savefig(out, dpi=150, bbox_inches="tight")
     print("wrote", out)
