@@ -1414,6 +1414,9 @@ struct cache_stats {
   uint64_t doa          = 0;
   uint64_t mostly_dead  = 0;
   uint64_t mostly_alive = 0;
+  // Recency 4-state census (LIVENESS_CHAR only): indexed by BLOCK::eviction_state
+  // [0]=dead [1]=mid_lru [2]=mid_mru [3]=live.
+  uint64_t recency_state[4] = {};
   uint64_t doa_stlb_found    = 0; // LLC DoA evictions where STLB entry was present
   uint64_t doa_stlb_also_doa = 0; // of those, STLB entry also had accessed == false
 

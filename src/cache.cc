@@ -660,7 +660,18 @@ void CACHE::record_liveness_char(uint64_t pc, uint64_t install_cycle,
 
 void CACHE::print_liveness_char() const
 {
-  if (!liveness_char_enable || pc_liveness_char.empty())
+  if (!liveness_char_enable)
+    return;
+
+  // Recency 4-state census (ROI), indexed by BLOCK::eviction_state.
+  if (!roi_stats.empty()) {
+    const char* rv = std::getenv("RECENCY_VERSION");
+    const int ver = (rv && (rv[0] == '1' || rv[0] == '3')) ? (rv[0] - '0') : 2;
+    const auto& r = roi_stats.back().recency_state;
+    printf("%s RECENCY_STATE v=%d dead=%lu mid_lru=%lu mid_mru=%lu live=%lu\n", NAME.c_str(), ver, r[0], r[1], r[2], r[3]);
+  }
+
+  if (pc_liveness_char.empty())
     return;
 
   printf("%s LIVENESS_CHAR BEGIN\n", NAME.c_str());
@@ -864,9 +875,11 @@ bool CACHE::handle_fill(const PACKET& fill_mshr)
 
       if (way->valid) {
         sim_stats.back().evictions++;
-        if (liveness_char_enable)
+        if (liveness_char_enable) {
           record_liveness_char(way->ip, way->install_cycle, way->last_hit_cycle,
                                current_cycle, way->accessed);
+          sim_stats.back().recency_state[way->eviction_state]++;
+        }
         if (!way->accessed) {
           sim_stats.back().doa++;
           // LLC only: reverse-STLB lookup — find the STLB entry for this block's
@@ -1398,6 +1411,8 @@ void CACHE::end_phase(unsigned finished_cpu)
   roi_stats.back().mostly_alive = sim_stats.back().mostly_alive;
   roi_stats.back().doa_stlb_found    = sim_stats.back().doa_stlb_found;
   roi_stats.back().doa_stlb_also_doa = sim_stats.back().doa_stlb_also_doa;
+  for (int i = 0; i < 4; ++i)
+    roi_stats.back().recency_state[i] = sim_stats.back().recency_state[i];
 
   // History table utilisation stats (accumulated since begin_phase reset).
   {

@@ -1,5 +1,4 @@
 #include <algorithm>
-#include <array>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
@@ -47,9 +46,6 @@ int recency_version()
   return v;
 }
 
-// Per-cache eviction tally by final state (the classification we report).
-std::map<CACHE*, std::array<uint64_t, 4>> st_count;
-
 // The four liveness states, ordered dead -> live (the 2-bit value on each block).
 enum RState : uint8_t { DEAD = 0, MID_LRU = 1, MID_MRU = 2, LIVE = 3 };
 
@@ -90,12 +86,7 @@ uint8_t next_state(uint8_t cur, uint32_t r, uint32_t n)
 }
 } // namespace
 
-void CACHE::initialize_replacement()
-{
-  ::last_used_cycles[this] = std::vector<uint64_t>(NUM_SET * NUM_WAY);
-  if (char_enabled())
-    ::st_count[this] = {};
-}
+void CACHE::initialize_replacement() { ::last_used_cycles[this] = std::vector<uint64_t>(NUM_SET * NUM_WAY); }
 
 uint32_t CACHE::find_victim(uint32_t triggering_cpu, uint64_t instr_id, uint32_t set, const BLOCK* current_set, uint64_t ip, uint64_t full_addr, uint32_t type)
 {
@@ -106,14 +97,7 @@ uint32_t CACHE::find_victim(uint32_t triggering_cpu, uint64_t instr_id, uint32_t
   auto victim = std::min_element(begin, end);
   assert(begin <= victim);
   assert(victim < end);
-  const auto way = static_cast<uint32_t>(std::distance(begin, victim)); // cast protected by prior asserts
-
-  // Tally the outgoing block's final state. Only real evictions (a valid resident
-  // block) count, so cold-start fills into empty ways are excluded.
-  if (char_enabled() && current_set[way].valid)
-    ::st_count[this][current_set[way].eviction_state]++;
-
-  return way;
+  return static_cast<uint32_t>(std::distance(begin, victim)); // cast protected by prior asserts
 }
 
 void CACHE::update_replacement_state(uint32_t triggering_cpu, uint32_t set, uint32_t way, uint64_t full_addr, uint64_t ip, uint64_t victim_addr, uint32_t type,
@@ -143,13 +127,4 @@ void CACHE::update_replacement_state(uint32_t triggering_cpu, uint32_t set, uint
   }
 }
 
-void CACHE::replacement_final_stats()
-{
-  if (!char_enabled())
-    return;
-  auto it = ::st_count.find(this);
-  if (it == ::st_count.end())
-    return;
-  const auto& c = it->second;
-  printf("%s RECENCY_STATE v=%d dead=%lu mid_lru=%lu mid_mru=%lu live=%lu\n", NAME.c_str(), recency_version(), c[0], c[1], c[2], c[3]);
-}
+void CACHE::replacement_final_stats() {}
