@@ -355,7 +355,7 @@ that edit was uncommitted and never produced a working figure.
 
 ---
 
-## Figure 2 — `fig:doa_thd` (`results/plots/lru_live_threshold.png`)
+## Figure 2 — `fig:doa_thd` (`results/plots/lru_live_threshold_normalized.png`)
 
 > **Corrected 2026-07-02.** This figure and Figure 3 were switched from
 > SRRIP-Live/vs-SRRIP to LRU-Live/vs-LRU on 2026-07-01, but the regenerated PNGs
@@ -367,26 +367,38 @@ that edit was uncommitted and never produced a working figure.
 > sitting locally and unused: `scripts/analysis/plot_lru_live_threshold.py`
 > (committed, but never wired into the paper) reads
 > `results/allsuites_thd_phase{2,3}_202606{17,18}_*/llc/lru_live/doa{N}` (all
-> thresholds present, including 6) against `results/baselines/lru/{suite}`. Ran
-> it directly; no new data collection needed.
+> thresholds present, including 6) against `results/baselines/lru/{suite}`. That
+> script produces the plain absolute-speedup version and was intentionally left
+> unmodified (it "was already fine"). Per author direction the figure actually
+> used in the paper is normalised the same way as Figure 3 — each suite to its
+> own peak across the sweep — so a second script,
+> `plot_lru_live_threshold_normalized.py`, was added rather than changing the
+> first one's style. GMS is excluded from the normalized figure: it crosses
+> from negative to positive across the sweep, so dividing by its small
+> positive peak produces extreme, uninformative percentages (as low as
+> $-250\%$); its absolute behaviour is still covered in the prose.
 
 ### Regeneration
 ```bash
-python3 scripts/analysis/plot_lru_live_threshold.py
+python3 scripts/analysis/plot_lru_live_threshold_normalized.py
 ```
-Output: `results/plots/lru_live_threshold.png`. All source directories are
-present locally (see script docstring for exact paths).
+Output: `results/plots/lru_live_threshold_normalized.png`. All source
+directories are present locally (see script docstring for exact paths).
+`plot_lru_live_threshold.py` (absolute, all 7 suites, unmodified) remains
+available for reference but is not used by the paper.
 
 ### What changed from the superseded SRRIP-Live version
 
 The old figure claimed GAP "peaks sharply at $\theta_{\mathrm{doa}}=6$" and
 motivated the default on that basis. The real LRU-Live data shows a different
-shape: GAP, ML, and QMM peak at $\theta_{\mathrm{doa}}=2$ and decline
-monotonically; SPEC, Google, and Ligra are flat/noisy with a local peak near
-6; GMS is the one that improves with a *higher* threshold, crossing from
-negative to positive around 6. The $\theta_{\mathrm{doa}}=6$ default is
-still adopted, but the prose now argues for it as a cross-suite compromise
-rather than a single suite's peak.
+shape: GAP, ML, and QMM peak at $\theta_{\mathrm{doa}}=2$ (100% by
+construction in the normalised figure) and decline monotonically; SPEC,
+Google, and Ligra stay within ${\approx}10$ points of their own peak
+throughout, each reaching it (or within noise of it) around
+$\theta_{\mathrm{doa}}=6$; GMS is the one that improves with a *higher*
+threshold, crossing from negative to positive around 6 in absolute terms.
+The $\theta_{\mathrm{doa}}=6$ default is still adopted, but the prose now
+argues for it as a cross-suite compromise rather than a single suite's peak.
 
 ---
 
