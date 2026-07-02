@@ -1,7 +1,7 @@
 # Figure Provenance
 
 Per-figure and per-table regeneration recipes for the current HPCA 2026 paper
-(`results/paper/main.tex`, branch `maz-morph-unbounded`), each pinned to an exact
+(`results/paper/main.tex`, branch `main`), each pinned to an exact
 commit, binary, config, and the cluster commands used to produce the data. This is the
 canonical reference for data status and regeneration — the paper itself carries no
 inline [DATA] notes.
@@ -14,6 +14,20 @@ longer exist.
 ---
 
 ## Figure 1 — `fig:liveness` (`results/plots/liveness_per_policy.png`)
+
+> **Corrected 2026-07-02.** The `RAW` dict's LRU and SRRIP entries were re-extracted
+> and found ~2x inflated. The original numbers summed the per-PC `LLC LIVENESS_CHAR
+> BEGIN...END` dump, whose backing map (`pc_liveness_char`) had no phase reset — it
+> silently accumulated warmup evictions into the ROI total (fixed in
+> `fix-pc-liveness-phase-reset`, commit `b0d1c047391e`). The correct source, always
+> available in the same result files, is the `LLC LIVENESS EVICTIONS: ... DOA: ...
+> MOSTLY_DEAD: ... MOSTLY_ALIVE: ...` line (`roi_stats`-derived, properly reset every
+> phase) — no reruns were needed, only re-parsing the existing directories below.
+> IPV's original numbers matched this re-extraction exactly (verified byte-for-byte
+> per trace) and are unchanged. The qualitative narrative below (DoA dominance, SRRIP
+> raising DoA over LRU, IPV lowering DoA but inflating mostly-dead) still holds after
+> the correction; only magnitudes shifted per suite (typically 1-2 points of
+> percentage, since numerator and denominator both scaled down together).
 
 > **Updated 2026-06-19.** The paper's Figure 1 was changed from the LRU-only two-panel
 > `liveness_rates.png` (LLC + STLB breakdown under LRU) to the per-policy grouped bar

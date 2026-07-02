@@ -3,8 +3,10 @@
 Plot LLC liveness breakdown (DoA / mostly-dead / mostly-alive) for LRU, SRRIP,
 and IPV baseline policies, grouped by benchmark suite.
 
-Parses LLC LIVENESS_CHAR BEGIN/END blocks and sums per-PC counts across all
-traces in a suite, then plots fractions as grouped stacked bars.
+Sums the per-suite "LLC LIVENESS EVICTIONS: <total> DOA: <n> ... MOSTLY_DEAD:
+<n> ... MOSTLY_ALIVE: <n>" line (roi_stats-derived, properly reset every
+phase) across all traces in a suite, then plots fractions as grouped stacked
+bars.
 
 Output: results/plots/liveness_per_policy.png
 """
@@ -22,9 +24,14 @@ ROOT    = os.path.join(os.path.dirname(__file__), "..", "..")
 RESULTS = os.path.join(ROOT, "results")
 OUT     = os.path.join(RESULTS, "plots", "liveness_per_policy.png")
 
-# Pre-aggregated counts extracted from the cluster via extract_liveness.py.
-# Raw JSON: {policy: {suite: {total, doa, dead, alive}}}
-RAW = {"SRRIP": {"QMM": {"alive": 954872, "dead": 2292342, "doa": 12267811, "total": 15515025}, "Google": {"alive": 5161125, "dead": 15806605, "doa": 93794044, "total": 114761774}, "Ligra": {"alive": 813555, "dead": 1401325, "doa": 67855034, "total": 70069914}, "GAP": {"alive": 2575798, "dead": 3718494, "doa": 37498819, "total": 43793111}, "DPC3": {"alive": 1944355, "dead": 18362552, "doa": 193923034, "total": 214229941}, "ML": {"alive": 274944, "dead": 3670462, "doa": 207881836, "total": 211827242}, "GMS": {"alive": 301305, "dead": 712288, "doa": 11331515, "total": 12345108}}, "LRU": {"QMM": {"alive": 2223089, "dead": 3274940, "doa": 11758430, "total": 17256459}, "Google": {"alive": 9951139, "dead": 19866776, "doa": 90448638, "total": 120266553}, "Ligra": {"alive": 1609055, "dead": 2088356, "doa": 67570606, "total": 71268017}, "GAP": {"alive": 5315268, "dead": 6590177, "doa": 36288285, "total": 48193730}, "DPC3": {"alive": 4008823, "dead": 20787348, "doa": 194570673, "total": 219366844}, "ML": {"alive": 503657, "dead": 3731813, "doa": 207100693, "total": 211336163}, "GMS": {"alive": 497336, "dead": 975678, "doa": 11341448, "total": 12814462}}, "IPV": {"QMM": {"alive": 534750, "dead": 2850628, "doa": 4857472, "total": 8242850}, "Google": {"alive": 2951306, "dead": 16629414, "doa": 38059767, "total": 57640487}, "Ligra": {"alive": 510751, "dead": 14413884, "doa": 20547707, "total": 35472342}, "GAP": {"alive": 1415119, "dead": 6268235, "doa": 14146119, "total": 21829473}, "DPC3": {"alive": 1103132, "dead": 33231526, "doa": 73215338, "total": 107549996}, "ML": {"alive": 136913, "dead": 2975735, "doa": 103407558, "total": 106520206}, "GMS": {"alive": 182778, "dead": 538147, "doa": 5869961, "total": 6590886}}}
+# Re-extracted 2026-07-02 from the same source directories (see
+# FIGURE_PROVENANCE.md). The original RAW here (see git history) summed the
+# per-PC "LLC LIVENESS_CHAR BEGIN...END" dump instead of this line -- that
+# dump was warmup+ROI cumulative (pc_liveness_char had no phase reset, fixed
+# in fix-pc-liveness-phase-reset / commit b0d1c047391e), inflating LRU and
+# SRRIP counts by ~2x. IPV's original numbers matched this re-extraction
+# exactly (verified byte-for-byte) and are unchanged.
+RAW = {"SRRIP": {"QMM": {"alive": 523648, "dead": 1309086, "doa": 6405421, "total": 8238155}, "Google": {"alive": 2801205, "dead": 8442057, "doa": 46382134, "total": 57625396}, "Ligra": {"alive": 502087, "dead": 958339, "doa": 34011916, "total": 35472342}, "GAP": {"alive": 1373678, "dead": 1951856, "doa": 18503939, "total": 21829473}, "DPC3": {"alive": 1015601, "dead": 10282550, "doa": 96264282, "total": 107562433}, "ML": {"alive": 110256, "dead": 1903896, "doa": 104506072, "total": 106520224}, "GMS": {"alive": 176645, "dead": 448012, "doa": 5966229, "total": 6590886}}, "LRU": {"QMM": {"alive": 1207365, "dead": 1749802, "doa": 6297828, "total": 9254995}, "Google": {"alive": 5175141, "dead": 10723120, "doa": 44766468, "total": 60664729}, "Ligra": {"alive": 995839, "dead": 1459344, "doa": 33809284, "total": 36264467}, "GAP": {"alive": 2807130, "dead": 3458943, "doa": 17918181, "total": 24184254}, "DPC3": {"alive": 2040753, "dead": 11394670, "doa": 96889207, "total": 110324630}, "ML": {"alive": 219559, "dead": 1906611, "doa": 104171423, "total": 106297593}, "GMS": {"alive": 272688, "dead": 613624, "doa": 5988136, "total": 6874448}}, "IPV": {"QMM": {"alive": 534750, "dead": 2850628, "doa": 4857472, "total": 8242850}, "Google": {"alive": 2951306, "dead": 16629414, "doa": 38059767, "total": 57640487}, "Ligra": {"alive": 510751, "dead": 14413884, "doa": 20547707, "total": 35472342}, "GAP": {"alive": 1415119, "dead": 6268235, "doa": 14146119, "total": 21829473}, "DPC3": {"alive": 1103132, "dead": 33231526, "doa": 73215338, "total": 107549996}, "ML": {"alive": 136913, "dead": 2975735, "doa": 103407558, "total": 106520206}, "GMS": {"alive": 182778, "dead": 538147, "doa": 5869961, "total": 6590886}}}
 
 SUITES   = ["DPC3", "GAP", "GMS", "Google", "Ligra", "ML", "QMM"]
 POLICIES = ["LRU", "SRRIP", "IPV"]
