@@ -31,8 +31,8 @@ STUCK_TIMEOUT=900   # seconds of no output progress before a *running* bb job is
                    # treated as hung and cancelled, so the verify loop can finish.
 RELEASED=0
 
-# Get the scenario list from run_scenario.sh --list instead of copying it here.
-mapfile -t SCENARIOS < <(bash "$REPO/test/blackbox/run_scenario.sh" --list)
+# Get the scenario list from run_scenario.py --list instead of copying it here.
+mapfile -t SCENARIOS < <(python3 "$REPO/test/blackbox/run_scenario.py" --list)
 
 # Run a command on castillo via the abdet jump host.
 # The command is base64-encoded so it survives two layers of SSH quoting intact

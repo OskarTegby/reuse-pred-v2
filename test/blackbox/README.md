@@ -31,7 +31,7 @@ runner executes ChampSim on that trace (50M warmup + 100M sim), strips the one
 nondeterministic line (the wall-clock `Simulation time` suffix), and byte-diffs
 the **entire** report against `expected/<scenario>.out`.
 
-`run_scenario.sh --list` enumerates all scenarios. `CMakeLists.txt`,
+`run_scenario.py --list` enumerates all scenarios. `CMakeLists.txt`,
 `blackbox_validation.sh`, and `blackbox_run_cluster.sh` all call it to get their
 lists, rather than defining the matrix a second time.
 
@@ -124,6 +124,6 @@ reviewable alongside what caused it.
 
 ## Adding a policy, condition, or trace
 
-Edit the `POLICIES` / `CONDITIONS` / `TRACE_KEYS` arrays and the corresponding
-`case` arm (and `trace_path`/`trace_dead`) in `run_scenario.sh`, then regenerate
-the reference outputs. The CMake and cluster lists update themselves via `--list`.
+Edit the `POLICIES` / `CONDITIONS` / `TRACE_KEYS` lists and the corresponding
+resolver (and `TRACE_PATHS`) in `run_scenario.py`, then regenerate the reference
+outputs. The CMake and cluster lists update themselves via `--list`.
