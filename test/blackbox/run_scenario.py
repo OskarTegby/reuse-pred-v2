@@ -106,6 +106,10 @@ SCENARIO_MATRIX = {
 }
 
 
+def fragment_value(frag):
+    return frag if isinstance(frag, dict) else STATIC_FRAGMENTS[frag]
+
+
 def resolve_binary_and_env(pol, cond):
     entry = SCENARIO_MATRIX.get(pol, {}).get(cond)
     if entry is None:
@@ -113,7 +117,7 @@ def resolve_binary_and_env(pol, cond):
     binary, fragments = entry
     env = {}
     for frag in fragments:
-        env.update(frag if isinstance(frag, dict) else STATIC_FRAGMENTS[frag])
+        env.update(fragment_value(frag))
     return binary, env
 
 
@@ -166,39 +170,43 @@ def compare_to_reference(actual_path, reference_path, scen):
     sys.exit(1)
 
 
-def main(argv):
-    if len(argv) > 1 and argv[1] == "--list":
-        print("\n".join(list_scenarios()))
-        return 0
-
-    if len(argv) < 2:
-        sys.stderr.write("usage: run_scenario.py <policy>_<condition>_<trace>  (or --list)\n")
-        return 2
-    scen = argv[1]
-
+def resolve_scenario(scen):
+    """Parse+resolve a scenario name to (bin_path, trace, envv), or None
+    (having written a message to stderr) if any part of it is unknown."""
     parsed = parse_scenario(scen)
     if parsed is None:
         sys.stderr.write("unknown scenario '%s'\n" % scen)
-        return 2
+        return None
     pol, cond, trc = parsed
 
     if trc not in TRACE_PATHS:
         sys.stderr.write("unknown trace key in '%s'\n" % scen)
-        return 2
-    trace = os.environ.get("TRACE") or TRACE_PATHS[trc]
+        return None
 
     binary, envv = resolve_binary_and_env(pol, cond)
     if binary is None:
-        sys.stderr.write("run_scenario.py: unknown scenario '%s'\n" % scen)
-        return 2
+        sys.stderr.write("unknown scenario '%s'\n" % scen)
+        return None
 
+    trace = os.environ.get("TRACE") or TRACE_PATHS[trc]
     bin_path = os.path.join(BIN_DIR, binary)
+    return bin_path, trace, envv
+
+
+def ensure_dir(path):
+    if not os.path.isdir(path):
+        os.makedirs(path)
+
+
+def run_scenario(scen):
+    resolved = resolve_scenario(scen)
+    if resolved is None:
+        return 2
+    bin_path, trace, envv = resolved
     check_prereqs(bin_path, trace, scen)
 
-    if not os.path.isdir(OUT_DIR):
-        os.makedirs(OUT_DIR)
-    if not os.path.isdir(EXPECTED_DIR):
-        os.makedirs(EXPECTED_DIR)
+    ensure_dir(OUT_DIR)
+    ensure_dir(EXPECTED_DIR)
     actual_path = os.path.join(OUT_DIR, scen + ".out")
     reference_path = os.path.join(EXPECTED_DIR, scen + ".out")
 
@@ -210,6 +218,16 @@ def main(argv):
 
     compare_to_reference(actual_path, reference_path, scen)
     return 0
+
+
+def main(argv):
+    if len(argv) > 1 and argv[1] == "--list":
+        print("\n".join(list_scenarios()))
+        return 0
+    if len(argv) < 2:
+        sys.stderr.write("usage: run_scenario.py <policy>_<condition>_<trace>  (or --list)\n")
+        return 2
+    return run_scenario(argv[1])
 
 
 if __name__ == "__main__":
