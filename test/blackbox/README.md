@@ -31,9 +31,9 @@ runner executes ChampSim on that trace (50M warmup + 100M sim), strips the one
 nondeterministic line (the wall-clock `Simulation time` suffix), and byte-diffs
 the **entire** report against `expected/<scenario>.out`.
 
-`run_scenario.sh --list` enumerates all scenarios and is the single source of
-truth — `CMakeLists.txt`, `blackbox_validation.sh`, and `blackbox_run_cluster.sh`
-all derive their lists from it.
+`run_scenario.sh --list` enumerates all scenarios. `CMakeLists.txt`,
+`blackbox_validation.sh`, and `blackbox_run_cluster.sh` all call it to get their
+lists, rather than defining the matrix a second time.
 
 ## Why the full-report reference is enough
 

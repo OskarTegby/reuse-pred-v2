@@ -31,7 +31,7 @@ STUCK_TIMEOUT=900   # seconds of no output progress before a *running* bb job is
                    # treated as hung and cancelled, so the verify loop can finish.
 RELEASED=0
 
-# Scenario list is owned by run_scenario.sh (--list), the single source of truth.
+# Get the scenario list from run_scenario.sh --list instead of copying it here.
 mapfile -t SCENARIOS < <(bash "$REPO/test/blackbox/run_scenario.sh" --list)
 
 # Run a command on castillo via the abdet jump host.

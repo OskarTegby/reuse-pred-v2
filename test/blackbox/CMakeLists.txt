@@ -17,7 +17,8 @@ function(cs_scenario name)
 endfunction()
 
 # ---- scenarios (policy x condition x trace) ----
-# run_scenario.sh --list is the single source of truth; keep this in lockstep.
+# Scenario names come from run_scenario.sh --list, not a copy of the matrix
+# here, so this file never falls out of sync with the actual list.
 execute_process(
   COMMAND bash ${RUNNER} --list
   OUTPUT_VARIABLE SCENARIO_LIST
