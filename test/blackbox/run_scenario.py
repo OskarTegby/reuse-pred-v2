@@ -12,12 +12,11 @@
 # because that is the interpreter available on the cluster (Castillo) where
 # the full-size runs execute.
 
-import difflib
 import os
 import shutil
-import subprocess
 import sys
 
+from fileutils import ensure_dir, stream_subprocess_to_file, diff_lines
 from scenario_config import (
     BIN_DIR, EXPECTED_DIR, OUT_DIR, WARMUP, SIM,
     POLICIES, CONDITIONS, TRACE_KEYS, TRACE_PATHS,
@@ -70,15 +69,8 @@ def run_binary(bin_path, trace, env_vars, actual_path):
     env.update(env_vars)
     cmd = [bin_path, "--warmup_instructions", WARMUP,
            "--simulation_instructions", SIM, trace]
-    proc = subprocess.Popen(cmd, env=env, stdout=subprocess.PIPE,
-                             stderr=subprocess.STDOUT, universal_newlines=True, bufsize=1)
-    # Written line-by-line with an immediate flush (not buffered until exit) so
-    # check_progress.sh's incremental verification can see progress mid-run.
-    with open(actual_path, "w") as out:
-        for line in proc.stdout:
-            out.write(WALLCLOCK_RE.sub("", line))
-            out.flush()
-    proc.wait()
+    stream_subprocess_to_file(cmd, env, actual_path,
+                               lambda line: WALLCLOCK_RE.sub("", line))
 
 
 def write_reference(actual_path, reference_path):
@@ -91,15 +83,10 @@ def compare_to_reference(actual_path, reference_path, scen):
         sys.stderr.write("FAIL %s: no reference file (%s). Run with GENERATE=1 to create it.\n"
                           % (scen, reference_path))
         sys.exit(1)
-    with open(reference_path) as f:
-        reference_lines = f.readlines()
-    with open(actual_path) as f:
-        actual_lines = f.readlines()
-    if reference_lines == actual_lines:
+    diff = diff_lines(reference_path, actual_path)
+    if diff is None:
         print("PASS %s" % scen)
         return
-    diff = difflib.unified_diff(reference_lines, actual_lines,
-                                 fromfile=reference_path, tofile=actual_path)
     sys.stdout.writelines(diff)
     sys.stderr.write("FAIL %s: output diverged from reference\n" % scen)
     sys.exit(1)
@@ -128,11 +115,6 @@ def resolve_scenario(scen):
     trace = os.environ.get("TRACE") or TRACE_PATHS[trc]
     bin_path = os.path.join(BIN_DIR, binary)
     return bin_path, trace, env_vars
-
-
-def ensure_dir(path):
-    if not os.path.isdir(path):
-        os.makedirs(path)
 
 
 def output_paths(scen):
