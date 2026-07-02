@@ -743,16 +743,19 @@ uniformly.
 
 \begin{figure}[t!]
 \centering
-\includegraphics[width=\linewidth]{../plots/lru_live_threshold_normalized.png}
-\caption{Per-suite DoA threshold sensitivity for \lru-Live: each suite's
-  geomean IPC speedup over plain \lru as a function of $\theta_{\mathrm{doa}}$
+\includegraphics[width=\linewidth]{../plots/lru_live_threshold_normalized_duel.png}
+\caption{Per-suite DoA threshold sensitivity for \lru-Live \emph{with set
+  dueling} (latency metric, cfgA=2n3 vs.\ cfgB=lru): each suite's geomean IPC
+  speedup over plain \lru as a function of $\theta_{\mathrm{doa}}$
   (\llc-only guidance, mode-5 falling-weight scoring, unbounded PC-keyed
   history table), normalised to its own peak value across the sweep (100\% =
-  that suite's best threshold). Each curve is over the suite's full trace
-  set; SPEC is SimPoint-weighted. GMS is omitted: it crosses from negative to
-  positive across the sweep, so normalising by its (small, positive) peak
-  produces extreme, uninformative percentages; its absolute behaviour is
-  discussed in the text below.}
+  that suite's best threshold). Y-axis is broken to show Google's and SPEC's
+  negative/near-zero low-$\theta$ values without compressing the other four
+  suites. Each curve is over the suite's full trace set; SPEC is
+  SimPoint-weighted. GMS is omitted: it crosses from negative to positive
+  across the sweep, so normalising by its (small, positive) peak produces
+  extreme, uninformative percentages; its absolute behaviour is discussed in
+  the text below.}
 \label{fig:doa_thd}
 \end{figure}
 
@@ -773,26 +776,27 @@ uniformly.
 \end{figure}
 
 Figure~\ref{fig:doa_thd} sweeps the DoA threshold $\theta_{\mathrm{doa}}$ for
-\lru-Live on every suite, each curve normalised to that suite's own peak
-speedup across the sweep. GAP, ML, and QMM peak at the lowest threshold
-tested ($\theta_{\mathrm{doa}}=2$, $100\%$ by construction) and decline
-monotonically as the threshold rises, reaching $69.7\%$, $87.3\%$, and
-$61.8\%$ of peak respectively by $\theta_{\mathrm{doa}}=30$: a lower bar
-classifies blocks \doa sooner, so these suites are best served by the most
-aggressive setting available. SPEC, Google, and Ligra instead stay within
-${\approx}10$ points of their peak across the whole sweep, each reaching
-$100\%$ (or within noise of it) around $\theta_{\mathrm{doa}}=6$. GMS is the
-exception that benefits from a \emph{higher} threshold, and is omitted from
-the figure for exactly that reason (see caption): in absolute terms it is
-clearly harmful at $\theta_{\mathrm{doa}}=2$ ($-0.58\%$), crosses to roughly
-breakeven by $\theta_{\mathrm{doa}}=6$ ($-0.05\%$), and keeps improving
-through $\theta_{\mathrm{doa}}=30$ ($+0.23\%$). We adopt
-$\theta_{\mathrm{doa}}=6$ as the default: it sits at or near $100\%$ of peak
-for the flat suites, still retains most of the early gain for the declining
-suites ($85.7\%$, $97.2\%$, and $89.4\%$ of peak for GAP, ML, and QMM), and
-is the point where GMS stops being clearly harmful --- a reasonable single
-compromise across suites whose optima otherwise point in opposite
-directions.
+\lru-Live \emph{with set dueling} on every suite, each curve normalised to
+that suite's own peak speedup across the sweep. GAP, Ligra, and QMM peak at
+a low threshold ($\theta_{\mathrm{doa}}=2$, $4$, and $6$ respectively) and
+decline as the threshold rises, reaching $61.9\%$, $74.9\%$, and $78.1\%$ of
+peak by $\theta_{\mathrm{doa}}=30$. SPEC, Google, and ML instead \emph{rise}
+with the threshold, reaching their peak at $\theta_{\mathrm{doa}}=30$: Google
+is even harmful at low thresholds ($-1.77\%$ vs.\ \lru at
+$\theta_{\mathrm{doa}}=2$, only $27.3\%$ of its eventual peak), and SPEC and
+ML sit at $24.1\%$ and $64.1\%$ of their peak at $\theta_{\mathrm{doa}}=2$.
+GMS is omitted from the figure (see caption) and is negative throughout the
+tested range, improving from $-1.74\%$ at $\theta_{\mathrm{doa}}=2$ to
+$-0.40\%$ at $\theta_{\mathrm{doa}}=30$ without crossing to positive.
+$\theta_{\mathrm{doa}}=6$ --- the value used elsewhere in this paper --- is
+no longer the best universal compromise under dueling: SPEC and Google sit
+at only $34.5\%$ and $27.3\%$ of their peak there, while
+$\theta_{\mathrm{doa}}=16$ keeps every suite at $66\%$ of peak or higher
+(GAP $66.1\%$, Ligra $81.4\%$, QMM $89.8\%$, SPEC $72.4\%$, Google $92.9\%$,
+ML $96.0\%$). We flag this rather than silently changing the project's
+adopted default, since $\theta_{\mathrm{doa}}=6$ is also the anchor used for
+the headline replacement-guidance and bypass results elsewhere in this
+paper.
 
 We sweep the \llc history table capacity from 8 to 16{,}384 entries
 (\lru-Live, each suite at its own optimal $\theta_{\mathrm{doa}}$ from
