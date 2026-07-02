@@ -1,9 +1,16 @@
 # Logic for interpreting the data in scenario.py: the scenario naming
-# scheme and the SCENARIO_MATRIX/STATIC_FRAGMENTS lookup. Has scenario/
-# policy knowledge, so it can't live in fileutils.py; it's logic, not
-# data, so it can't live in scenario.py either.
+# scheme, the SCENARIO_MATRIX/STATIC_FRAGMENTS lookup, and resolving a
+# scenario name to what's needed to run it. Has scenario/policy
+# knowledge, so it can't live in file_utils.py; it's logic, not data,
+# so it can't live in scenario.py either.
 
-from scenario import POLICIES, CONDITIONS, TRACE_KEYS, STATIC_FRAGMENTS, SCENARIO_MATRIX
+import os
+import sys
+
+from scenario import (
+    BIN_DIR, TRACE_PATHS,
+    POLICIES, CONDITIONS, TRACE_KEYS, STATIC_FRAGMENTS, SCENARIO_MATRIX,
+)
 
 
 def list_scenarios():
@@ -35,3 +42,26 @@ def resolve_binary_and_env(pol, cond):
     for frag in fragments:
         env.update(resolve_fragment(frag))
     return binary, env
+
+
+def unknown_scenario(scen):
+    sys.stderr.write("unknown scenario '%s'\n" % scen)
+    return None
+
+
+def resolve_scenario(scen):
+    parsed = parse_scenario(scen)
+    if parsed is None:
+        return unknown_scenario(scen)
+    pol, cond, trc = parsed
+
+    if trc not in TRACE_PATHS:
+        return unknown_scenario(scen)
+
+    binary, env_vars = resolve_binary_and_env(pol, cond)
+    if binary is None:
+        return unknown_scenario(scen)
+
+    trace = os.environ.get("TRACE") or TRACE_PATHS[trc]
+    bin_path = os.path.join(BIN_DIR, binary)
+    return bin_path, trace, env_vars

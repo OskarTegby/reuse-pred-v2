@@ -3,6 +3,7 @@
 
 import difflib
 import os
+import shutil
 import subprocess
 import sys
 
@@ -46,3 +47,21 @@ def diff_lines(path_a, path_b):
     if lines_a == lines_b:
         return None
     return difflib.unified_diff(lines_a, lines_b, fromfile=path_a, tofile=path_b)
+
+
+def write_reference(actual_path, reference_path):
+    shutil.copy(actual_path, reference_path)
+    print("REFERENCE WRITTEN (no comparison): %s" % reference_path)
+
+
+def compare_to_reference(actual_path, reference_path, label):
+    require(os.path.isfile(reference_path),
+            "FAIL %s: no reference file (%s). Run with GENERATE=1 to create it."
+            % (label, reference_path), 1)
+    diff = diff_lines(reference_path, actual_path)
+    if diff is None:
+        print("PASS %s" % label)
+        return
+    sys.stdout.writelines(diff)
+    sys.stderr.write("FAIL %s: output diverged from reference\n" % label)
+    sys.exit(1)

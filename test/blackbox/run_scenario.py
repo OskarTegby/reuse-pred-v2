@@ -13,15 +13,12 @@
 # the full-size runs execute.
 
 import os
-import shutil
 import sys
 
-from fileutils import (
-    ensure_dir, is_executable_file, require, env_flag,
-    stream_subprocess_to_file, diff_lines,
-)
-from scenario import BIN_DIR, EXPECTED_DIR, OUT_DIR, WARMUP, SIM, TRACE_PATHS, WALLCLOCK_RE
-from scenario_utils import list_scenarios, parse_scenario, resolve_binary_and_env
+from file_utils import ensure_dir, is_executable_file, require, env_flag, \
+    stream_subprocess_to_file, write_reference, compare_to_reference
+from scenario import EXPECTED_DIR, OUT_DIR, WARMUP, SIM, WALLCLOCK_RE
+from scenario_utils import list_scenarios, resolve_scenario
 
 SKIP = 77  # ctest's SKIP_RETURN_CODE (see CMakeLists.txt).
 
@@ -38,49 +35,6 @@ def run_binary(bin_path, trace, env_vars, actual_path):
            "--simulation_instructions", SIM, trace]
     stream_subprocess_to_file(cmd, env, actual_path,
                                lambda line: WALLCLOCK_RE.sub("", line))
-
-
-def write_reference(actual_path, reference_path):
-    shutil.copy(actual_path, reference_path)
-    print("REFERENCE WRITTEN (no comparison): %s" % reference_path)
-
-
-def compare_to_reference(actual_path, reference_path, scen):
-    require(os.path.isfile(reference_path),
-            "FAIL %s: no reference file (%s). Run with GENERATE=1 to create it."
-            % (scen, reference_path), 1)
-    diff = diff_lines(reference_path, actual_path)
-    if diff is None:
-        print("PASS %s" % scen)
-        return
-    sys.stdout.writelines(diff)
-    sys.stderr.write("FAIL %s: output diverged from reference\n" % scen)
-    sys.exit(1)
-
-
-def unknown_scenario(scen):
-    sys.stderr.write("unknown scenario '%s'\n" % scen)
-    return None
-
-
-def resolve_scenario(scen):
-    """Parse+resolve a scenario name to (bin_path, trace, env_vars), or None
-    (having written a message to stderr) if any part of it is unknown."""
-    parsed = parse_scenario(scen)
-    if parsed is None:
-        return unknown_scenario(scen)
-    pol, cond, trc = parsed
-
-    if trc not in TRACE_PATHS:
-        return unknown_scenario(scen)
-
-    binary, env_vars = resolve_binary_and_env(pol, cond)
-    if binary is None:
-        return unknown_scenario(scen)
-
-    trace = os.environ.get("TRACE") or TRACE_PATHS[trc]
-    bin_path = os.path.join(BIN_DIR, binary)
-    return bin_path, trace, env_vars
 
 
 def output_paths(scen):
