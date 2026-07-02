@@ -23,10 +23,10 @@ std::map<CACHE*, std::vector<uint64_t>> last_used_cycles;
 //   V2  st = (st==0) ? (rank<N/2 ? 1 : 2) : 3           // 2nd+ hit -> hot
 //   V3  st = (rank<N/4) ? 0 : (rank<N/2 ? 1 : (rank<N-1 ? 2 : 3))
 //
-// At eviction the block's final state is tallied. Purely observational — never
-// influences victim choice or the last-use update, so IPC is bit-identical to
-// plain LRU. (DoA cross-check: on a V1/V2 run st_count[DEAD] == never-hit, which
-// equals the simulator's canonical sim_stats.doa.)
+// At eviction cache.cc tallies the block's final state into
+// cache_stats::recency_state. Purely observational — never influences victim
+// choice or the last-use update, so IPC is bit-identical to plain LRU. (DoA
+// cross-check: on a V1/V2 run recency_state[DEAD] == never-hit == sim_stats.doa.)
 bool char_enabled()
 {
   static const bool e = [] {
