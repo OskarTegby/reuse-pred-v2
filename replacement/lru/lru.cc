@@ -109,7 +109,8 @@ void CACHE::update_replacement_state(uint32_t triggering_cpu, uint32_t set, uint
     if (char_enabled()) {
       if (hit) {
         // Recency rank at this (demand) hit, read BEFORE the last-use bump below:
-        // rank = number of ways more recently used than this one (0=LRU..N-1=MRU).
+        // rank = number of ways LESS recently used (older) than this one — i.e. the
+        // block's stack position, 0=LRU .. N-1=MRU.
         const auto& luc = ::last_used_cycles[this];
         const uint64_t mine = luc[s];
         const std::size_t base = set * NUM_WAY;
