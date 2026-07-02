@@ -124,6 +124,6 @@ reviewable alongside what caused it.
 
 ## Adding a policy, condition, or trace
 
-Edit the `POLICIES` / `CONDITIONS` / `TRACE_KEYS` lists and the corresponding
-resolver (and `TRACE_PATHS`) in `run_scenario.py`, then regenerate the reference
+Edit the `POLICIES` / `CONDITIONS` / `TRACE_KEYS` lists, `TRACE_PATHS`, and
+`SCENARIO_MATRIX` in `scenario_config.py`, then regenerate the reference
 outputs. The CMake and cluster lists update themselves via `--list`.
