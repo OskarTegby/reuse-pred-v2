@@ -20,11 +20,8 @@ from fileutils import (
     ensure_dir, is_executable_file, require, env_flag,
     stream_subprocess_to_file, diff_lines,
 )
-from scenario import (
-    BIN_DIR, EXPECTED_DIR, OUT_DIR, WARMUP, SIM,
-    TRACE_PATHS, WALLCLOCK_RE,
-    list_scenarios, parse_scenario, resolve_binary_and_env,
-)
+from scenario import BIN_DIR, EXPECTED_DIR, OUT_DIR, WARMUP, SIM, TRACE_PATHS, WALLCLOCK_RE
+from scenario_utils import list_scenarios, parse_scenario, resolve_binary_and_env
 
 SKIP = 77  # ctest's SKIP_RETURN_CODE (see CMakeLists.txt).
 
