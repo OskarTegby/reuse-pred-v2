@@ -59,83 +59,62 @@ def parse_scenario(scen):
     return parts[0], parts[1], parts[2]
 
 
-def build_env_fragments():
-    base = {"THD_DOA": "6", "BHIST_MODE": "pc", "SRRIP_LIVE_TARGET": "llc"}
-    addr = {"REPL_HIST_MODE": "addr", "REPL_HIST_LLC_CAP": "4096", "REPL_HIST_REPL": "lfu_doa"}
-    # LRU-Live expresses bypass as an insertion mode instead; see resolve_lru_env.
-    bypass = dict(base)
-    bypass["SRRIP_LIVE_TARGET"] = "none"
-    bypass["LIVENESS_BYPASS"] = "1"
-    ipv_vec = {"IPV_DOA": "0:1:2:2:3"}
-    return base, addr, bypass, ipv_vec
+# Named env fragments a scenario can merge together (later fragments in a
+# scenario's list override earlier ones).
+STATIC_FRAGMENTS = {
+    "base": {"THD_DOA": "6", "BHIST_MODE": "pc", "SRRIP_LIVE_TARGET": "llc"},
+    "addr": {"REPL_HIST_MODE": "addr", "REPL_HIST_LLC_CAP": "4096", "REPL_HIST_REPL": "lfu_doa"},
+    "ipv_vec": {"IPV_DOA": "0:1:2:2:3"},
+    # SRRIP/IPV express bypass by disabling the in-cache insert; LRU-Live
+    # instead uses LRU_LIVE_DOA_INS=bypass (see SCENARIO_MATRIX below).
+    "bypass_override": {"SRRIP_LIVE_TARGET": "none", "LIVENESS_BYPASS": "1"},
+}
 
-
-def merged(*dicts):
-    out = {}
-    for d in dicts:
-        out.update(d)
-    return out
-
-
-def resolve_lru_env(cond, base, addr, bypass, ipv_vec):
-    if cond == "base":
-        return "champsim_lru", {}
-    if cond == "fixed":
-        return "champsim_lru_live", merged(base, {"LRU_LIVE_DOA_INS": "2n3"})
-    if cond == "bypass":
-        return "champsim_lru_live", merged(base, {"LRU_LIVE_DOA_INS": "bypass"})
-    if cond == "duel":
-        return "champsim_lru_live", merged(base, {
+# (policy, condition) -> (binary, [fragment name or inline dict, ...]).
+# This is the entire test matrix: every scenario's binary and env are read
+# straight off this table instead of being computed by per-policy code.
+SCENARIO_MATRIX = {
+    "lru": {
+        "base":   ("champsim_lru", []),
+        "fixed":  ("champsim_lru_live", ["base", {"LRU_LIVE_DOA_INS": "2n3"}]),
+        "bypass": ("champsim_lru_live", ["base", {"LRU_LIVE_DOA_INS": "bypass"}]),
+        "duel":   ("champsim_lru_live", ["base", {
             "LRU_LIVE_DOA_INS": "2n3", "LRU_LIVE_DOA_INS_B": "lru",
-            "DUEL_N_SAMPLERS": "32", "DUEL_METRIC": "latency"})
-    if cond == "addr":
-        return "champsim_lru_live", merged(base, {"LRU_LIVE_DOA_INS": "2n3"}, addr)
-    return None, None
-
-
-def resolve_srrip_env(cond, base, addr, bypass, ipv_vec):
-    if cond == "base":
-        return "champsim_srrip", {}
-    if cond == "fixed":
-        return "champsim_srrip_live", merged(base)
-    if cond == "bypass":
-        return "champsim_srrip_live", merged(bypass)
-    if cond == "duel":
-        return "champsim_srrip_live", merged(base, {
+            "DUEL_N_SAMPLERS": "32", "DUEL_METRIC": "latency"}]),
+        "addr":   ("champsim_lru_live", ["base", {"LRU_LIVE_DOA_INS": "2n3"}, "addr"]),
+    },
+    "srrip": {
+        "base":   ("champsim_srrip", []),
+        "fixed":  ("champsim_srrip_live", ["base"]),
+        "bypass": ("champsim_srrip_live", ["base", "bypass_override"]),
+        "duel":   ("champsim_srrip_live", ["base", {
             "SRRIP_DOA_INS_RRPV": "2", "SRRIP_DOA_HIT_RRPV": "2",
             "SRRIP_DOA_INS_RRPV_B": "3", "SRRIP_DOA_HIT_RRPV_B": "0",
-            "DUEL_N_SAMPLERS": "32"})
-    if cond == "addr":
-        return "champsim_srrip_live", merged(base, addr)
-    return None, None
-
-
-def resolve_ipv_env(cond, base, addr, bypass, ipv_vec):
-    if cond == "base":
-        return "champsim_ipv", {}
-    if cond == "fixed":
-        return "champsim_ipv_live", merged(base, ipv_vec)
-    if cond == "bypass":
-        return "champsim_ipv_live", merged(bypass, ipv_vec)
-    if cond == "duel":
-        return "champsim_ipv_live", merged(base, {
+            "DUEL_N_SAMPLERS": "32"}]),
+        "addr":   ("champsim_srrip_live", ["base", "addr"]),
+    },
+    "ipv": {
+        "base":   ("champsim_ipv", []),
+        "fixed":  ("champsim_ipv_live", ["base", "ipv_vec"]),
+        "bypass": ("champsim_ipv_live", ["base", "bypass_override", "ipv_vec"]),
+        "duel":   ("champsim_ipv_live", ["base", {
             "DUEL_N_CONFIGS": "2", "DUEL_N_SAMPLERS": "32",
             "IPV_DOA_0": "0:1:2:2:2", "IPV_DOA_1": "0:1:2:2:3",
-            "DUEL_METRIC": "latency"})
-    if cond == "addr":
-        return "champsim_ipv_live", merged(base, ipv_vec, addr)
-    return None, None
-
-
-RESOLVERS = {"lru": resolve_lru_env, "srrip": resolve_srrip_env, "ipv": resolve_ipv_env}
+            "DUEL_METRIC": "latency"}]),
+        "addr":   ("champsim_ipv_live", ["base", "ipv_vec", "addr"]),
+    },
+}
 
 
 def resolve_binary_and_env(pol, cond):
-    resolver = RESOLVERS.get(pol)
-    if resolver is None:
+    entry = SCENARIO_MATRIX.get(pol, {}).get(cond)
+    if entry is None:
         return None, None
-    base, addr, bypass, ipv_vec = build_env_fragments()
-    return resolver(cond, base, addr, bypass, ipv_vec)
+    binary, fragments = entry
+    env = {}
+    for frag in fragments:
+        env.update(frag if isinstance(frag, dict) else STATIC_FRAGMENTS[frag])
+    return binary, env
 
 
 def check_prereqs(bin_path, trace, scen):
