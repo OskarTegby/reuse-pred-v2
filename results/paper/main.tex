@@ -561,7 +561,7 @@ there.
 \section{Experimental Setup}
 % ─────────────────────────────────────────────────────────────────────────────
 
-We simulate with ChampSim using the configuration in
+We simulate with ChampSim~\cite{champsim} using the configuration in
 Table~\ref{tab:config}. Each trace runs for 50M warmup + 100M simulation
 instructions. Speedup is geomean IPC relative to \lru.
 Seven benchmark suites are summarised in Table~\ref{tab:suites}.
@@ -920,7 +920,7 @@ All experiments in this section use plain \srrip (no liveness guidance) as the
 baseline and report geomean IPC speedup over \srrip. Falling-weight scoring ($\delta = 5/3/1$ in \textsc{MA}/\textsc{MD}/\doa states) is
 used throughout, with $\theta_{\mathrm{doa}} = 6$ and
 $\theta_{\mathrm{dead}} = 10$, an unbounded PC-indexed history table, and the
-ChampSim configuration in Table~\ref{tab:config}. Six benchmark suites are
+ChampSim~\cite{champsim} configuration in Table~\ref{tab:config}. Six benchmark suites are
 evaluated using expanded trace sets: QMM (45 traces), SPEC LLC-pressured (35),
 GAP (9), GMS (11), Ligra (17), and ML (31), for a total of 148 traces.
 
@@ -1032,61 +1032,49 @@ ML    & $+11.87\%$ & $+8.80\%$  & $+11.70\%$ & $-8.97\%$ \\
 \end{tabular}
 \end{table}
 
-\subsection{Comparison with prior work}
-\label{sec:prior}
+\subsection{Per-PC vs.\ Per-Address Indexing}
+\label{sec:indexing}
 
-To contextualise our results we compare against two alternative systems:
-(i)~the same liveness-history approach with per-address rather than per-PC
-indexing, and (ii)~the combined dead-block / dead-page predictor of
-Mazumdar~et~al.~\cite{mazumdar2021}, which uses an address-indexed
-block-history table for LLC bypass (\texttt{cbpred}) coupled with STLB
-dead-page bypass (\texttt{dppred}) at a confidence threshold of six.
-Figure~\ref{fig:comparison} shows geomean speedup vs.\ \srrip for all three systems.
-In the per-address ablation every parameter is held constant except that the
-history table is keyed on cache-line address instead of load PC.
+To isolate the effect of history-table indexing granularity, we compare
+per-PC against per-address indexing under \lru-Live's replacement guidance
+alone (no bypass), at two per-address table capacities: unbounded and a
+4,096-entry (``4K'') bounded table. Figure~\ref{fig:comparison} shows geomean
+IPC speedup vs.\ \lru for all three configurations.
 
 \paragraph{Per-PC vs.\ per-address indexing.}
-Switching to address indexing collapses performance on streaming workloads.
-SPEC falls from $+17.3\%$ to $+3.0\%$ and Ligra from $+34.9\%$ to $+5.5\%$,
-both roughly $6\times$ worse.
-The cause is structural: streaming workloads touch millions of distinct cache-line
-addresses, each evicted after one use, so a per-address entry is rarely updated
-more than once before being displaced.
-A per-PC entry aggregates every fill issued by the same load instruction into a
-single counter; a streaming load that issues millions of dead-on-arrival fills
-reaches $\theta_{\mathrm{bypass}}=16$ in as few as four evictions in the MA state
-(since $\delta_{\mathbf{MA}}=5$).
+Per-PC indexing wins on every suite with a large distinct-address footprint:
+GAP ($+6.12\%$ vs.\ $+1.41\%$), Ligra ($+4.95\%$ vs.\ essentially $0\%$), ML
+($+2.83\%$ vs.\ $+0.80\%$), QMM ($+2.53\%$ vs.\ $+0.76\%$), and Google
+($+2.34\%$ vs.\ $-0.37\%$, where per-address indexing is actively harmful).
+The cause is structural, as with the bypass predictor (\S\ref{sec:perf}): a
+per-PC entry aggregates every fill issued by the same load instruction into a
+single counter, whereas a per-address entry on these workloads is rarely
+updated more than once before its block is evicted.
 
-QMM reverses the picture: per-address replacement guidance is actively harmful
-($-0.74\%$ combined) while per-PC achieves $+1.62\%$.
-Server workloads have few unique load PCs, each with a footprint exhibiting
-strong cache locality; a per-address table produces many low-count entries that
-do not discriminate well within any one PC's footprint, whereas per-PC correctly
-summarises the aggregate liveness behaviour of each instruction.
-GAP shows the same pattern: per-address replacement guidance alone is $-2.38\%$
-(harmful), dragging the combined result to $-2.94\%$.
+SPEC (DPC3) is the exception: per-PC guidance alone reaches only $+0.40\%$,
+and per-address edges slightly ahead at $+0.73\%$. This is a marked change
+from the combined bypass\,+\,replacement result (\S\ref{sec:perf}), where
+per-PC led SPEC by $+17.3\%$ to $+3.0\%$ --- indicating that per-PC's
+advantage there comes almost entirely from bypass (dead-on-arrival fills
+skipping the \llc), not from replacement guidance itself. GMS is negative
+under both indexing schemes ($-0.63\%$ per-PC, $-0.19\%$ per-address),
+consistent with replacement guidance contributing least there overall
+(Figure~\ref{fig:policy_comparison}).
 
-\paragraph{Mazumdar et~al.}
-Their address-indexed predictor achieves $+2.03\%$ on QMM, where high address
-reuse lets the block-history table accumulate confidence, but is neutral or
-negative on every suite driven by streaming bypass: $+0.28\%$ on SPEC, $+0.13\%$
-on GAP, and $+0.32\%$ on GMS.
-Their confidence-threshold mechanism cannot extract streaming speedups because
-individual addresses are not revisited frequently enough to cross the threshold.
-
-Our per-PC system reaches $+9.78\%$ across all 148~traces vs.\ \srrip.
-The $+0.41$ percentage-point gap at QMM ($+2.03\%$ vs.\ $+1.62\%$) is partly
-attributable to Mazumdar~et~al.\ including STLB-level bypass (\texttt{dppred})
-alongside their LLC predictor, a combination our evaluation does not yet include.
+Bounding the per-address table to 4,096 entries erodes what per-address gain
+remains, on every suite where it is visible: GAP falls from $+1.41\%$ to
+$-0.07\%$ and QMM from $+0.76\%$ to $+0.17\%$, both within a few tenths of a
+percentage point of zero. The per-PC table needs only 256 entries to reach
+its unbounded gain (\S\ref{sec:histrep}); this capacity sensitivity is
+specific to per-address indexing, where the distinct-address footprint is
+orders of magnitude larger than the distinct-PC footprint.
 
 \begin{figure}[t!]
 \centering
 \includegraphics[width=\linewidth]{../plots/paper_comparison.png}
-\caption{Geomean speedup vs.\ \srrip at $\theta_{\mathrm{bypass}}=16$: per-PC (ours,
-  combined bypass\,+\,replacement), per-address (same algorithm, address-indexed
-  history table), and Mazumdar~et~al.~\cite{mazumdar2021} (LLC \texttt{cbpred} +
-  STLB \texttt{dppred}). Overall (per-PC): $+9.78\%$. Mazumdar Ligra/ML pending full
-  trace completion.}
+\caption{Geomean IPC speedup vs.\ \lru: \lru-Live replacement guidance alone
+  (no bypass), per-PC vs.\ per-address history-table indexing, per-address
+  shown at both unbounded and 4,096-entry (4K) bounded capacity.}
 \label{fig:comparison}
 \end{figure}
 
