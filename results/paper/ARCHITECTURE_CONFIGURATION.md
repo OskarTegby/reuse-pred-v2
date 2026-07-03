@@ -20,10 +20,11 @@ the STLB numbers below were researched separately and are not in that CSV.
 4. One example each from Intel and AMD (per the professor's own suggestion),
    plus ARM for a third vendor if useful.
 
-This ruled out: Cougar Cove (2026, unreleased), Lion Cove (2024, CSV row
-looks like it has a data-entry error -- L1D listed as 192KB, inconsistent
-with any published spec), and every ARM Cortex-X row from X1 through X925
-except where noted below (most have `?` in L2/L3 latency in the CSV).
+This ruled out: Cougar Cove (unreleased at the time -- since shipped, see
+below), Lion Cove (2024, initially thought to have a CSV data-entry error
+in its L1D figure -- also since resolved, see below), and every ARM
+Cortex-X row from X1 through X925 except where noted below (most have `?`
+in L2/L3 latency in the CSV).
 
 ## Recommended configuration(s)
 
@@ -94,6 +95,60 @@ STLB latency is **not published** in the official manual (Intel doesn't list
 cycle counts for TLB hits/misses). Third-party microbenchmarking
 (Chips and Cheese) puts the L2 TLB latency at **~7 cycles** for the
 Redwood Cove / Lion Cove lineage.
+
+### Intel: Cougar Cove (Panther Lake, 2026)
+
+Reconsidered after initially being ruled out as "unreleased" -- it has since
+shipped (Panther Lake, broad availability since Q1 2026) and is the direct
+successor of Redwood Cove in the same P-core lineage (Golden Cove -> Redwood
+Cove -> Lion Cove -> Cougar Cove).
+
+`architectures.csv` row: L0D 48KB, L1I 64KB, L1 ("L1.5") 192KB, L2 3,072KB,
+L3 3,000KB/core; latencies L0D=4, L1=9, L2=22, L3=~68 cycles.
+
+**Cache hierarchy note:** starting with Lion Cove, Intel added a genuine
+extra cache level -- the CSV's "L1D=192KB" figure looked like a data-entry
+error on first read (a jump from every prior generation's 32-64KB), but
+Chips and Cheese confirms it is real: a new 48KB L0 (the fastest,
+closest-to-core cache) sits ahead of a 192KB level Intel calls "L1" (some
+reviewers call it "L1.5" since they disagree with the naming), which is
+ahead of a 3MB "L2". That is four cache levels before/including L3, but
+ChampSim's config model only has three slots (L1D/L2C/LLC). The mapping
+used here: **ChampSim L1D = the 48KB L0** (same size as Redwood Cove's L1D,
+maximum continuity), **ChampSim L2C = the actual 3,072KB "L2"** (the level
+Intel itself still calls L2, playing the same structural role as Redwood
+Cove's L2C), **ChampSim LLC = 3,000KB, unchanged from Redwood Cove**. The
+192KB intermediate level is omitted from the model -- the same kind of
+simplification ChampSim already makes for micro-op caches and other
+structures it doesn't represent.
+
+**TLB parameters:** Chips and Cheese states Lion Cove's *only* TLB change
+vs. Redwood Cove is the load DTLB growing from 96 to 128 entries -- "none
+of the other TLB sizes have changed." So Redwood Cove's ITLB (256 entries,
+8-way) and STLB (2,048 entries, 16-way) carry forward into Lion Cove
+unchanged. Cougar Cove is described as a refinement of Lion Cove ("no part
+of the core undergoing a fundamental redesign") with "TLB capacity
+increased by 50% compared to Lion Cove" -- no source gives a level-by-level
+breakdown of that 50%, so it is applied here specifically to the **STLB**
+(2,048 -> 3,072 entries, same 16-way associativity), since that is both the
+parameter this paper's contribution is actually about and the one these
+generational writeups most commonly headline as "the TLB." The L1 DTLB is
+assumed to hold at Lion Cove's 128 entries (no source claims further growth
+in Cougar Cove specifically), and the ITLB is assumed unchanged, matching
+the "no change noted -> carries over" convention used throughout this file.
+STLB latency reuses the same ~7-cycle third-party estimate as the rest of
+the lineage.
+
+| Level | Entries | Associativity | Confidence |
+|---|---|---|---|
+| L1 ITLB | 256 | 8-way | assumed unchanged from Redwood Cove |
+| L1 DTLB (loads, 4K) | 128 | 4-way | Chips and Cheese (Lion Cove), assumed to hold |
+| **L2 / STLB** | **3,072** | 16-way | **estimated**: 2,048 x 1.5, per Cougar Cove's "+50% TLB capacity" claim applied to STLB |
+
+This is the least-confirmed config in this file -- both the STLB entry
+count and the L1 DTLB carry-forward assumption are inferred rather than
+directly sourced. Flagging here so results using this config are read with
+that caveat.
 
 ### AMD: Zen 4
 
@@ -171,6 +226,13 @@ L2 TLB latency: 6 cycles (Chips and Cheese).
 5. **No official STLB *latency* numbers exist for any of these** (only
    Intel/AMD/ARM structural sizes are published; all latency figures above
    are third-party microbenchmarks from Chips and Cheese).
+6. **Cougar Cove's STLB entry count is a derived estimate, not a sourced
+   figure.** "TLB capacity +50% vs. Lion Cove" is the only number any
+   source gives; no writeup breaks it down by TLB level. Applied here to
+   the STLB on the reasoning that it's the parameter this paper actually
+   needs, but this is the weakest-sourced number in this file.
+7. **Cougar Cove's L1 DTLB is assumed to hold at Lion Cove's 128 entries**
+   -- no source confirms whether it grew further in Cougar Cove.
 
 ## References
 
@@ -183,3 +245,7 @@ L2 TLB latency: 6 cycles (Chips and Cheese).
 - [Lion Cove: Intel's P-Core Roars (Chips and Cheese)](https://chipsandcheese.com/p/lion-cove-intels-p-core-roars) -- source for the ~7-cycle L2 TLB latency figure ("matches Zen 5")
 - [AMD's Ryzen 9950X: Zen 5 on Desktop (Chips and Cheese)](https://chipsandcheese.com/p/amds-ryzen-9950x-zen-5-on-desktop) -- source for Zen 5 L2 TLB entry counts (third-party)
 - [AMD's Strix Point: Zen 5 Hits Mobile (Chips and Cheese)](https://chipsandcheese.com/p/amds-strix-point-zen-5-hits-mobile)
+- [Intel's Lion Cove Architecture Preview (Chips and Cheese)](https://chipsandcheese.com/p/intels-lion-cove-architecture-preview) -- source for the 48KB L0 / 192KB "L1" cache hierarchy and the "only the load DTLB changed, 96->128 entries" TLB statement
+- [Panther Lake's Reveal at ITT 2025 (Chips and Cheese)](https://chipsandcheese.com/p/panther-lakes-reveal-at-itt-2025) -- source for Cougar Cove's "+50% TLB capacity vs. Lion Cove" claim (no per-level breakdown given)
+- [Inside Panther Lake: How Intel's Cougar Cove & Darkmont Architectures Deliver 50% More Performance](https://www.intelstartyourengines.com/inside-panther-lake-how-intels-cougar-cove-darkmont-architectures-deliver-50-more-performance) -- Cougar Cove release/availability timeline
+- [Intel Panther Lake Deep-Dive (wccftech)](https://wccftech.com/intel-panther-lake-deep-dive-18a-compute-tile-cougar-cove-p-cores-darkmont-e-cores/) -- corroborates Cougar Cove as an incremental refinement of Lion Cove, not a redesign
