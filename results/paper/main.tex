@@ -676,18 +676,14 @@ on genuinely live \textsc{PC}s, sharpening the dead-or-alive boundary.
 
 Figure~\ref{fig:live_vs_base} reports the liveness contribution of each guided
 replacement policy, measured against its \emph{own} non-guided base
-(\srrip-Live vs.\ \srrip, \lru-Live vs.\ \lru), with no bypass.
+(\srrip-Live vs.\ \srrip, \lru-Live vs.\ \lru), with no bypass, both at the
+common $\theta_{\mathrm{doa}}=6$ anchor with set dueling.
 This isolates the benefit of the liveness signal from any base-policy effect.
-Both policies are positive on every suite; \srrip-Live reaches $+6.1\%$ on GAP at
-its optimal threshold, and \lru-Live reaches $+3.8\%$ on GAP. The two policies
-trade the top spot across suites; we adopt \srrip-Live for its lower per-block state
+\lru-Live leads on most suites, reaching $+6.9\%$ on GAP, and is negative only
+on GMS ($-1.2\%$); \srrip-Live is more consistently modest across suites (from
+$+0.1\%$ on Google to $+6.2\%$ on GAP) and is the only one of the two that
+stays positive on GMS. We adopt \srrip-Live for its lower per-block state
 (2-bit \rrpv vs.\ $\lceil\log_2 N\rceil$) at competitive performance.
-
-Figure~\ref{fig:perpolicy} breaks this down per benchmark for a representative
-spread. The policies frequently \emph{disagree}: \srrip-Live wins decisively on
-\texttt{xalancbmk} ($+39\%$) and certain ML traces, while \lru-Live wins on Ligra
-kernels and \texttt{mcf} where \srrip-Live is slightly negative. No single policy
-dominates per-workload, motivating the suite-level threshold optimisation.
 
 \begin{figure*}[t!]
 \centering
@@ -818,25 +814,12 @@ traffic is spread across tens of thousands of unique PCs and small capacities
 evict most of those PCs before they accumulate enough evidence to be
 classified \doa.
 
-\begin{figure*}[t!]
-\centering
-\includegraphics[width=0.95\textwidth]{../plots/per_benchmark_policies.png}
-\caption{Per-benchmark replacement-guidance contribution (no bypass): \lru-Live
-  and \srrip-Live each vs.\ its own non-guided base, for a representative spread
-  of traces (extreme outliers $>$50\% omitted for readability). \srrip-Live at
-  optimal $\theta_{\mathrm{doa}}$ per suite; \lru-Live at $\theta_{\mathrm{doa}}=6$.
-  Policies win on different workloads.}
-
-\label{fig:perpolicy}
-\end{figure*}
-
 \begin{figure}[t!]
 \centering
 \includegraphics[width=\linewidth]{../plots/live_vs_base.png}
 \caption{Replacement-guidance only (no bypass): geomean IPC speedup of each guided
-  policy over its \emph{own} non-guided base (\lru-Live/\lru, \srrip-Live/\srrip).
-  \srrip-Live at optimal $\theta_{\mathrm{doa}}$ per suite; \lru-Live at
-  $\theta_{\mathrm{doa}}=6$ (no sweep available).}
+  policy over its \emph{own} non-guided base (\lru-Live/\lru, \srrip-Live/\srrip),
+  both at $\theta_{\mathrm{doa}}=6$ with set dueling.}
 \label{fig:live_vs_base}
 \end{figure}
 
