@@ -400,6 +400,42 @@ python3 scripts/analysis/plot_cache_size_study.py results/{suite}_cache_size_YYY
 
 ---
 
+## IPV-Live Rewrite Validation & Historical Duel Reconstruction (2026-07-06)
+
+**Context:** `replacement/ipv_live/ipv_live.cc` was rewritten as a true k-way permutation IPV
+(Jiménez MICRO 2013) on branch `fix-ipv-states`, replacing a broken 4-state RRPV hack.
+`bin/champsim_ipv_live` on Castillo was **stale** (built 2026-07-05 21:38, before the
+rewrite commits at 2026-07-06 14:55) until it was rebuilt locally and redeployed via scp
+at **2026-07-06 20:47**. Any batch submitted before that timestamp ran the OLD broken
+mechanism regardless of what vectors/env-vars it was given — confirmed by hand-running
+the pre-fix Castillo binary and comparing to the post-fix local binary with identical env
+vars (dueling block present locally, absent on Castillo pre-fix).
+
+**Scripts:** `scripts/submit/submit_ipv_designs.sh` (wave1/wave2 base-vector study),
+`scripts/submit/submit_old_equiv.sh` (old_equiv + old_flat unguided-IPV control),
+`scripts/submit/submit_ipv_hist_duel.sh` (historical cfgA/ilB set-dueling reconstruction).
+Config: THD_DOA=8/THD_DEAD=2, 50M warmup/50M sim, 251 traces (dpc3 95 + gap 9 + ligra 17 +
+gms 11 + google 43 + qmm 45 + ml 31), Config-C 2MB LLC.
+
+| Launch | Cluster dir | Purpose | Binary | Status |
+|---|---|---|---|---|
+| 2026-07-06 01:40/05:45 | `ipv_designs_wave1_20260706_0140` / `wave2_20260706_0545` | GIPPR vs MDPP base-vector study, 8 arms × 7 suites | stale (pre-fix) | ✅ completed, but **INVALID** — wrong mechanism |
+| 2026-07-06 14:10 | `ipv_flat_bases_20260706_1410` (mdpp_flat) | unguided IPV/MDPP baseline | stale (pre-fix) | ✅ completed, **INVALID** |
+| 2026-07-06 14:23 | `ipv_old_equiv_20260706_1423` (old_equiv + old_flat) | unguided IPV baseline (MA-only vector) | stale (pre-fix) | ✅ completed, **INVALID** |
+| 2026-07-06 20:41 | `ipv_hist_duel_20260706_2041` | 1st historical-duel reconstruction attempt | stale (pre-fix) | cancelled after bug found, **INVALID** |
+| 2026-07-06 20:47 | `ipv_hist_duel_20260706_2047` | 2nd attempt, correct binary | **correct** | cancelled mid-run (blanket qdel mistake) — ~20/95 dpc3 traces completed with valid dueling before being killed; not used, superseded by 2058 |
+| 2026-07-06 20:55 | `ipv_designs_wave1_20260706_2055` / `wave2_20260706_2055` | rerun of base-vector study, correct binary | **correct** | killed before any task started (unauthorized relaunch) — **0 output**, needs resubmitting if still wanted |
+| 2026-07-06 20:56 | `ipv_flat_bases_20260706_2056` (mdpp_flat) | rerun of MDPP baseline, correct binary | **correct** | killed before any task started — **0 output** |
+| **2026-07-06 20:58** | **`ipv_hist_duel_20260706_2058`** | historical cfgA/ilB duel reconstruction | **correct** | **✅ completed, 251/251, VALID** — the one usable result from this whole session. Pooled +2.55% vs SRRIP (caveated: SRRIP baseline is 50M/100M, mismatched instruction count) |
+| 2026-07-06 23:38 | `ipv_old_flat_20260706_2338` | unguided-IPV baseline, correct binary, matches hist_duel's 50M/50M | **correct** | submitted, **still stuck in `qw` as of 2026-07-07 01:2x — Castillo's all.q is cluster-wide unreachable (all 244 slots, all 41 exec hosts flagged `u`), confirmed not job-specific. Jobs are correctly queued; will run once the outage clears. Do NOT resubmit — would just duplicate the same queued work.** |
+
+**Bottom line:** only `ipv_hist_duel_20260706_2058` is both complete and valid. Everything
+else needs re-running against the corrected binary before its numbers can be trusted.
+The direct IPV-Live/IPV comparison (the one that actually matters, not vs-SRRIP) is
+blocked on `ipv_old_flat_20260706_2338` finishing.
+
+---
+
 ## Still Pending / Not Yet Submitted
 
 - **All suites — hist_size sweep** (`sweep_hist_size.sh`): large pHIST×bHIST grid with LRU/LFU/hashed; not yet submitted for any suite

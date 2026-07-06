@@ -1414,6 +1414,9 @@ struct cache_stats {
   uint64_t doa          = 0;
   uint64_t mostly_dead  = 0;
   uint64_t mostly_alive = 0;
+  // Recency 4-state census (LIVENESS_CHAR only): indexed by BLOCK::eviction_state
+  // [0]=dead [1]=mid_lru [2]=mid_mru [3]=live.
+  uint64_t recency_state[4] = {};
   uint64_t doa_stlb_found    = 0; // LLC DoA evictions where STLB entry was present
   uint64_t doa_stlb_also_doa = 0; // of those, STLB entry also had accessed == false
 
@@ -1482,6 +1485,9 @@ class CACHE : public champsim::operable, public MemoryRequestConsumer, public Me
     uint64_t install_cycle   = 0; // cycle when block was installed (for halflife classification)
     uint64_t last_hit_cycle  = 0; // cycle of most recent hit (0 = never hit)
     liveness_class ins_class = liveness_class::mostly_alive; // class predicted at fill time
+    uint8_t eviction_state = 0; // 2-bit recency liveness state: 0=dead 1=mid_lru 2=mid_mru
+                                // 3=live. Set online on each demand hit from the block's
+                                // recency-stack rank, per RECENCY_VERSION. Reset to 0 on fill.
   };
   using set_type = std::vector<BLOCK>;
 
