@@ -1,41 +1,35 @@
-// ipv_live.cc — IPV replacement with per-liveness-class vectors.
+// ipv_live.cc — Insertion/Promotion Vector replacement (Jimenez, MICRO 2013),
+// with per-block liveness guidance and optional 2-way set dueling.
 //
-// Three IPVs: ipv_doa, ipv_mostly_dead, ipv_mostly_alive.
-// On miss: rrpv = ipv[4]       (insertion priority)
-// On hit:  rrpv = ipv[current] (promotion step)
+// Each set is a strict permutation of positions 0..k-1 (0 = most protected).
+// V[p] = promotion target on a hit at position p; V[k] = insertion position.
+// Both hit and miss are the same move_to() shift (see US Patent 12,222,875 B1
+// Fig. 3, which also confirms demotion, V[p] > p, is valid).
 //
-// Statistics printed in replacement_final_stats()
-// ------------------------------------------------
-// Activation rate      — fraction of insertions where liveness selected the IPV.
-// Insert class mix     — DoA / mostly-dead / mostly-alive / unguided breakdown.
-// Hit rate per class   — discriminability metric. DoA and mostly-dead entries
-//                        should have much lower hit rates than mostly-alive.
-// RRPV at eviction     — histogram per class showing how entries leave the cache.
-//   DoA / mostly-dead: ideally evicted at maxRRPV (low-priority insertion, no
-//                      promotion earned) — shows entries did not waste residency.
-//   Mostly-alive:      ideally evicted at low RRPV (promoted by hits before
-//                      eviction) — shows protected entries got the hits they
-//                      were predicted to earn.
-// Aging loops          — find_victim scan passes needed; fewer = less pressure
-//                        from protected entries crowding out eviction candidates.
+// Base vector (k=16) is Jimenez's WI-GIPPR (paper Sec 5.3): 3.68% over LRU.
+// Other k falls back to the trivial (LRU-equivalent) vector.
 //
-// Runtime overrides (index layout: [hit@0, hit@1, hit@2, hit@3, insert]):
-//   IPV_DOA=0,1,2,2,2          default: insert@2, reset to 2 on hit (mirrors LRU-Live DoA)
-//   IPV_MOSTLY_DEAD=0,1,1,2,2  default: insert@2, hit@2→1, hit@1→1 (capped at RRPV=1)
-//   IPV_MOSTLY_ALIVE=0,0,0,0,2 default: insert@2, full promotion on first hit
-//   SRRIP_LIVE_TARGET=llc|stlb|both
+// classify_block_liveness() picks DoA/mostly-dead/mostly-alive per block at
+// insertion, each with its own IPV. Mostly-alive is the base vector as-is.
+// DoA/mostly-dead clamp it to a floor (V_class[p] = max(base[p], floor),
+// insert @ floor) — this project's PACIPV work found and enforced
+// doa[k] >= mostly_dead[k] >= mostly_alive[k] (commit 9359d45606b4).
+// Floors: DoA = floor(2k/3), mostly-dead = floor(k/2).
 //
-// N-way set dueling (DUEL_N_CONFIGS=N, DUEL_N_SAMPLERS=S):
-//   Partitions LLC sets into N sampler groups (S sets each) plus followers.
-//   Each group i always uses IPV_DOA_i; followers use whichever group has the
-//   most demand hits so far (argmax of per-group hit counters).
-//   IPV_DOA_i defaults: config 0 → IPV_DOA, config 1 → IPV_DOA_B, rest → {0,1,2,2,3}.
-//   MD and MA IPVs are shared across all configs (only DoA varies).
-//   DUEL_HYST: config i must lead all others by HYST hits to win followers.
+// Set dueling (DUEL_N_SAMPLERS=N, SRRIP-Live-style): sampler-A sets always use
+// config A's vectors, sampler-B sets config B's; followers adopt the current
+// winner. DUEL_METRIC=hits (PSEL on sampler demand hits) or latency (argmin of
+// accumulated miss-fill latency). DUEL_HYST = lead required before followers
+// switch to B. The config in force at insertion is stored per slot so later
+// hits replay the same config.
+//
+// SRRIP_LIVE_TARGET=llc|stlb|both gates which cache uses guidance at all.
+// Overrides (k+1 ints): config A = IPV_VECTOR (base), IPV_DOA,
+// IPV_MOSTLY_DEAD, IPV_MOSTLY_ALIVE; config B = the same names with a _B
+// suffix. IPV_VECTOR_B defaults to config A's base; each B class vector
+// defaults to the standard derivation from B's base.
 
 #include <algorithm>
-#include <array>
-#include <cassert>
 #include <cstdint>
 #include <cstdlib>
 #include <cstring>
@@ -47,376 +41,327 @@
 
 namespace
 {
-constexpr int maxRRPV        = 3;
-constexpr int MAX_DUEL_CFGS  = 8;
 
-std::unordered_map<CACHE*, std::vector<int>>    rrpv_values;
-// 0=unguided  1=doa  2=mostly_dead  3=mostly_alive
-std::unordered_map<CACHE*, std::vector<int8_t>> slot_class;
-// which duel config was active at insertion time (0..N-1)
-std::unordered_map<CACHE*, std::vector<uint8_t>> slot_cfg_idx;
-// per-config hit counters (saturating at INT64_MAX in practice, but won't overflow)
-std::unordered_map<CACHE*, std::array<int64_t, MAX_DUEL_CFGS>> hit_counts;
-// per-config summed miss-fill latency (cycles); used when DUEL_METRIC=latency.
-// The config with the LOWEST total miss latency wins (least memory stall).
-std::unordered_map<CACHE*, std::array<int64_t, MAX_DUEL_CFGS>> miss_latency;
-
-struct Stats {
-    uint64_t ins_unguided = 0, ins_doa = 0, ins_dead = 0, ins_alive = 0;
-    uint64_t hit_unguided = 0, hit_doa = 0, hit_dead = 0, hit_alive = 0;
-    std::array<uint64_t, 4> evict_rrpv_doa     = {};
-    std::array<uint64_t, 4> evict_rrpv_dead    = {};
-    std::array<uint64_t, 4> evict_rrpv_alive   = {};
-    std::array<uint64_t, 4> evict_rrpv_unguided= {};
-    uint64_t aging_loops = 0;
+const std::vector<int> kDefaultIpv16 = {
+    0, 0, 2, 8, 4, 1, 4, 1, 8, 0, 14, 8, 12, 13, 14, 9, 5
 };
-std::unordered_map<CACHE*, Stats> stats;
 
-using ipv_t = std::array<int, 5>;
-ipv_t g_ipv_mostly_dead  = {0, 1, 1, 2, 2};
-ipv_t g_ipv_mostly_alive = {0, 0, 0, 0, 2};
-
-// Shared (non-dueling) DoA config read from IPV_DOA; also used as duel config 0 default.
-ipv_t g_ipv_doa = {0, 1, 2, 2, 2};
-bool  g_parsed  = false;
-
-// N-way dueling state
-int   g_n_configs  = 0;   // 0 = dueling disabled; 2+ = N-way
-int   g_n_samplers = 0;   // sampler sets per config
-int   g_hyst       = 0;   // hit-count lead required to win followers
-// Which insertion-class hits count toward the duel signal (DUEL_HIT_FILTER):
-//   0 = all hits (default)         — raw demand hits, any class
-//   1 = exclude DoA (cls != 1)     — MD+MA hits only
-//   2 = mostly-alive only (cls==3) — productive-residency hits only
-// Rationale: counting DoA-block hits biases toward retention (ins@2), which on
-// some suites (qmm) is anti-correlated with IPC. The benefit of ins@3 shows up
-// as MORE non-DoA hits (freed space lets live data stay), so filtering DoA hits
-// realigns the signal with performance. See update_replacement_state.
-int   g_hit_filter = 0;
-// Which metric the duel optimizes (DUEL_METRIC):
-//   0 = hits    (default) — followers pick the config with the MOST sampler hits
-//   1 = latency           — followers pick the config with the LOWEST total miss
-//                           latency (least memory stall). Captures configs that
-//                           win by making misses cheaper rather than more frequent
-//                           (e.g. QMM: ins@3 frees space → better DRAM locality),
-//                           which a hit-count signal cannot see.
-int   g_duel_metric = 0;
-std::array<ipv_t, MAX_DUEL_CFGS> g_duel_doa;
-bool  g_parsed_duel = false;
-
-ipv_t parse_ipv(const char* var, ipv_t dflt)
+std::vector<int> trivial_ipv(std::size_t k)
 {
-  const char* s = std::getenv(var);
-  if (!s) return dflt;
-  char buf[64];
-  std::strncpy(buf, s, sizeof(buf) - 1);
-  buf[sizeof(buf) - 1] = '\0';
-  ipv_t v = dflt;
-  char* tok = std::strtok(buf, ",:");
-  for (int i = 0; i < 5 && tok; ++i, tok = std::strtok(nullptr, ",:"))
-    v[i] = std::atoi(tok);
+  std::vector<int> v(k + 1, 0);
+  v[k] = static_cast<int>(k) - 1;
   return v;
 }
 
-void ensure_parsed()
+std::vector<int> default_ipv(std::size_t k)
 {
-  if (g_parsed) return;
-  g_parsed = true;
-  g_ipv_doa         = parse_ipv("IPV_DOA",         g_ipv_doa);
-  g_ipv_mostly_dead = parse_ipv("IPV_MOSTLY_DEAD",  g_ipv_mostly_dead);
-  g_ipv_mostly_alive= parse_ipv("IPV_MOSTLY_ALIVE", g_ipv_mostly_alive);
+  if (k == 16) return kDefaultIpv16;
+  return trivial_ipv(k);
 }
 
-void ensure_parsed_duel()
+// Parses `var` for a k-way cache; falls back to `dflt` if unset, malformed,
+// wrong length, or containing an out-of-range position.
+std::vector<int> parse_ipv_env(const char* var, std::size_t k, const std::vector<int>& dflt)
 {
-  if (g_parsed_duel) return;
-  g_parsed_duel = true;
-
-  // Config 0 always mirrors the single-IPV DoA vector. The insertion/promotion
-  // paths read g_duel_doa[cfg] unconditionally (cfg==0 when dueling is off), so
-  // without this the non-dueling path would use a zero-initialised vector and
-  // insert DoA blocks at RRPV=0. Requires ensure_parsed() to have run first.
-  g_duel_doa[0] = g_ipv_doa;
-
-  const char* e = std::getenv("DUEL_N_CONFIGS");
-  g_n_configs = (e && *e) ? std::atoi(e) : 0;
-  const char* ns = std::getenv("DUEL_N_SAMPLERS");
-  g_n_samplers = (ns && *ns) ? std::atoi(ns) : 0;
-  // Backward compat: old scripts set DUEL_N_SAMPLERS without DUEL_N_CONFIGS.
-  if (g_n_configs < 2 && g_n_samplers > 0) g_n_configs = 2;
-  const char* h = std::getenv("DUEL_HYST");
-  g_hyst = (h && *h) ? std::atoi(h) : 0;
-  const char* hf = std::getenv("DUEL_HIT_FILTER");
-  if (hf && *hf) {
-    if      (std::strcmp(hf, "alive") == 0 || std::strcmp(hf, "2") == 0) g_hit_filter = 2;
-    else if (std::strcmp(hf, "live")  == 0 || std::strcmp(hf, "1") == 0) g_hit_filter = 1;
-    else                                                                  g_hit_filter = 0;
+  const char* s = std::getenv(var);
+  if (!s || !*s) return dflt;
+  std::string buf(s);
+  std::vector<int> v;
+  v.reserve(k + 1);
+  char* tok = std::strtok(buf.data(), ",: ");
+  while (tok) {
+    v.push_back(std::atoi(tok));
+    tok = std::strtok(nullptr, ",: ");
   }
-  const char* dm = std::getenv("DUEL_METRIC");
-  if (dm && *dm) {
-    if (std::strcmp(dm, "latency") == 0 || std::strcmp(dm, "1") == 0) g_duel_metric = 1;
-    else                                                              g_duel_metric = 0;
-  }
-
-  if (g_n_configs < 2) return;
-  if (g_n_configs > MAX_DUEL_CFGS) g_n_configs = MAX_DUEL_CFGS;
-
-  // Default DoA vectors per config index:
-  //   0 → IPV_DOA (ins@2 conservative)
-  //   1 → IPV_DOA_B if set, else {0,1,2,2,3} (ilB)
-  //   2+ → {0,1,2,2,3}
-  const ipv_t dflt_1 = parse_ipv("IPV_DOA_B", {0, 1, 2, 2, 3});
-  const ipv_t dflt_n = {0, 1, 2, 2, 3};
-
-  for (int i = 0; i < g_n_configs; ++i) {
-    char var[32];
-    std::snprintf(var, sizeof(var), "IPV_DOA_%d", i);
-    ipv_t dflt = (i == 0) ? g_ipv_doa : (i == 1) ? dflt_1 : dflt_n;
-    g_duel_doa[i] = parse_ipv(var, dflt);
-  }
+  if (v.size() != k + 1) return dflt;
+  for (int p : v) if (p < 0 || p >= static_cast<int>(k)) return dflt;
+  return v;
 }
 
-// Returns which duel config owns this set as a sampler (-1 = follower).
-// Config i owns sets where set % step == (i * step) / n_configs.
-int sampler_config_of(int set, int step, int n_configs)
+// Clamps `base`'s promotion targets to `floor`, inserting at `floor`.
+std::vector<int> clamp_ipv(const std::vector<int>& base, std::size_t k, int floor)
 {
-  const int j = set % step;
-  for (int i = 0; i < n_configs; ++i)
-    if (j == (i * step) / n_configs) return i;
-  return -1;
+  std::vector<int> v(k + 1);
+  for (std::size_t p = 0; p < k; ++p) v[p] = std::max(base[p], floor);
+  v[k] = floor;
+  return v;
 }
 
-// Returns the winning config index for follower sets, with hysteresis.
-// metric=hits   : argmax sampler hits (more reuse wins).
-// metric=latency: argmin total miss latency (least memory stall wins).
-// If the leader doesn't beat every other config by at least g_hyst (in the
-// metric's native units), returns 0 (conservative default = config 0).
-int winner_config(CACHE* c)
+bool is_targeted(const CACHE& c)
 {
-  const bool lat = (::g_duel_metric == 1);
-  const auto& m = lat ? ::miss_latency[c] : ::hit_counts[c];
-  int best = 0;
-  for (int i = 1; i < ::g_n_configs; ++i) {
-    const bool better = lat ? (m[i] < m[best]) : (m[i] > m[best]);
-    if (better) best = i;
+  const char* target_env = std::getenv("SRRIP_LIVE_TARGET");
+  if (target_env && target_env[0] != '\0') {
+    const std::string t(target_env);
+    if (t == "llc")  return c.NAME == "LLC";
+    if (t == "stlb") return c.NAME == "cpu0_STLB";
+    if (t == "both") return c.NAME == "LLC" || c.NAME == "cpu0_STLB";
+    return false;
   }
-  if (::g_hyst > 0) {
-    for (int i = 0; i < ::g_n_configs; ++i) {
-      if (i == best) continue;
-      // margin of best over config i (positive = best is ahead)
-      const int64_t margin = lat ? (m[i] - m[best]) : (m[best] - m[i]);
-      if (margin <= static_cast<int64_t>(::g_hyst)) return 0;
-    }
+  return c.NAME == "LLC";
+}
+
+// Moves the block at position `from` to position `to`, shifting the blocks
+// in between by one to close the gap. `order[p]` = way at position p;
+// `rank[w]` = position of way w. Both are kept in sync.
+void move_to(uint16_t* order, uint16_t* rank, int from, int to)
+{
+  if (from == to) return;
+  const uint16_t way = order[from];
+  if (to < from) {
+    for (int p = from; p > to; --p) { order[p] = order[p - 1]; rank[order[p]] = static_cast<uint16_t>(p); }
+  } else {
+    for (int p = from; p < to; ++p) { order[p] = order[p + 1]; rank[order[p]] = static_cast<uint16_t>(p); }
   }
-  return best;
+  order[to] = way;
+  rank[way] = static_cast<uint16_t>(to);
+}
+
+struct ConfigVectors {
+  std::vector<int> doa, md, ma;
+};
+
+struct Stats {
+  uint64_t hits = 0, misses = 0;
+  std::vector<uint64_t> hit_pos_hist;  // hist[p] = hits seen while block was at position p
+  uint64_t ins_doa = 0, ins_md = 0, ins_ma = 0, ins_unguided = 0;
+  uint64_t hit_doa = 0, hit_md = 0, hit_ma = 0, hit_unguided = 0;
+  uint64_t sampler_a_hits = 0, sampler_b_hits = 0;
+};
+
+constexpr int PSEL_BITS = 10;
+constexpr int PSEL_MAX  = (1 << PSEL_BITS) - 1;
+constexpr int PSEL_MID  = 1 << (PSEL_BITS - 1);
+
+// 0=unguided(trivial)  1=doa  2=mostly_dead  3=mostly_alive
+std::unordered_map<CACHE*, ConfigVectors>          g_cfg_a;
+std::unordered_map<CACHE*, ConfigVectors>          g_cfg_b;
+std::unordered_map<CACHE*, std::vector<int>>       g_ipv_trivial;  // LRU-equivalent fallback for untargeted caches
+std::unordered_map<CACHE*, std::vector<uint16_t>>  g_order;        // set*NUM_WAY + position -> way
+std::unordered_map<CACHE*, std::vector<uint16_t>>  g_rank;         // set*NUM_WAY + way -> position
+std::unordered_map<CACHE*, std::vector<int8_t>>    g_slot_class;   // set*NUM_WAY + way -> class at insertion
+std::unordered_map<CACHE*, std::vector<uint8_t>>   g_slot_cfg_b;   // set*NUM_WAY + way -> config B at insertion
+std::unordered_map<CACHE*, int>                    g_psel;
+std::unordered_map<CACHE*, int64_t>                g_miss_lat_a;
+std::unordered_map<CACHE*, int64_t>                g_miss_lat_b;
+std::unordered_map<CACHE*, Stats>                  g_stats;
+
+int g_n_samplers = -1;
+int g_duel_metric = -1;  // 0=hits, 1=latency
+int64_t g_hyst = -1;
+
+int n_samplers()
+{
+  if (g_n_samplers < 0) {
+    const char* e = std::getenv("DUEL_N_SAMPLERS");
+    g_n_samplers = (e && *e) ? std::atoi(e) : 0;
+  }
+  return g_n_samplers;
+}
+
+int duel_metric()
+{
+  if (g_duel_metric < 0) {
+    const char* e = std::getenv("DUEL_METRIC");
+    g_duel_metric = (e && (std::string(e) == "latency" || std::string(e) == "1")) ? 1 : 0;
+  }
+  return g_duel_metric;
+}
+
+int64_t hyst()
+{
+  if (g_hyst < 0) {
+    const char* e = std::getenv("DUEL_HYST");
+    g_hyst = (e && *e) ? static_cast<int64_t>(std::atoll(e)) : 0;
+  }
+  return g_hyst;
 }
 
 } // namespace
 
 void CACHE::initialize_replacement()
 {
-  ::ensure_parsed();
-  ::ensure_parsed_duel();
-  const std::size_t n = NUM_SET * NUM_WAY;
-  ::rrpv_values[this]  = std::vector<int>    (n, ::maxRRPV);
-  ::slot_class[this]   = std::vector<int8_t> (n, 0);
-  ::slot_cfg_idx[this] = std::vector<uint8_t>(n, 0);
-  ::stats[this]        = Stats{};
-  ::hit_counts[this]   = {};
-  ::miss_latency[this] = {};
+  const std::size_t k = NUM_WAY;
+
+  const std::vector<int> base_a = ::parse_ipv_env("IPV_VECTOR", k, ::default_ipv(k));
+  ConfigVectors a;
+  a.doa = ::parse_ipv_env("IPV_DOA",          k, ::clamp_ipv(base_a, k, static_cast<int>(2 * k / 3)));
+  a.md  = ::parse_ipv_env("IPV_MOSTLY_DEAD",  k, ::clamp_ipv(base_a, k, static_cast<int>(k / 2)));
+  a.ma  = ::parse_ipv_env("IPV_MOSTLY_ALIVE", k, base_a);
+  ::g_cfg_a[this] = a;
+
+  const std::vector<int> base_b = ::parse_ipv_env("IPV_VECTOR_B", k, base_a);
+  ConfigVectors b;
+  b.doa = ::parse_ipv_env("IPV_DOA_B",          k, ::clamp_ipv(base_b, k, static_cast<int>(2 * k / 3)));
+  b.md  = ::parse_ipv_env("IPV_MOSTLY_DEAD_B",  k, ::clamp_ipv(base_b, k, static_cast<int>(k / 2)));
+  b.ma  = ::parse_ipv_env("IPV_MOSTLY_ALIVE_B", k, base_b);
+  ::g_cfg_b[this] = b;
+
+  ::g_ipv_trivial[this] = ::trivial_ipv(k);
+
+  auto& order = ::g_order[this];
+  auto& rank  = ::g_rank[this];
+  order.assign(static_cast<std::size_t>(NUM_SET) * NUM_WAY, 0);
+  rank.assign(static_cast<std::size_t>(NUM_SET) * NUM_WAY, 0);
+  for (std::size_t s = 0; s < NUM_SET; ++s) {
+    for (std::size_t w = 0; w < NUM_WAY; ++w) {
+      order[s * NUM_WAY + w] = static_cast<uint16_t>(w);
+      rank [s * NUM_WAY + w] = static_cast<uint16_t>(w);
+    }
+  }
+  ::g_slot_class[this].assign(static_cast<std::size_t>(NUM_SET) * NUM_WAY, 0);
+  ::g_slot_cfg_b[this].assign(static_cast<std::size_t>(NUM_SET) * NUM_WAY, 0);
+  ::g_psel[this]       = PSEL_MID;
+  ::g_miss_lat_a[this] = 0;
+  ::g_miss_lat_b[this] = 0;
+
+  Stats st;
+  st.hit_pos_hist.assign(k, 0);
+  ::g_stats[this] = std::move(st);
+
+  (void)::n_samplers(); (void)::duel_metric(); (void)::hyst();
 }
 
 uint32_t CACHE::find_victim(uint32_t triggering_cpu, uint64_t instr_id, uint32_t set,
                              const BLOCK* current_set, uint64_t ip, uint64_t full_addr,
                              uint32_t type)
 {
-  auto begin  = std::next(std::begin(::rrpv_values[this]), set * NUM_WAY);
-  auto end    = std::next(begin, NUM_WAY);
-  auto victim = std::find(begin, end, ::maxRRPV);
-  while (victim == end) {
-    ++::stats[this].aging_loops;
-    for (auto it = begin; it != end; ++it)
-      ++(*it);
-    victim = std::find(begin, end, ::maxRRPV);
-  }
-
-  assert(begin <= victim);
-  assert(victim < end);
-
-  const uint32_t    way = static_cast<uint32_t>(std::distance(begin, victim));
-  const std::size_t idx = set * NUM_WAY + way;
-  const int8_t cls  = ::slot_class[this][idx];
-  const int    rrpv = ::rrpv_values[this][idx];
-  auto& st = ::stats[this];
-
-  switch (cls) {
-    case 1: st.evict_rrpv_doa    [rrpv]++; break;
-    case 2: st.evict_rrpv_dead   [rrpv]++; break;
-    case 3: st.evict_rrpv_alive  [rrpv]++; break;
-    default:st.evict_rrpv_unguided[rrpv]++; break;
-  }
-
-  return way;
+  const auto& order = ::g_order[this];
+  return order[static_cast<std::size_t>(set) * NUM_WAY + (NUM_WAY - 1)];
 }
 
 void CACHE::update_replacement_state(uint32_t triggering_cpu, uint32_t set, uint32_t way,
                                       uint64_t full_addr, uint64_t ip, uint64_t victim_addr,
                                       uint32_t type, uint8_t hit)
 {
-  const std::size_t idx = set * NUM_WAY + way;
-  auto& rrpv = ::rrpv_values[this][idx];
-  auto& cls  = ::slot_class[this][idx];
-  auto& st   = ::stats[this];
+  const std::size_t base = static_cast<std::size_t>(set) * NUM_WAY;
+  uint16_t* order = ::g_order[this].data() + base;
+  uint16_t* rank  = ::g_rank[this].data() + base;
+  int8_t&   cls   = ::g_slot_class[this][base + way];
+  uint8_t&  slot_b = ::g_slot_cfg_b[this][base + way];
+  auto& st = ::g_stats[this];
+  const bool targeted = ::is_targeted(*this);
 
-  bool use_liveness = false;
-  const char* target_env = std::getenv("SRRIP_LIVE_TARGET");
-  if (target_env && target_env[0] != '\0') {
-    std::string t(target_env);
-    if      (t == "llc"  && NAME == "LLC")        use_liveness = true;
-    else if (t == "stlb" && NAME == "cpu0_STLB")  use_liveness = true;
-    else if (t == "both" && (NAME == "LLC" || NAME == "cpu0_STLB")) use_liveness = true;
-  } else {
-    if (NAME == "LLC") use_liveness = true;
-  }
+  // Sampler membership and duel bookkeeping (same scheme as srrip_live).
+  const int ns   = ::n_samplers();
+  const int step = (targeted && ns > 0) ? static_cast<int>(NUM_SET) / ns : 0;
+  const bool is_a = step > 0 && static_cast<int>(set) % step == 0;
+  const bool is_b = step > 0 && static_cast<int>(set) % step == step / 2;
 
-  if (use_liveness) {
-    const int nc   = ::g_n_configs;
-    const int ns   = ::g_n_samplers;
-    const int step = (nc >= 2 && ns > 0) ? static_cast<int>(NUM_SET) / ns : 0;
-
-    // Determine which config this set uses.
-    int cfg;
-    if (step > 0) {
-      const int sc = ::sampler_config_of(static_cast<int>(set), step, nc);
-      if (sc >= 0) {
-        // Sampler set: always uses its assigned config; records a hit for it.
-        // cls holds the block's insertion class (1=DoA, 2=MD, 3=MA). The hit
-        // filter (DUEL_HIT_FILTER) decides which classes contribute to the
-        // duel signal — excluding DoA hits removes the retention bias.
-        cfg = sc;
-        if (hit) {
-          bool count_hit = type != WRITE;
-          if (count_hit && ::g_hit_filter == 1) count_hit = (cls != 1);
-          if (count_hit && ::g_hit_filter == 2) count_hit = (cls == 3);
-          if (count_hit)
-            ::hit_counts[this][sc]++;
-        } else if (type != WRITE) {
-          // Miss fill into this config's sampler set: attribute the fill's miss
-          // latency (set by handle_fill) to this config. Captures miss cost for
-          // the DUEL_METRIC=latency signal; harmless when metric=hits.
-          ::miss_latency[this][sc] += static_cast<int64_t>(this->last_fill_latency);
-        }
-      } else {
-        // Follower set: uses current winner.
-        cfg = ::winner_config(this);
+  if (step > 0) {
+    if (::duel_metric() == 1) {
+      if (!hit && type != WRITE) {
+        if (is_a) ::g_miss_lat_a[this] += static_cast<int64_t>(this->last_fill_latency);
+        if (is_b) ::g_miss_lat_b[this] += static_cast<int64_t>(this->last_fill_latency);
       }
     } else {
-      cfg = 0;  // dueling disabled — always config 0
+      if (hit && type != WRITE) {
+        if (is_a) { ::g_psel[this] = std::max(0,        ::g_psel[this] - 1); st.sampler_a_hits++; }
+        if (is_b) { ::g_psel[this] = std::min(PSEL_MAX, ::g_psel[this] + 1); st.sampler_b_hits++; }
+      }
     }
+  }
 
-    auto& cfg_stored = ::slot_cfg_idx[this][idx];
-    if (hit) {
-      // Use the config stored at insertion time for promotion.
-      const int c = static_cast<int>(cfg_stored);
-      const ipv_t& ipv = (cls == 1) ? ::g_duel_doa[c] :
-                         (cls == 2) ? ::g_ipv_mostly_dead :
-                                      ::g_ipv_mostly_alive;
-      if (type != WRITE) rrpv = ipv[rrpv];
-      if      (cls == 1) st.hit_doa++;
-      else if (cls == 2) st.hit_dead++;
-      else               st.hit_alive++;
-    } else {
-      const liveness_class lc = classify_block_liveness(full_addr, ip);
-      const ipv_t& ipv = (lc == liveness_class::doa)         ? ::g_duel_doa[cfg] :
-                         (lc == liveness_class::mostly_dead)  ? ::g_ipv_mostly_dead :
-                                                                 ::g_ipv_mostly_alive;
-      cfg_stored = static_cast<uint8_t>(cfg);
-      rrpv = ipv[4];
-      if      (lc == liveness_class::doa)         { cls = 1; st.ins_doa++;   }
-      else if (lc == liveness_class::mostly_dead)  { cls = 2; st.ins_dead++;  }
-      else                                         { cls = 3; st.ins_alive++; }
+  if (hit) {
+    if (type == WRITE) return;  // store hits don't trigger promotion
+    const ConfigVectors& cfg = slot_b ? ::g_cfg_b[this] : ::g_cfg_a[this];
+    const std::vector<int>& ipv = !targeted   ? ::g_ipv_trivial[this] :
+                                   (cls == 1)   ? cfg.doa :
+                                   (cls == 2)   ? cfg.md :
+                                                  cfg.ma;
+    const int p_old = rank[way];
+    st.hits++;
+    st.hit_pos_hist[p_old]++;
+    switch (cls) {
+      case 1:  st.hit_doa++;      break;
+      case 2:  st.hit_md++;       break;
+      case 3:  st.hit_ma++;       break;
+      default: st.hit_unguided++; break;
     }
+    ::move_to(order, rank, p_old, ipv[p_old]);
   } else {
-    const auto& ipv = ::g_ipv_mostly_alive;
-    if (hit) { if (type != WRITE) rrpv = ipv[rrpv]; st.hit_unguided++; }
-    else     { rrpv = ipv[4]; cls = 0; st.ins_unguided++; }
+    st.misses++;
+    if (targeted) {
+      const bool b_wins = (::duel_metric() == 1)
+          ? (::g_miss_lat_a[this] - ::g_miss_lat_b[this] > ::hyst())
+          : (::g_psel[this] > PSEL_MID + static_cast<int>(::hyst()));
+      const bool use_b = is_b || (!is_a && step > 0 && b_wins);
+      slot_b = use_b;
+      const ConfigVectors& cfg = use_b ? ::g_cfg_b[this] : ::g_cfg_a[this];
+
+      const liveness_class lc = classify_block_liveness(full_addr, ip);
+      const std::vector<int>& ipv = (lc == liveness_class::doa)         ? cfg.doa :
+                                     (lc == liveness_class::mostly_dead)  ? cfg.md :
+                                                                            cfg.ma;
+      cls = (lc == liveness_class::doa) ? 1 : (lc == liveness_class::mostly_dead) ? 2 : 3;
+      if      (cls == 1) st.ins_doa++;
+      else if (cls == 2) st.ins_md++;
+      else               st.ins_ma++;
+      // find_victim() guarantees the evicted way sits at the tail position.
+      ::move_to(order, rank, static_cast<int>(NUM_WAY) - 1, ipv[NUM_WAY]);
+    } else {
+      cls = 0;
+      slot_b = 0;
+      st.ins_unguided++;
+      ::move_to(order, rank, static_cast<int>(NUM_WAY) - 1, ::g_ipv_trivial[this][NUM_WAY]);
+    }
   }
 }
 
 void CACHE::replacement_final_stats()
 {
-  const auto& st = ::stats[this];
-  const uint64_t total_ins  = st.ins_unguided + st.ins_doa + st.ins_dead + st.ins_alive;
-  const uint64_t guided_ins = st.ins_doa + st.ins_dead + st.ins_alive;
+  const auto& st = ::g_stats[this];
+  const std::size_t k = NUM_WAY;
+  const bool targeted = ::is_targeted(*this);
 
-  auto pct = [](uint64_t n, uint64_t d) -> double {
-    return d ? 100.0 * n / d : 0.0;
+  auto print_vec = [](const std::vector<int>& v) {
+    for (std::size_t i = 0; i < v.size(); ++i) printf("%d%s", v[i], i + 1 < v.size() ? "," : "");
   };
-  auto tot = [](const std::array<uint64_t,4>& a) {
-    return a[0]+a[1]+a[2]+a[3];
-  };
+  auto pct = [](uint64_t n, uint64_t d) -> double { return d ? 100.0 * n / d : 0.0; };
 
-  const uint64_t evict_doa  = tot(st.evict_rrpv_doa);
-  const uint64_t evict_dead = tot(st.evict_rrpv_dead);
-  const uint64_t evict_alive= tot(st.evict_rrpv_alive);
-  const uint64_t evict_ung  = tot(st.evict_rrpv_unguided);
-  const uint64_t evict_total= evict_doa+evict_dead+evict_alive+evict_ung;
+  const uint64_t total_ins = st.ins_doa + st.ins_md + st.ins_ma + st.ins_unguided;
+  const uint64_t guided_ins = st.ins_doa + st.ins_md + st.ins_ma;
+  const ConfigVectors& a = ::g_cfg_a[this];
+  const ConfigVectors& b = ::g_cfg_b[this];
 
-  printf("%s IPV-Live STATS:\n", NAME.c_str());
-
-  if (::g_n_configs >= 2) {
-    const int winner = ::winner_config(this);
-    const char* filt = ::g_hit_filter == 2 ? "alive" :
-                       ::g_hit_filter == 1 ? "live"  : "all";
-    const char* metric = ::g_duel_metric == 1 ? "latency" : "hits";
-    printf("  Set dueling     : N=%d  samplers/cfg=%d  hyst=%d  metric=%s  hit_filter=%s  winner=config_%d\n",
-           ::g_n_configs, ::g_n_samplers, ::g_hyst, metric, filt, winner);
-    for (int i = 0; i < ::g_n_configs; ++i) {
-      const ipv_t& d = ::g_duel_doa[i];
-      printf("  Config %d%s: DoA={%d,%d,%d,%d,%d}  sampler_hits=%ld  miss_latency=%ld\n",
-             i, (i == winner ? "*" : " "),
-             d[0],d[1],d[2],d[3],d[4],
-             ::hit_counts[this][i], ::miss_latency[this][i]);
+  printf("%s IPV STATS:\n", NAME.c_str());
+  printf("  targeted        : %s\n", targeted ? "yes" : "no (trivial/LRU vector)");
+  if (::n_samplers() > 0) {
+    const bool lat = (::duel_metric() == 1);
+    const bool b_wins = lat ? (::g_miss_lat_b[this] < ::g_miss_lat_a[this])
+                            : (::g_psel[this] > PSEL_MID);
+    if (lat) {
+      printf("  Set dueling     : metric=latency  winner=%s  lat_a=%ld  lat_b=%ld  hyst=%ld\n",
+             b_wins ? "config_B" : "config_A", ::g_miss_lat_a[this], ::g_miss_lat_b[this], ::hyst());
+    } else {
+      printf("  Set dueling     : metric=hits  PSEL=%d/%d  winner=%s  a_hits=%lu  b_hits=%lu  hyst=%ld\n",
+             ::g_psel[this], PSEL_MAX, b_wins ? "config_B" : "config_A",
+             st.sampler_a_hits, st.sampler_b_hits, ::hyst());
     }
-    printf("  MD: {%d,%d,%d,%d,%d}  MA: {%d,%d,%d,%d,%d}  (shared across configs)\n",
-           ::g_ipv_mostly_dead[0],::g_ipv_mostly_dead[1],::g_ipv_mostly_dead[2],
-           ::g_ipv_mostly_dead[3],::g_ipv_mostly_dead[4],
-           ::g_ipv_mostly_alive[0],::g_ipv_mostly_alive[1],::g_ipv_mostly_alive[2],
-           ::g_ipv_mostly_alive[3],::g_ipv_mostly_alive[4]);
+    printf("  A.doa: ["); print_vec(a.doa); printf("]\n");
+    printf("  A.md : ["); print_vec(a.md);  printf("]\n");
+    printf("  A.ma : ["); print_vec(a.ma);  printf("]\n");
+    printf("  B.doa: ["); print_vec(b.doa); printf("]\n");
+    printf("  B.md : ["); print_vec(b.md);  printf("]\n");
+    printf("  B.ma : ["); print_vec(b.ma);  printf("]  (last entry = insertion position)\n");
   } else {
-    printf("  IPV_doa         : {%d,%d,%d,%d,%d}\n",
-           ::g_ipv_doa[0],::g_ipv_doa[1],::g_ipv_doa[2],::g_ipv_doa[3],::g_ipv_doa[4]);
-    printf("  IPV_mostly_dead : {%d,%d,%d,%d,%d}\n",
-           ::g_ipv_mostly_dead[0],::g_ipv_mostly_dead[1],::g_ipv_mostly_dead[2],
-           ::g_ipv_mostly_dead[3],::g_ipv_mostly_dead[4]);
-    printf("  IPV_mostly_alive: {%d,%d,%d,%d,%d}\n",
-           ::g_ipv_mostly_alive[0],::g_ipv_mostly_alive[1],::g_ipv_mostly_alive[2],
-           ::g_ipv_mostly_alive[3],::g_ipv_mostly_alive[4]);
+    printf("  IPV_doa         : ["); print_vec(a.doa); printf("]\n");
+    printf("  IPV_mostly_dead : ["); print_vec(a.md);  printf("]\n");
+    printf("  IPV_mostly_alive: ["); print_vec(a.ma);  printf("]  (last entry = insertion position)\n");
   }
-
+  printf("  hits=%lu  misses=%lu  hit_rate=%.2f%%\n",
+         st.hits, st.misses, pct(st.hits, st.hits + st.misses));
   printf("  Activation rate : %.1f%%  (%lu guided / %lu total insertions)\n",
          pct(guided_ins, total_ins), guided_ins, total_ins);
-  printf("  guided_insertions=%lu\n", guided_ins);
   printf("  Insert mix      : DoA=%.1f%%  Dead=%.1f%%  Alive=%.1f%%  Unguided=%.1f%%\n",
-         pct(st.ins_doa,total_ins), pct(st.ins_dead,total_ins),
-         pct(st.ins_alive,total_ins), pct(st.ins_unguided,total_ins));
+         pct(st.ins_doa,total_ins), pct(st.ins_md,total_ins),
+         pct(st.ins_ma,total_ins), pct(st.ins_unguided,total_ins));
   printf("  Hit rate/class  : DoA=%.1f%%  Dead=%.1f%%  Alive=%.1f%%  Unguided=%.1f%%\n",
-         pct(st.hit_doa,st.ins_doa), pct(st.hit_dead,st.ins_dead),
-         pct(st.hit_alive,st.ins_alive), pct(st.hit_unguided,st.ins_unguided));
-  printf("  RRPV@evict DoA  : [0]=%.1f%% [1]=%.1f%% [2]=%.1f%% [3]=%.1f%%"
-         "  (ideal: ~100%% at [%d])\n",
-         pct(st.evict_rrpv_doa[0],evict_doa), pct(st.evict_rrpv_doa[1],evict_doa),
-         pct(st.evict_rrpv_doa[2],evict_doa), pct(st.evict_rrpv_doa[3],evict_doa),
-         ::maxRRPV);
-  printf("  RRPV@evict Dead : [0]=%.1f%% [1]=%.1f%% [2]=%.1f%% [3]=%.1f%%\n",
-         pct(st.evict_rrpv_dead[0],evict_dead), pct(st.evict_rrpv_dead[1],evict_dead),
-         pct(st.evict_rrpv_dead[2],evict_dead), pct(st.evict_rrpv_dead[3],evict_dead));
-  printf("  RRPV@evict Alive: [0]=%.1f%% [1]=%.1f%% [2]=%.1f%% [3]=%.1f%%"
-         "  (ideal: low RRPV after promotion)\n",
-         pct(st.evict_rrpv_alive[0],evict_alive), pct(st.evict_rrpv_alive[1],evict_alive),
-         pct(st.evict_rrpv_alive[2],evict_alive), pct(st.evict_rrpv_alive[3],evict_alive));
-  printf("  Aging loops     : %lu  (%.2f per eviction)\n",
-         st.aging_loops, pct(st.aging_loops, evict_total) / 100.0);
+         pct(st.hit_doa,st.ins_doa), pct(st.hit_md,st.ins_md),
+         pct(st.hit_ma,st.ins_ma), pct(st.hit_unguided,st.ins_unguided));
+  printf("  hit position histogram (position at time of hit, 0=MRU-most):\n   ");
+  for (std::size_t p = 0; p < k; ++p)
+    printf(" [%zu]=%.1f%%", p, st.hits ? 100.0 * st.hit_pos_hist[p] / st.hits : 0.0);
+  printf("\n");
   repl_hist_pc.print_stats(NAME.c_str(), thd_doa, thd_dead);
   printf("\n");
 }
