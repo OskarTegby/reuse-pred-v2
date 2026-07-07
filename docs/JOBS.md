@@ -722,3 +722,44 @@ mix: Dead=56.9%` (136455 raw), non-degenerate.
 - **srrip_live_bypass for new suites** (GAP, GMS, Ligra, ML): not yet submitted
 
 Note: Mazumdar traces are NOT run for new experiments.
+
+---
+
+## DoA/MD ablation (2026-07-08)
+
+**Branch restructure first**: pulled the phase-reset fix (lru_live + srrip_live +
+ipv_live) and the regenerated black-box `expected/` outputs onto a new branch,
+**`blackbox-phase-reset-fix`** (based on `main`, cherry-picked from
+`mru-end-mostly-dead`'s commits `e1c5ae35`/`3f49ef70`/`30281e67`) — general-purpose
+correctness fixes, kept separate from the MD-signal experiment so it can be
+reviewed/merged on its own timeline. `mru-end-mostly-dead` keeps all 9 commits
+(duplication is intentional, not a rewrite).
+
+**Black-box verify re-run**: `blackbox_run_cluster.sh` (no `generate` arg) launched
+to confirm the regenerated references reproduce cleanly on a fresh run. Note: the
+script's own `jobs_in_queue()` has a real bug — `qstat` returning empty output is
+ambiguous between "0 jobs" and "SSH blip," so a `generate`-mode run can hang forever
+once the queue genuinely empties (hit this on the first `generate` run; had to kill
+it and manually finish the download/copy/commit steps). Verify mode has a second,
+more robust termination path (direct output-file comparison via `check_progress.sh`),
+so less likely to hit the same hang, but worth knowing about if a future run stalls.
+
+**Launched (`md_doa_ablation_20260708_0018`, jids 1409591–1409614, 24 tasks,
+`mru-end-mostly-dead` branch, `champsim_lru_live_redwoodcove`)**: pinpoints exactly
+what mostly-dead classification contributes vs. DoA, on the same curated 6-trace
+subset used in `mru_end_mostly_dead_v2` (dpc3: roms/cactuBSSN/xalancbmk/lbm; ligra:
+MIS/PageRank), 50M/100M. 4 arms per trace:
+- `lru` — plain LRU baseline
+- `both` — THD_DOA=8, THD_DEAD=2, LRU_LIVE_HIT_INIT=1, no suppress/decouple flags:
+  normal coupled production behavior ("how things were" before this session's
+  isolation work), default wall-clock halflife MD signal (no MD_SIGNAL_RECENCY —
+  deliberately kept out of this ablation to isolate DoA-vs-MD cleanly, independent
+  of the separate MRU-end/LRU-end signal-choice question already answered by
+  `mru_end_mostly_dead_v2`)
+- `doa_only` — THD_DOA=8, THD_DEAD=0: MD's branch in `classify()` is structurally
+  unreachable (`thd_dead > 0` check fails), DoA operates completely normally
+- `md_only` — THD_DOA=8, THD_DEAD=2, MD_DISABLE_DOA_SCORE=1,
+  MD_SUPPRESS_DOA_UPDATE=1: DoA fully suppressed (validated this session), only MD
+  contributes
+
+Verified trace-filter regex matches exactly 1 file per trace name before submitting.
