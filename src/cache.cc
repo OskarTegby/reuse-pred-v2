@@ -31,6 +31,10 @@
 #include "instruction.h"
 #include "util.h"
 
+// Defined (strong) in replacement/lru_live/lru_live.cc; resolves to a null
+// weak symbol (no-op) in binaries that don't link that replacement policy.
+extern "C" void lru_live_reset_phase_stats(CACHE*) __attribute__((weak));
+
 // ──────────────────────────────────────────────
 // Shared replacement-history infrastructure
 // ──────────────────────────────────────────────
@@ -1379,6 +1383,15 @@ void CACHE::begin_phase()
   // Reset history table stats so ROI counts are clean (exclude warmup).
   phist.reset_stats();
   bhist_flat.reset_stats();
+  repl_hist_pc.reset_stats();
+  g_merged_repl_hist.reset_stats();
+
+  // Replacement-policy-local reporting counters (e.g. lru_live.cc's Insert
+  // mix / hit-promotion stats) live outside the module-dispatch system, so
+  // they're reset via a weak symbol that's a no-op if that policy isn't
+  // linked into this binary.
+  if (lru_live_reset_phase_stats)
+    lru_live_reset_phase_stats(this);
 
   // pc_liveness_char (LIVENESS_CHAR's per-PC breakdown) is otherwise never
   // reset, so it silently accumulates across the warmup/ROI boundary.
