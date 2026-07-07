@@ -816,10 +816,27 @@ bool CACHE::handle_fill(const PACKET& fill_mshr)
       predictor_bypassed = true;
       way = set_end;
     } else {
-      // Compute liveness class using halflife criterion.
+      // Compute liveness class. Default: wall-clock halflife criterion. When
+      // MD_SIGNAL_RECENCY=1 (LRU-Live only — it is the one policy file that
+      // populates BLOCK::eviction_state with this meaning, see lru_live.cc),
+      // swap in a recency-stack-rank signal instead: MD_SIGNAL_END selects
+      // which end of the stack, if it was where the block's last hit landed,
+      // counts as mostly-dead ("mru", default, or "lru").
+      static const bool use_recency_md_signal = [] {
+        const char* v = std::getenv("MD_SIGNAL_RECENCY");
+        return v && v[0] && v[0] != '0';
+      }();
+      static const bool md_target_is_mru_end = [] {
+        const char* v = std::getenv("MD_SIGNAL_END");
+        return !(v && v[0] && std::string_view(v) == "lru");
+      }();
       liveness_class evict_lv;
       if (!way->accessed) {
         evict_lv = liveness_class::doa;
+      } else if (use_recency_md_signal) {
+        const bool last_hit_mru_end = (way->eviction_state & 2) != 0;
+        evict_lv = (last_hit_mru_end == md_target_is_mru_end)
+                   ? liveness_class::mostly_dead : liveness_class::mostly_alive;
       } else {
         const uint64_t lifetime     = current_cycle - way->install_cycle;
         const uint64_t time_til_end = current_cycle - way->last_hit_cycle;

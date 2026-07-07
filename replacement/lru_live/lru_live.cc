@@ -83,6 +83,23 @@ static int64_t g_hyst = 0;  // cfgB must beat cfgA by this margin to win followe
 
 static int g_ll_duel_metric = -1;
 
+// MD_SIGNAL_RECENCY=1: swap the mostly-dead/mostly-alive eviction signal (fed
+// to the history table via CACHE::update_eviction_counters in cache.cc) from
+// the default wall-clock halflife criterion to a recency-stack-rank signal.
+// MD_SIGNAL_END selects which end of the recency stack, if it was where the
+// block's LAST hit landed, counts as "mostly dead": "mru" (default) or "lru".
+// BLOCK::eviction_state (2 bits) is repurposed here: bit0=accessed (one-way,
+// set on first hit), bit1=last hit was in the MRU end (rank >= N/2),
+// reversible on every subsequent hit. Read back in cache.cc.
+static bool recency_md_enabled()
+{
+    static const bool e = [] {
+        const char* v = std::getenv("MD_SIGNAL_RECENCY");
+        return v && v[0] && v[0] != '0';
+    }();
+    return e;
+}
+
 static void ensure_parsed()
 {
     if (g_n_samplers >= 0) return;
@@ -284,6 +301,12 @@ void CACHE::update_replacement_state(uint32_t triggering_cpu, uint32_t set, uint
             }
 
             const uint32_t old_r = ranks[way];
+
+            if (::recency_md_enabled()) {
+                const bool mru_end = old_r >= N / 2;
+                block[slot].eviction_state = 1 | (mru_end ? 2 : 0);  // bit0=accessed bit1=mru_end
+            }
+
             if (target > old_r) {           // move up toward MRU
                 for (uint32_t w = 0; w < N; ++w)
                     if (w != way && ranks[w] > old_r && ranks[w] <= target)
@@ -397,6 +420,7 @@ void CACHE::update_replacement_state(uint32_t triggering_cpu, uint32_t set, uint
         ::fill_time[this][slot]     = clk;
         ::last_hit_time[this][slot] = clk;
         ::hit_cnt[this][slot]       = 0;
+        if (::recency_md_enabled()) block[slot].eviction_state = 0;  // reset: not yet accessed
     }
 }
 

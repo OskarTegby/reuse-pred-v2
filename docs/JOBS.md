@@ -431,8 +431,25 @@ gms 11 + google 43 + qmm 45 + ml 31), Config-C 2MB LLC.
 
 **Bottom line:** only `ipv_hist_duel_20260706_2058` is both complete and valid. Everything
 else needs re-running against the corrected binary before its numbers can be trusted.
-The direct IPV-Live/IPV comparison (the one that actually matters, not vs-SRRIP) is
-blocked on `ipv_old_flat_20260706_2338` finishing.
+
+**IPV-Live/IPV result (2026-07-07, `ipv_old_flat_20260706_2338`):** matched instruction
+count (50M/50M), same 251 traces, correct binary both sides. Positive on all suites so
+far — dpc3 +0.77%, gap +2.03%, ligra +0.75%, gms +0.44%, google +1.60%, qmm +1.60%.
+
+**CORRECTION:** an initial pass reported ml at −33.56% (severe regression), attributed to
+IPV-Live mispredicting liveness on ML-inference traces. **This was a data artifact, not a
+real finding.** The "251/251 champsim.out present" completion check only verified the
+*file* existed, not that the run had actually finished — 12+ ml `old_flat` tasks were
+still mid-simulation when the IPC was extracted, so their "IPC" was actually the
+warmup-phase cumulative IPC (grabbed because it was the last "cumulative IPC" line
+present in a truncated, still-being-written file), not the true final simulation IPC.
+Confirmed by checking for the actual `^Simulation finished` completion marker (absent on
+12 of 31 ml traces) — re-extracting only the verified-complete pairs gives ratios in the
+0.88–1.06 range, matching every other suite, and a partial ml pooled figure of **+1.09%**
+(n=19/31, pending the rest). No mechanism problem exists; nothing to fix. **Lesson: a
+`champsim.out` file existing is not proof a run finished — check for the actual
+completion marker (`Simulation finished`), not just file presence or the last matching
+line in a possibly-truncated file.**
 
 ---
 
