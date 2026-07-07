@@ -145,6 +145,12 @@ struct Stats {
     uint64_t ins_doa_bypass = 0;   // DoA fills inserted in bypass mode
     uint64_t hit_unguided = 0, hit_doa = 0, hit_dead = 0, hit_alive = 0;
     uint64_t hit_doa_bypass = 0;   // hits on bypass-mode DoA slots (before eviction)
+    // Promotion guidance actually applied: hit landed on a doa/dead-classified
+    // slot AND LRU_LIVE_HIT_INIT capped its promotion target below full MRU.
+    // Distinct from hit_doa/hit_dead, which count hits on classified slots
+    // regardless of whether capping is enabled (LRU_LIVE_HIT_INIT=0 still
+    // increments those but never caps anything).
+    uint64_t promo_capped_doa = 0, promo_capped_dead = 0;
     uint64_t evict_doa = 0, evict_dead = 0, evict_alive = 0, evict_unguided = 0;
     uint64_t evict_doa_bypass = 0; // bypass-mode DoA evictions
     double   res_sum[4][2] = {};
@@ -155,6 +161,16 @@ struct Stats {
 std::unordered_map<CACHE*, Stats> stats;
 
 } // namespace
+
+// Weak-symbol counterpart declared in cache.cc: resets only the reporting
+// counters (Insert mix / hit-promotion / residency stats) at the ROI
+// boundary, matching sim_stats/HistTable's begin_phase reset. Deliberately
+// leaves live mechanism state (ranks, hit_cnt, last_hit_time, bypassed, ...)
+// untouched, since that must carry over from warmup for correct behavior.
+extern "C" void lru_live_reset_phase_stats(CACHE* c)
+{
+    ::stats[c] = Stats{};
+}
 
 void CACHE::initialize_replacement()
 {
@@ -298,6 +314,11 @@ void CACHE::update_replacement_state(uint32_t triggering_cpu, uint32_t set, uint
                     if (cls == 1) target = N - 1 - (2 * N / 3);  // DoA -> 2N/3
                     // cls == 2 (MD), cls == 3 (MA), cls == 0 (unguided) keep MRU
                 }
+            }
+
+            if (target != N - 1) {
+                if      (cls == 1) st.promo_capped_doa++;
+                else if (cls == 2) st.promo_capped_dead++;
             }
 
             const uint32_t old_r = ranks[way];
@@ -491,6 +512,8 @@ void CACHE::replacement_final_stats()
     printf("  Hit rate/class   : DoA=%.1f%%  Dead=%.1f%%  Alive=%.1f%%  Unguided=%.1f%%\n",
            pct(st.hit_doa,st.ins_doa), pct(st.hit_dead,st.ins_dead),
            pct(st.hit_alive,st.ins_alive), pct(st.hit_unguided,st.ins_unguided));
+    printf("  Promo capped (raw): DoA=%lu/%lu  Dead=%lu/%lu  (capped / hits-on-class, LRU_LIVE_HIT_INIT=%d)\n",
+           st.promo_capped_doa, st.hit_doa, st.promo_capped_dead, st.hit_dead, hit_mode);
     printf("  Evict class mix  : DoA=%.1f%%  Dead=%.1f%%  Alive=%.1f%%  Unguided=%.1f%%\n",
            pct(st.evict_doa,total_evict), pct(st.evict_dead,total_evict),
            pct(st.evict_alive,total_evict), pct(st.evict_unguided,total_evict));
