@@ -77,6 +77,16 @@ std::unordered_map<CACHE*, int64_t>              miss_lat_b;
 
 } // namespace
 
+// Weak-symbol counterpart declared in cache.cc: resets only the reporting
+// counters (Insert mix / hit-promotion / lifespan stats) at the ROI boundary,
+// matching sim_stats/HistTable's begin_phase reset. Deliberately leaves live
+// mechanism state (rrpv_values, slot_class, psel, ...) untouched, since that
+// must carry over from warmup for correct behavior.
+extern "C" void srrip_live_reset_phase_stats(CACHE* c)
+{
+    ::stats[c] = Stats{};
+}
+
 static int g_duel_metric  = -1;  // 0=hits (PSEL), 1=latency (argmin)
 static int g_doa_ins_rrpv = -1;
 static int g_doa_hit_rrpv = -1;

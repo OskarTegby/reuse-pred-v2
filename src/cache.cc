@@ -31,9 +31,11 @@
 #include "instruction.h"
 #include "util.h"
 
-// Defined (strong) in replacement/lru_live/lru_live.cc; resolves to a null
-// weak symbol (no-op) in binaries that don't link that replacement policy.
+// Defined (strong) in the corresponding replacement/*_live/*.cc; each resolves
+// to a null weak symbol (no-op) in binaries that don't link that policy.
 extern "C" void lru_live_reset_phase_stats(CACHE*) __attribute__((weak));
+extern "C" void srrip_live_reset_phase_stats(CACHE*) __attribute__((weak));
+extern "C" void ipv_live_reset_phase_stats(CACHE*) __attribute__((weak));
 
 // ──────────────────────────────────────────────
 // Shared replacement-history infrastructure
@@ -1392,6 +1394,10 @@ void CACHE::begin_phase()
   // linked into this binary.
   if (lru_live_reset_phase_stats)
     lru_live_reset_phase_stats(this);
+  if (srrip_live_reset_phase_stats)
+    srrip_live_reset_phase_stats(this);
+  if (ipv_live_reset_phase_stats)
+    ipv_live_reset_phase_stats(this);
 
   // pc_liveness_char (LIVENESS_CHAR's per-PC breakdown) is otherwise never
   // reset, so it silently accumulates across the warmup/ROI boundary.
