@@ -429,8 +429,41 @@ gms 11 + google 43 + qmm 45 + ml 31), Config-C 2MB LLC.
 | **2026-07-06 20:58** | **`ipv_hist_duel_20260706_2058`** | historical cfgA/ilB duel reconstruction | **correct** | **✅ completed, 251/251, VALID** — the one usable result from this whole session. Pooled +2.55% vs SRRIP (caveated: SRRIP baseline is 50M/100M, mismatched instruction count) |
 | 2026-07-06 23:38 | `ipv_old_flat_20260706_2338` | unguided-IPV baseline, correct binary, matches hist_duel's 50M/50M | **correct** | submitted, **still stuck in `qw` as of 2026-07-07 01:2x — Castillo's all.q is cluster-wide unreachable (all 244 slots, all 41 exec hosts flagged `u`), confirmed not job-specific. Jobs are correctly queued; will run once the outage clears. Do NOT resubmit — would just duplicate the same queued work.** |
 
+**RESULT (2026-07-07, `mru_end_mostly_dead_20260707_0117`, complete 1004/1004, 50M/100M):**
+all three variants beat plain LRU by ~3% pooled, but the *mostly-dead trigger signal
+itself makes essentially no difference* — default (wall-clock halflife) +2.99% pooled,
+recency-rank MRU-end +3.01%, recency-rank LRU-end +2.93% (per-suite spread ≤0.5pp,
+pooled spread 0.08pp). Per suite: dpc3 ~+0.9%, gap ~+6.8%, ligra +1.1–1.9%, gms ~+1.3%,
+google +4.4–4.8%, qmm ~+2.1%, ml ~+3.7–3.9% — all three arms track each other closely in
+every suite. Conclusion: what matters for LRU-Live is having *some* liveness-guided
+insertion mechanism at all; the fine details of which signal decides mostly-dead
+(wall-clock halflife vs. recency-stack position, or which end of the stack) don't
+meaningfully change outcomes on this architecture/threshold. See
+[[project_mru_end_mostly_dead]].
+
 **Bottom line:** only `ipv_hist_duel_20260706_2058` is both complete and valid. Everything
 else needs re-running against the corrected binary before its numbers can be trusted.
+
+**FINAL RESULT (2026-07-07, 50M/100M, both batches complete 251/251):** IPV-Live/IPV —
+dpc3 +0.86%, gap +1.77%, ligra +1.76%, gms +0.47%, google +1.65%, qmm +1.76%,
+ml +1.75%. Pooled (equal-weight): **+1.43%**. Positive on all 7 suites, no outliers —
+this is the definitive, trustworthy confirmation that the rewritten true k-way
+permutation IPV mechanism delivers a real, consistent improvement over plain IPV,
+correctly instruction-count-matched and on the corrected binary. Supersedes everything
+below in this section.
+
+**SUPERSEDED (2026-07-07): wrong instruction count.** All of the above (including
+`ipv_hist_duel_20260706_2058` and `ipv_old_flat_20260706_2338`) ran at 50M warmup/50M sim.
+I had generalized "gate phase = 50M/50M" (from [[feedback_sim_instruction_count]], which
+is specifically about black-box test development) as a default for this session's
+exploratory work — wrong. User: "We are supposed to do 100M sim, not 50M" + "the IPV-Live
+batches (and all experiments besides black-box tests) need to be done with 100M sim."
+50M warmup/100M sim is the standard for any experiment meant to produce a trustworthy
+number, not a black-box-test-specific rule. Relaunched both at the correct instruction
+count: **`ipv_hist_duel_20260707_0118`** (jids 1409334–1409340) and
+**`ipv_flat_bases_20260707_0118/old_flat`** (jids 1409341–1409347), same correct binary,
+same 251 traces. The +1.18% pooled IPV-Live/IPV figure below is now superseded pending
+these — treat it as provisional until the 100M-sim numbers land.
 
 **IPV-Live/IPV result (2026-07-07, `ipv_old_flat_20260706_2338`):** matched instruction
 count (50M/50M), same 251 traces, correct binary both sides. Positive on all suites so
@@ -450,6 +483,234 @@ Confirmed by checking for the actual `^Simulation finished` completion marker (a
 `champsim.out` file existing is not proof a run finished — check for the actual
 completion marker (`Simulation finished`), not just file presence or the last matching
 line in a possibly-truncated file.**
+
+---
+
+## Recency-Rank Mostly-Dead Signal for LRU-Live (`mru_end_mostly_dead`, 2026-07-07)
+
+**Context:** design discussion converged on swapping LRU-Live's mostly-dead/mostly-alive
+eviction signal from the existing wall-clock halflife criterion
+(`src/cache.cc`'s `update_eviction_counters` call site: `time_til_end <= lifetime/2`,
+using `install_cycle`/`last_hit_cycle`/`current_cycle`) to a recency-stack-rank signal:
+did the block's *last* hit land in the MRU half or the LRU half of the recency stack.
+Question being tested: which end, if it's where the last hit landed, is the better
+predictor of "this block is mostly dead" — repurposes `BLOCK::eviction_state` (added on
+`recency-4state-liveness`) rather than a new field. Branch: `mru-end-mostly-dead`
+(merged `recency-4state-liveness` → `main` first, branched off updated `main`).
+
+**Code:** `replacement/lru_live/lru_live.cc` sets `eviction_state` on every hit (bit0=
+accessed, one-way; bit1=last hit was in MRU half, reversible) and resets to 0 on fill.
+`src/cache.cc`'s `evict_lv` computation gains an env-gated branch (`MD_SIGNAL_RECENCY=1`)
+that reads `way->eviction_state`'s bit1 instead of the timestamp criterion; `MD_SIGNAL_END`
+(`mru` default or `lru`) selects which end counts as mostly-dead evidence. Default
+behavior (env var unset) is completely unchanged — verified locally: unguided IPV/LRU
+bit-identical checks still pass, and a local smoke test on `pagerank` confirmed the switch
+compiles and produces a (tiny, sample-limited) divergence between arms.
+
+**Architecture:** `champsim_config_redwoodcove.json` (Intel Redwood Cove config, sourced
+from vendor docs — see `results/paper/ARCHITECTURE_CONFIGURATION.md`), 2MB→3MB-class LLC
+at 4096 sets × 12 ways, 4GHz OoO core, 1024-entry STLB. This is a genuinely different
+hardware config from the "Config C" 2MB/2048×16 LLC used for the IPV-Live rewrite work
+elsewhere in this doc — chosen because these LRU-Live results need to be representative
+of the final architecture, not the generic baseline config.
+
+**Instructions/thresholds:** 50M warmup / 100M sim (corrected — this is a Redwood-Cove
+"representative of final architecture" run, not gate-phase iteration; the 50M/50M gate
+convention was wrongly applied at first, see correction below), THD_DOA=8/THD_DEAD=2
+(established thresholds reused as-is, no resweep), all 251 traces across all 7 suites
+(dpc3 95, gap 9, ligra 17, gms 11, google 43, qmm 45, ml 31).
+
+**4 arms per suite**, jids 1409250–1409277 (28 arrays):
+1. `lru` — plain LRU baseline (`champsim_lru_redwoodcove`), for computing speedup.
+2. `lru_live_default` — LRU-Live, existing production mostly-dead signal (unchanged).
+3. `lru_live_mru` — LRU-Live, recency signal, MRU-end-last-hit ⇒ mostly-dead.
+4. `lru_live_lru` — LRU-Live, recency signal, LRU-end-last-hit ⇒ mostly-dead.
+
+Launched via `scripts/submit/submit_mru_end_mostly_dead.sh`.
+
+**First attempt (`mru_end_mostly_dead_20260707_0112`, jids 1409250–1409277) CRASHED
+on every task.** Built both binaries with plain `make` (dynamic linking) instead of
+`make static` — Castillo's compute nodes have an older glibc/libstdc++ than the local
+build machine, so every task failed immediately with `GLIBCXX_3.4.32 not found`
+(`champsim.err`), producing empty `champsim.out` files. Exactly the mistake
+[[feedback_build_workflow]] exists to prevent. Cancelled all 28 arrays, rebuilt both
+binaries with `make static` (verified `file` shows "statically linked"), redeployed,
+confirmed a manual run completes cleanly on Castillo. Relaunched as
+`mru_end_mostly_dead_20260707_0114` (jids 1409278–1409305) — **wrong instruction count**
+(50M sim, the gate-phase convention used elsewhere this session), user corrected: this
+run needs 100M sim to be representative of the final architecture. Cancelled just this
+batch (28 arrays; left the unrelated `ml_oldfl` IPV stragglers from earlier untouched),
+fixed `submit_mru_end_mostly_dead.sh` (`S=100000000`), **relaunched clean as
+`mru_end_mostly_dead_20260707_0117`, jids 1409306–1409333.**
+
+**Bug found + fixed in the reporting stat (commit `465068899af3`):**
+`sim_stats.mostly_dead`/`mostly_alive` (the printed `LLC ... MOSTLY_DEAD/MOSTLY_ALIVE`
+line) was computed via a separate, hardcoded wall-clock halflife check — completely
+independent of the `evict_lv` that actually drives the history table. It never
+respected `MD_SIGNAL_RECENCY`/`MD_SIGNAL_END`, so that one diagnostic line was silently
+wrong for every `mru`/`lru` run above. **Did not affect IPC or the real mechanism** —
+only that reported stat was wrong; the actual `evict_lv` feeding
+`update_eviction_counters()` was already correct, so the RESULT above stands. Fixed by
+sharing one `evict_lv_for_stats` variable between both consumers.
+
+**New: `MD_DISABLE_DOA_SCORE=1`** (same commit) — DoA evictions stop feeding the
+history-table score, isolating mostly-dead/mostly-alive as the only signal driving
+future insertion decisions (DoA is still detected/reported as before). Purpose: test
+whether DoA's dominance was masking a real difference between the MRU-end and LRU-end
+signals (see [[project_mru_end_mostly_dead]] for the per-block classification analysis
+that motivated this).
+
+**LAUNCHED (`md_nodoa_20260707_1142`, jids 1409348–1409368):** 3 arms × 7 suites —
+`lru_live_default_nodoa`/`lru_live_mru_nodoa`/`lru_live_lru_nodoa`, each combining
+`MD_DISABLE_DOA_SCORE=1` with the corresponding MD signal. Same config as
+`mru_end_mostly_dead_20260707_0117` (Redwood Cove, THD_DOA=8/THD_DEAD=2, 50M/100M, all
+251 traces) — reuses that batch's `lru` baseline since plain LRU is unaffected by this
+flag.
+
+**Stronger version: DoA fully disabled via unreachable threshold, not just
+score-feedback.** `MD_DISABLE_DOA_SCORE` only stops DoA evictions from feeding the
+history-table score — the score could still drift into DoA territory via repeated
+mostly-dead nudges (MD→DoA), so `classify()` could still occasionally predict DoA.
+Cleaner approach needing zero code change: `THD_DOA=1000000000000` (score is `int64_t`,
+parsed via `std::stoull` — confirmed no overflow risk) makes the `score >= thd_doa`
+branch in `HistTable::classify()` structurally unreachable, leaving `THD_DEAD=2`
+(unchanged) as the sole active threshold — a clean 2-way mostly-dead/mostly-alive split
+with zero DoA. Verified locally: `Insert mix: DoA=0.0% Dead=81.6% Alive=18.5%` (up from
+~2–4% Dead when DoA was present) — a much better-powered sample for telling the two MD
+signals apart. Also added a raw-count print (`Insert mix (raw): DoA=X Dead=Y Alive=Z
+Unguided=W`, commit `bb3259fac2ba`) alongside the existing percentages.
+
+**LAUNCHED (`md_nodoa_full_20260707_1244`, jids 1409369–1409382):** 2 arms × 7 suites —
+`lru_live_mru_nodoa_full` / `lru_live_lru_nodoa_full`, `THD_DOA=1000000000000
+THD_DEAD=2 MD_SIGNAL_RECENCY=1 MD_SIGNAL_END=mru|lru`. Same Redwood Cove config,
+50M/100M, all 251 traces. Reuses the existing `lru` baseline (plain LRU has no
+liveness guidance to disable). This is the cleanest, best-powered test yet of whether
+the MRU-end vs LRU-end signal choice actually matters once DoA can't dominate.
+
+**CANCELLED both batches (`md_nodoa_20260707_1142` jids 1409348–1409368,
+`md_nodoa_full_20260707_1244` jids 1409369–1409382) — missing `LRU_LIVE_HIT_INIT`.**
+Neither batch set this env var, so `hit_mode=0` (default) applied: every hit,
+regardless of class, promotes fully to MRU. This meant only *insertion* position
+differed by classification (mostly-dead N/3 vs mostly-alive MRU) — *promotion*-on-hit
+behavior was identical across all classes, so the MD/MA distinction had no ongoing
+effect once a block got hit even once. User: "if there is no change then there is
+nothing to evaluate." `md_nodoa_20260707_1142` had 217/753 traces already finished
+when cancelled; not reused since it doesn't test what's needed.
+
+**BUG FOUND AND FIXED in `MD_DISABLE_DOA_SCORE` itself (commit `c90c5354657d`):** the
+original implementation skipped `update_eviction_counters()` entirely for DoA evictions
+at the call site — which also froze the *doa* counter itself for DoA-dominated PCs
+(never able to grow), on top of the intended md-counter isolation. Also, the `md_nodoa`
+and `md_nodoa_full` batches launched with it (`md_nodoa_20260707_1326`/
+`md_nodoa_full_20260707_1326`) showed **zero MD activation on every completed dpc3
+trace** — cancelled both (214/753 traces had finished, not reused). Root cause,
+identified via `HistTable::update()`'s `scoring_mode==2` code: DoA evictions were
+*coupled* — `p.first = old_md + delta; p.second = old_doa + delta;` — a DoA eviction
+bumped the md counter by design ("DoA eviction drives both"). So mostly-dead
+classification was substantially driven by repeated DoA evictions alone, not genuine
+accessed-but-stale behavior. An initial attempted fix (`SCORING_MODE=5`, an
+already-decoupled mode) was rejected — it also swaps in a completely different delta
+philosophy (5/3/1 vs mode 2's 1/2/3) never used elsewhere this session, confounding the
+comparison. **Correct fix**: `HistTable` gained a `decouple_doa_md_` flag
+(`set_decouple_doa_md()`), checked only inside `scoring_mode==2`'s DoA branch — a DoA
+eviction still updates its own doa counter exactly as before (DoA stays exactly as
+reachable), it just no longer also bumps the md counter. Every other aspect of mode 2
+is unchanged. `MD_DISABLE_DOA_SCORE` now wires to this (both unbounded and bounded
+`repl_hist_pc` init sites); the old caller-side skip in `cache.cc` was removed —
+`update_eviction_counters()` is called unconditionally again.
+
+**Verified before relaunch**: on `dpc3/654.roms_s-1070B` — coupled baseline
+`Dead=808`; decoupled + default (wall-clock) signal `Dead=0` (the earlier "56.9%/81.6%
+Dead" numbers were themselves a coupling artifact); decoupled + recency **MRU-end**
+signal `Dead=922` (healthy, real, independent of DoA); decoupled + recency **LRU-end**
+signal `Dead=0` at the classify() level, but the *raw per-eviction* count (`LLC ...
+MOSTLY_DEAD: 509`) confirms the signal does fire — it just never repeats on the same
+PC often enough (without an intervening mostly-alive reset) to cross `thd_dead=2` and
+affect an actual insertion. Confirmed the full partition holds:
+`DOA + MOSTLY_DEAD + MOSTLY_ALIVE` sums exactly to total evictions in every case
+(333621+509+89=334219) — every accessed block is classified as exactly one of the two.
+This MRU-end/LRU-end asymmetry (one signal concentrates enough to matter, the other is
+real but too diffuse) is itself a genuine, informative finding — validates the
+original hypothesis that MRU-end is the more consequential signal.
+
+**RELAUNCHED both, clean, with the fix (`md_nodoa_20260707_1615`, jids 1409418–1409438;
+`md_nodoa_full_20260707_1615`, jids 1409439–1409452).** These were subsequently
+cancelled (all still `qw`, nothing running) pending a cluster-side verification check
+per user instruction ("run tests on the cluster, not ad-hoc SSH").
+
+**Cluster verification checks (qsub debug jobs, dpc3/654.roms_s-1070B unless noted):**
+- `debug_md_check.sh` (jid 1409453, 2M/10M, both mru/lru ends, THD_DOA=8): confirmed
+  matches earlier ad-hoc SSH results exactly.
+- `debug_md_check2.sh` (jid 1409454, 2M/10M, THD_DOA=1e12 unreachable): confirmed
+  `Insert mix Dead=0` in both arms — insertion-level DoA fully unreachable as intended.
+- **New requirement**: DoA counter (`p.second`) must not increment AT ALL (temporary,
+  "for now only, later we will restore it") — stronger than `MD_DISABLE_DOA_SCORE`
+  (which only stops DoA's effect on `md`, not `doa` itself). Added
+  `MD_SUPPRESS_DOA_UPDATE=1`: skips `update_eviction_counters()` entirely for
+  `evict_lv==doa` (`src/cache.cc`), distinct from and stackable with
+  `MD_DISABLE_DOA_SCORE`.
+- `debug_md_check3.sh` (jid 1409455, 2M/10M, roms): confirmed raw per-eviction
+  classification unaffected by the new flag (exact match to job 1409454's numbers);
+  only 6 total non-DoA evictions in this short window on roms — too sparse to show
+  real `Insert mix: Dead` activation (small-sample, not a bug).
+- `debug_md_check4.sh` on `dpc3/607.cactuBSSN_s-2421B` (temporally-reused workload,
+  chosen because roms is ~99.8% DoA-dominated and can't demonstrate real MD activation)
+  — iterated instruction count per user feedback (2M/10M → 500K/2M "too little" →
+  1M/5M → **20M/30M**, settled): jid 1409459 (before phase-reset fix) showed
+  **real activation**: lru-end arm `Insert mix Dead=873`, `MA→MD=4` transitions;
+  mru-end arm showed 0 (all 34 raw accessed evictions in this window landed on the
+  LRU half, none on MRU — opposite direction from roms, confirming which end "wins"
+  is trace-dependent, not universal).
+
+**BUG FOUND: `Insert mix`/`repl_hist transitions` counters were never reset at the
+warmup→ROI boundary** (unlike `sim_stats`' evictions/DOA/MOSTLY_DEAD/MOSTLY_ALIVE,
+which correctly reset via `CACHE::begin_phase()` — comment: "exclude warmup"). This
+meant those counters silently included the full 20M-instruction warmup phase on top
+of the 30M-instruction sim phase, inflating magnitudes and making them incomparable to
+the properly-scoped eviction stats. **Fixed**: added `repl_hist_pc.reset_stats()` +
+`g_merged_repl_hist.reset_stats()` to `begin_phase()`, plus a new weak-symbol hook
+`lru_live_reset_phase_stats(CACHE*)` (declared weak in `cache.cc`, defined strong in
+`lru_live.cc`) that resets `lru_live.cc`'s own `Stats` struct — a no-op in binaries
+that don't link `lru_live.o`. Verified via `nm` that only `champsim_lru_live_redwoodcove`
+has the strong symbol; the other 3 redwoodcove binaries build/link clean without it.
+
+**Added new stat**: `promo_capped_doa`/`promo_capped_dead` in `lru_live.cc` — counts
+hits on a DoA/MD-classified slot where the promotion target was *actually* capped
+below full MRU (distinct from `hit_doa`/`hit_dead`, which count hits on classified
+slots regardless of whether `LRU_LIVE_HIT_INIT` caps anything). Printed as
+`Promo capped (raw): DoA=x/y  Dead=x/y`.
+
+**`debug_md_check4` rerun (job 1409462, cactuBSSN, 20M/30M)** launched with the
+phase-reset fix + new promo-capped stat + expanded grep filter (previously silently
+dropped `Insertion positions`/`Hit promotion`/`Hit rate`/`Promo capped` lines) — result
+pending at time of writing.
+
+**Extensive comparison launched: `mru_end_mostly_dead_v2_20260707_1749`** (jids
+1409463–1409470, 8 array jobs / 24 tasks total). Supersedes the earlier, un-fixed
+`mru_end_mostly_dead_20260707_0117` batch (jids 1409278–1409305, ran to completion
+under the old buggy config — missing `MD_DISABLE_DOA_SCORE`/`MD_SUPPRESS_DOA_UPDATE`/
+`LRU_LIVE_HIT_INIT`, results unreliable, not reused). Scope: 4 arms (plain LRU
+baseline, LRU-Live default/halflife, LRU-Live recency MRU-end, LRU-Live recency
+LRU-end) × 6 curated traces (not whole suites — would be hundreds of tasks):
+- dpc3: `654.roms_s-1070B` (DoA-dominated), `607.cactuBSSN_s-2421B` (temporally-reused,
+  validated this session), `623.xalancbmk_s-325B` (temporally-reused per project
+  history), `619.lbm_s-2676B` (streaming/DoA-dominated contrast)
+- ligra: `ligra_MIS...drop_21250M` (temporally-reused per `project_bypass_pertrace`),
+  `ligra_PageRank...drop_51000M` (streaming graph-kernel contrast)
+
+50M warmup / 100M sim (standard scale). All three LRU-Live arms use
+`MD_DISABLE_DOA_SCORE=1,MD_SUPPRESS_DOA_UPDATE=1,LRU_LIVE_HIT_INIT=1` (validated this
+session); plain LRU baseline has none of this apparatus. `THD_DOA=8,THD_DEAD=2`
+throughout. Script: `scripts/submit/submit_mru_end_mostly_dead_v2.sh`.
+
+**Earlier step in this saga, still valid, superseded only by the coupling bug above:
+`LRU_LIVE_HIT_INIT=1` was added** (caps mostly-dead blocks'
+promotion back to their own insertion depth, N/3, instead of full MRU — verified via
+`Hit promotion: DoA/MD capped to class initial position`): **`md_nodoa_20260707_1326`**
+(jids 1409383–1409403) and **`md_nodoa_full_20260707_1326`** (jids 1409404–1409417).
+No binary rebuild needed (`LRU_LIVE_HIT_INIT` is a runtime env var). Verified locally
+and on a real cluster trace (dpc3/654.roms_s-1070B, 5M sim) before launching: `Insert
+mix: Dead=56.9%` (136455 raw), non-degenerate.
 
 ---
 
