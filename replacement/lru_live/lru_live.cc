@@ -486,6 +486,8 @@ void CACHE::replacement_final_stats()
     printf("  Insert mix       : DoA=%.1f%%  Dead=%.1f%%  Alive=%.1f%%  Unguided=%.1f%%\n",
            pct(st.ins_doa,total_ins), pct(st.ins_dead,total_ins),
            pct(st.ins_alive,total_ins), pct(st.ins_unguided,total_ins));
+    printf("  Insert mix (raw) : DoA=%lu  Dead=%lu  Alive=%lu  Unguided=%lu\n",
+           st.ins_doa, st.ins_dead, st.ins_alive, st.ins_unguided);
     printf("  Hit rate/class   : DoA=%.1f%%  Dead=%.1f%%  Alive=%.1f%%  Unguided=%.1f%%\n",
            pct(st.hit_doa,st.ins_doa), pct(st.hit_dead,st.ins_dead),
            pct(st.hit_alive,st.ins_alive), pct(st.hit_unguided,st.ins_unguided));
