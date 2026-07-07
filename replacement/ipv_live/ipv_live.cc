@@ -213,6 +213,16 @@ int winner_config(CACHE* c)
 
 } // namespace
 
+// Weak-symbol counterpart declared in cache.cc: resets only the reporting
+// counters (Insert mix / hit-promotion stats) at the ROI boundary, matching
+// sim_stats/HistTable's begin_phase reset. Deliberately leaves live mechanism
+// state (slot_class, hit_counts, miss_latency, ...) untouched, since that
+// must carry over from warmup for correct behavior.
+extern "C" void ipv_live_reset_phase_stats(CACHE* c)
+{
+    ::stats[c] = Stats{};
+}
+
 void CACHE::initialize_replacement()
 {
   ::ensure_parsed();
