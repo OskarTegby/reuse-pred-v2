@@ -434,6 +434,8 @@ void CACHE::load_predictor_settings()
   repl_hist_pc.set_scoring_mode(static_cast<int>(getenv_uint64("SCORING_MODE", 2)));
   if (const char* v = std::getenv("DOA_SATURATE_MD"); v && std::stoull(v))
     repl_hist_pc.set_doa_saturate_md(true);
+  if (const char* v = std::getenv("MD_DISABLE_DOA_SCORE"); v && std::stoull(v))
+    repl_hist_pc.set_decouple_doa_md(true);
 
   // Bounded repl_hist_pc: 0 = unbounded (default, backward compatible).
   // REPL_HIST_REPL controls table management policy (same options as HIST_REPL).
@@ -457,6 +459,8 @@ void CACHE::load_predictor_settings()
       repl_hist_pc.set_scoring_mode(static_cast<int>(getenv_uint64("SCORING_MODE", 2)));
       if (const char* v = std::getenv("DOA_SATURATE_MD"); v && std::stoull(v))
         repl_hist_pc.set_doa_saturate_md(true);
+      if (const char* v = std::getenv("MD_DISABLE_DOA_SCORE"); v && std::stoull(v))
+        repl_hist_pc.set_decouple_doa_md(true);
       const uint64_t rh_hash = getenv_uint64("REPL_HIST_HASH_BITS", 0);
       if (rh_hash > 0)
         repl_hist_pc.set_hash(static_cast<unsigned>(rh_hash));
@@ -834,15 +838,6 @@ bool CACHE::handle_fill(const PACKET& fill_mshr)
         const char* v = std::getenv("MD_SIGNAL_END");
         return !(v && v[0] && std::string_view(v) == "lru");
       }();
-      // MD_DISABLE_DOA_SCORE=1: DoA evictions stop feeding the history-table
-      // score (repl_hist_pc) — only mostly-dead/mostly-alive evictions drive
-      // it from here on, isolating that signal's effect on future insertion
-      // decisions. DoA itself is still detected and reported (sim_stats.doa)
-      // exactly as before; only its contribution to the *score* is removed.
-      static const bool disable_doa_score = [] {
-        const char* v = std::getenv("MD_DISABLE_DOA_SCORE");
-        return v && v[0] && v[0] != '0';
-      }();
       liveness_class evict_lv;
       if (!way->accessed) {
         evict_lv = liveness_class::doa;
@@ -857,8 +852,7 @@ bool CACHE::handle_fill(const PACKET& fill_mshr)
                    ? liveness_class::mostly_alive : liveness_class::mostly_dead;
       }
       evict_lv_for_stats = evict_lv;
-      if (!(disable_doa_score && evict_lv == liveness_class::doa))
-        update_eviction_counters(*way, evict_lv);
+      update_eviction_counters(*way, evict_lv);
     }
   }
 

@@ -123,6 +123,13 @@ public:
   // itself: a subsequent MA eviction resets it, a subsequent MD eviction
   // continues building toward DoA (at the slower δ=3 MD rate).
   void set_doa_saturate_md(bool on) { doa_saturate_md_ = on; }
+  // MD_DISABLE_DOA_SCORE=1: in scoring_mode==2 (the only mode this affects —
+  // modes 3/4/5/etc. are already decoupled by construction), stop a DoA
+  // eviction from also bumping the md counter. The doa counter still updates
+  // exactly as before (DoA remains exactly as reachable/detectable), and mode
+  // 2's own delta/depth-multiplier logic is otherwise completely unchanged —
+  // this removes only the one coupling side-effect, nothing else.
+  void set_decouple_doa_md(bool on) { decouple_doa_md_ = on; }
 
   void set_checkpoint(uint64_t interval, std::string name) {
     checkpoint_interval_ = interval;
@@ -614,8 +621,10 @@ public:
         }
       } else if (scoring_mode_ == 2) {
         // Approach B (coupled): hard resets, state-dependent increments; DoA eviction drives both
+        // — unless decouple_doa_md_ is set, in which case a DoA eviction only
+        // updates its own (doa) counter, exactly like modes 3/4/5's decoupled design.
         if      (evict_class == liveness_class::doa) {
-          p.first  = old_md  + delta;
+          if (!decouple_doa_md_) p.first = old_md + delta;
           p.second = old_doa + delta;
         } else if (evict_class == liveness_class::mostly_dead) {
           p.first  = old_md  + delta;
@@ -900,6 +909,7 @@ private:
   int scoring_mode_ = 2;
   unsigned hash_bits_ = 0;  // >0 → hash keys into this many bits (faithful Mazumdar)
   bool doa_saturate_md_ = false;  // DOA_SATURATE_MD: on DoA exit, saturate dead to θ_dead
+  bool decouple_doa_md_ = false;  // MD_DISABLE_DOA_SCORE: DoA evictions skip the md-counter bump in mode 2
   // Mode 6: per-class EMA of observed block lifespans and resulting proportional deltas.
   // Indexed: [0]=DoA  [1]=mostly_dead  [2]=mostly_alive
   std::array<uint64_t, 3> avg_life_   = {};     // EMA of lifespan in cycles
