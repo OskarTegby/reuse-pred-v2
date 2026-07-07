@@ -136,21 +136,21 @@ LLC IPV-Live STATS:
   IPV_doa         : {0,1,2,2,3}
   IPV_mostly_dead : {0,1,1,2,2}
   IPV_mostly_alive: {0,0,0,0,2}
-  Activation rate : 100.0%  (352468 guided / 352468 total insertions)
-  guided_insertions=352468
-  Insert mix      : DoA=4.8%  Dead=3.4%  Alive=92.0%  Unguided=0.0%
-  Hit rate/class  : DoA=18.7%  Dead=196.9%  Alive=1503.4%  Unguided=0.0%
+  Activation rate : 100.0%  (212428 guided / 212428 total insertions)
+  guided_insertions=212428
+  Insert mix      : DoA=6.0%  Dead=4.1%  Alive=90.1%  Unguided=0.0%
+  Hit rate/class  : DoA=18.0%  Dead=199.8%  Alive=1719.4%  Unguided=0.0%
   RRPV@evict DoA  : [0]=0.0% [1]=0.0% [2]=0.0% [3]=100.0%  (ideal: ~100% at [3])
   RRPV@evict Dead : [0]=0.0% [1]=0.0% [2]=0.0% [3]=100.0%
   RRPV@evict Alive: [0]=0.0% [1]=0.0% [2]=0.0% [3]=100.0%  (ideal: low RRPV after promotion)
-  Aging loops     : 75323  (0.24 per eviction)
+  Aging loops     : 50547  (0.24 per eviction)
 LLC repl_hist occupancy : main 4096/4096 (100%) [was full]  buf 0/0 (0%)
-LLC repl_hist classify  : main=61060 (8.7%)  buf_guided=0 (0.0%)  buf_weak=0 (0.0%)  warm_miss=312890 (44.4%)  cold_miss=330986 (47.0%)
-LLC repl_hist warm_miss : total=312890  buf_evicted=0 (0.0%)  main_evicted=312890 (44.4%)
-LLC repl_hist oracle    : warm_miss=312890  oracle_would_hit=0 (0.0% of warm)  oracle_buf_size=0
+LLC repl_hist classify  : main=42424 (10.0%)  buf_guided=0 (0.0%)  buf_weak=0 (0.0%)  warm_miss=267362 (63.0%)  cold_miss=115070 (27.1%)
+LLC repl_hist warm_miss : total=267362  buf_evicted=0 (0.0%)  main_evicted=267362 (63.0%)
+LLC repl_hist oracle    : warm_miss=267362  oracle_would_hit=0 (0.0% of warm)  oracle_buf_size=0
 LLC repl_hist evict_tier: total=265028  L0(MA)=87.1%  L1(MD-unsat)=0.0%  L2(DoA-unsat)=13.0%  L3(MD-sat)=0.0%  L4(DoA-sat)=0.0%
 LLC repl_hist transitions:
-  upward  : MA→MD=232690  MD→DoA=2072  (cap_fires=0)
-  downward: DoA→MD=0  MD→MA=1214  DoA→MA=1045
-  up/down ratio: 103.93
+  upward  : MA→MD=153971  MD→DoA=1371  (cap_fires=0)
+  downward: DoA→MD=0  MD→MA=919  DoA→MA=809
+  up/down ratio: 89.90
 

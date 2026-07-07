@@ -137,22 +137,22 @@ LLC SRRIP-Live STATS:
   DoA hit RRPV     : 2  (SRRIP_DOA_HIT_RRPV; 2=reset-to-ins, 1=mild)
   MD  ins RRPV     : 2  (SRRIP_MD_INS_RRPV;  2=default, 1=lru-live-mirror)
   MD  hit RRPV     : 1  (SRRIP_MD_HIT_RRPV;  1=default, 0=full-promotion)
-  Activation rate  : 100.0%  (351062 guided / 351062 total insertions)
-  guided_insertions=351062
-  Insert mix       : DoA=1.9%  Dead=3.9%  Alive=94.3%  Unguided=0.0%
-  Hit rate/class   : DoA=67.1%  Dead=184.1%  Alive=1471.4%  Unguided=0.0%
+  Activation rate  : 100.0%  (211307 guided / 211307 total insertions)
+  guided_insertions=211307
+  Insert mix       : DoA=2.3%  Dead=4.8%  Alive=93.1%  Unguided=0.0%
+  Hit rate/class   : DoA=62.9%  Dead=186.4%  Alive=1672.1%  Unguided=0.0%
   RRPV@evict DoA   : [0]=0.0% [1]=0.0% [2]=0.0% [3]=100.0%  (ideal: ~100% at [3])
   RRPV@evict Dead  : [0]=0.0% [1]=0.0% [2]=0.0% [3]=100.0%
   RRPV@evict Alive : [0]=0.0% [1]=0.0% [2]=0.0% [3]=100.0%  (ideal: low RRPV after promotion)
-  Aging loops      : 79206  (0.25 per eviction)
-  Avg lifespan(cy) : DoA=1206067  Dead=3152674  Alive=4087657  Unguided=0
+  Aging loops      : 53525  (0.26 per eviction)
+  Avg lifespan(cy) : DoA=1488504  Dead=3721206  Alive=5126014  Unguided=0
 LLC repl_hist occupancy : main 4096/4096 (100%) [was full]  buf 0/0 (0%)
-LLC repl_hist classify  : main=45438 (6.5%)  buf_guided=0 (0.0%)  buf_weak=0 (0.0%)  warm_miss=325718 (46.4%)  cold_miss=330968 (47.2%)
-LLC repl_hist warm_miss : total=325718  buf_evicted=0 (0.0%)  main_evicted=325718 (46.4%)
-LLC repl_hist oracle    : warm_miss=325718  oracle_would_hit=0 (0.0% of warm)  oracle_buf_size=0
+LLC repl_hist classify  : main=29592 (7.1%)  buf_guided=0 (0.0%)  buf_weak=0 (0.0%)  warm_miss=277952 (65.8%)  cold_miss=115070 (27.3%)
+LLC repl_hist warm_miss : total=277952  buf_evicted=0 (0.0%)  main_evicted=277952 (65.8%)
+LLC repl_hist oracle    : warm_miss=277952  oracle_would_hit=0 (0.0% of warm)  oracle_buf_size=0
 LLC repl_hist evict_tier: total=270118  L0(MA)=87.4%  L1(MD-unsat)=0.0%  L2(DoA-unsat)=12.7%  L3(MD-sat)=0.0%  L4(DoA-sat)=0.0%
 LLC repl_hist transitions:
-  upward  : MA→MD=238009  MD→DoA=2685  (cap_fires=0)
-  downward: DoA→MD=0  MD→MA=1419  DoA→MA=2018
-  up/down ratio: 70.04
+  upward  : MA→MD=158227  MD→DoA=1789  (cap_fires=0)
+  downward: DoA→MD=0  MD→MA=1077  DoA→MA=1457
+  up/down ratio: 63.15
 
