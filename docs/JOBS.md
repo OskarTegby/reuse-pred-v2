@@ -744,7 +744,27 @@ it and manually finish the download/copy/commit steps). Verify mode has a second
 more robust termination path (direct output-file comparison via `check_progress.sh`),
 so less likely to hit the same hang, but worth knowing about if a future run stalls.
 
-**Launched (`md_doa_ablation_20260708_0018`, jids 1409591–1409614, 24 tasks,
+**First two launch attempts failed, both from bugs in the submission script itself
+(not the binary/experiment config):**
+- `md_doa_ablation_20260708_0018` (jids 1409591–1409614): `TRACE_FILTER` was built
+  as an anchored basename match (`^654\.roms_s-1070B$`), but `run_cs.sh` greps the
+  *full path* returned by `find`, which never matches an anchored basename pattern
+  — every task failed instantly with "No traces found", before any simulation
+  started (verified via `Simulation finished`-marker-free, essentially-empty
+  `champsim.out`/near-zero runtime; no compute wasted). My own pre-submission
+  check had tested against a basename-stripped string, not what `run_cs.sh`
+  actually greps — didn't reproduce the real code path. Fixed: unanchored
+  substring filter (`${tname//./\\.}`, no `^`/`$`), matching the v2 script's style.
+- `md_doa_ablation_20260708_0022` (jids 1409615–1409638): fixed the filter, but
+  submitted as plain (non-array) qsub jobs. This SGE setup sets `SGE_TASK_ID` to
+  the literal string `"undefined"` for non-array jobs rather than leaving it
+  unset, so `run_cs.sh`'s `: "${SGE_TASK_ID:=1}"` default never triggers — every
+  task failed instantly with "SGE_TASK_ID (undefined) out of range". `run_cs.sh`
+  requires the `-t 1-N` array form even for N=1, matching what the v2 script
+  always did. Verified the fix with a single standalone test job before
+  resubmitting the full batch.
+
+**Launched (`md_doa_ablation_20260708_0026`, jids 1409641–1409664, 24 tasks,
 `mru-end-mostly-dead` branch, `champsim_lru_live_redwoodcove`)**: pinpoints exactly
 what mostly-dead classification contributes vs. DoA, on the same curated 6-trace
 subset used in `mru_end_mostly_dead_v2` (dpc3: roms/cactuBSSN/xalancbmk/lbm; ligra:
