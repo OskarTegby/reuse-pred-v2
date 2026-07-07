@@ -133,19 +133,21 @@ LLC LRU-Live STATS:
   DoA ins mode     : bypass (rank 0, priority eviction)  (LRU_LIVE_DOA_INS)
   Insertion positions: DoA=10/MRU  Dead=5/MRU  Alive=0/MRU  (N=16)
   Hit promotion    : full to MRU
-  Activation rate  : 100.0%  (453885 guided / 453885 total insertions)
-  guided_insertions=453885
-  Insert mix       : DoA=41.9%  Dead=49.7%  Alive=8.6%  Unguided=0.0%
-  Hit rate/class   : DoA=38.2%  Dead=363.2%  Alive=358.0%  Unguided=0.0%
-  Evict class mix  : DoA=11.9%  Dead=73.8%  Alive=14.5%  Unguided=0.0%
+  Activation rate  : 100.0%  (300102 guided / 300102 total insertions)
+  guided_insertions=300102
+  Insert mix       : DoA=47.9%  Dead=51.7%  Alive=0.5%  Unguided=0.0%
+  Insert mix (raw) : DoA=143746  Dead=154943  Alive=1413  Unguided=0
+  Hit rate/class   : DoA=20.4%  Dead=369.5%  Alive=1148.5%  Unguided=0.0%
+  Promo capped (raw): DoA=0/29318  Dead=0/572387  (capped / hits-on-class, LRU_LIVE_HIT_INIT=0)
+  Evict class mix  : DoA=12.3%  Dead=87.0%  Alive=0.9%  Unguided=0.0%
   Residency (ticks) by class x reuse:
     Unguided     0hit: mean=      0.0 (n=0)   >=1hit: mean=      0.0 (n=0)   after-last-hit: mean=      0.0 (n=0)
-    DoA          0hit: mean=      4.0 (n=25301)   >=1hit: mean=     89.4 (n=5871)   after-last-hit: mean=     75.8 (n=5871)
-    MostlyDead   0hit: mean=     49.7 (n=25856)   >=1hit: mean=     91.6 (n=168971)   after-last-hit: mean=     72.5 (n=168971)
-    MostlyAlive  0hit: mean=     60.1 (n=14147)   >=1hit: mean=     92.0 (n=23920)   after-last-hit: mean=     68.6 (n=23920)
+    DoA          0hit: mean=      4.2 (n=19082)   >=1hit: mean=     84.5 (n=2650)   after-last-hit: mean=     74.2 (n=2650)
+    MostlyDead   0hit: mean=     49.8 (n=18120)   >=1hit: mean=     90.4 (n=136495)   after-last-hit: mean=     72.1 (n=136495)
+    MostlyAlive  0hit: mean=     70.5 (n=923)   >=1hit: mean=    169.5 (n=537)   after-last-hit: mean=     71.8 (n=537)
 LLC repl_hist: unbounded (1312 entries)  scoring_mode=5
 LLC repl_hist transitions:
-  upward  : MA→MD=790  MD→DoA=4978
-  downward: DoA→MD=4932  MD→MA=121  DoA→MA=241
-  up/down ratio: 1.09
+  upward  : MA→MD=267  MD→DoA=2842
+  downward: DoA→MD=2828  MD→MA=90  DoA→MA=85
+  up/down ratio: 1.04
 

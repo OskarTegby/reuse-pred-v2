@@ -133,23 +133,25 @@ LLC LRU-Live STATS:
   DoA ins mode     : 2n3 (default)  (LRU_LIVE_DOA_INS)
   Insertion positions: DoA=10/MRU  Dead=5/MRU  Alive=0/MRU  (N=16)
   Hit promotion    : full to MRU
-  Activation rate  : 100.0%  (407856 guided / 407856 total insertions)
-  guided_insertions=407856
+  Activation rate  : 100.0%  (264109 guided / 264109 total insertions)
+  guided_insertions=264109
   Insert mix       : DoA=0.0%  Dead=0.1%  Alive=100.0%  Unguided=0.0%
-  Hit rate/class   : DoA=0.0%  Dead=1396.1%  Alive=267.3%  Unguided=0.0%
+  Insert mix (raw) : DoA=0  Dead=158  Alive=263951  Unguided=0
+  Hit rate/class   : DoA=0.0%  Dead=1359.5%  Alive=255.0%  Unguided=0.0%
+  Promo capped (raw): DoA=0/0  Dead=0/2148  (capped / hits-on-class, LRU_LIVE_HIT_INIT=0)
   Evict class mix  : DoA=0.0%  Dead=0.1%  Alive=100.0%  Unguided=0.0%
   Residency (ticks) by class x reuse:
     Unguided     0hit: mean=      0.0 (n=0)   >=1hit: mean=      0.0 (n=0)   after-last-hit: mean=      0.0 (n=0)
     DoA          0hit: mean=      0.0 (n=0)   >=1hit: mean=      0.0 (n=0)   after-last-hit: mean=      0.0 (n=0)
-    MostlyDead   0hit: mean=     37.0 (n=13)   >=1hit: mean=    113.9 (n=137)   after-last-hit: mean=     44.2 (n=137)
-    MostlyAlive  0hit: mean=     46.2 (n=165423)   >=1hit: mean=     67.9 (n=209515)   after-last-hit: mean=     47.9 (n=209515)
+    MostlyDead   0hit: mean=     35.8 (n=12)   >=1hit: mean=    109.0 (n=125)   after-last-hit: mean=     44.0 (n=125)
+    MostlyAlive  0hit: mean=     44.8 (n=118999)   >=1hit: mean=     64.9 (n=144973)   after-last-hit: mean=     45.8 (n=144973)
 LLC repl_hist occupancy : main 4096/4096 (100%) [was full]  buf 0/0 (0%)
-LLC repl_hist classify  : main=470 (0.1%)  buf_guided=0 (0.0%)  buf_weak=0 (0.0%)  warm_miss=6456 (0.8%)  cold_miss=808786 (99.2%)
-LLC repl_hist warm_miss : total=6456  buf_evicted=0 (0.0%)  main_evicted=6456 (0.8%)
-LLC repl_hist oracle    : warm_miss=6456  oracle_would_hit=0 (0.0% of warm)  oracle_buf_size=0
+LLC repl_hist classify  : main=316 (0.1%)  buf_guided=0 (0.0%)  buf_weak=0 (0.0%)  warm_miss=5244 (1.0%)  cold_miss=522658 (99.0%)
+LLC repl_hist warm_miss : total=5244  buf_evicted=0 (0.0%)  main_evicted=5244 (1.0%)
+LLC repl_hist oracle    : warm_miss=5244  oracle_would_hit=0 (0.0% of warm)  oracle_buf_size=0
 LLC repl_hist evict_tier: total=370159  L0(MA)=44.7%  L1(MD-unsat)=0.0%  L2(DoA-unsat)=55.4%  L3(MD-sat)=0.0%  L4(DoA-sat)=0.0%
 LLC repl_hist transitions:
-  upward  : MA→MD=165436  MD→DoA=0  (cap_fires=0)
+  upward  : MA→MD=119011  MD→DoA=0  (cap_fires=0)
   downward: DoA→MD=0  MD→MA=0  DoA→MA=0
   up/down ratio: 99.00
 

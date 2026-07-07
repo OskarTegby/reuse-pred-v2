@@ -137,18 +137,18 @@ LLC SRRIP-Live STATS:
   DoA hit RRPV     : 2  (SRRIP_DOA_HIT_RRPV; 2=reset-to-ins, 1=mild)
   MD  ins RRPV     : 2  (SRRIP_MD_INS_RRPV;  2=default, 1=lru-live-mirror)
   MD  hit RRPV     : 1  (SRRIP_MD_HIT_RRPV;  1=default, 0=full-promotion)
-  Activation rate  : 100.0%  (346532 guided / 346532 total insertions)
-  guided_insertions=346532
-  Insert mix       : DoA=48.3%  Dead=14.8%  Alive=37.0%  Unguided=0.0%
-  Hit rate/class   : DoA=52.3%  Dead=168.4%  Alive=3688.8%  Unguided=0.0%
+  Activation rate  : 100.0%  (208148 guided / 208148 total insertions)
+  guided_insertions=208148
+  Insert mix       : DoA=58.9%  Dead=18.9%  Alive=22.3%  Unguided=0.0%
+  Hit rate/class   : DoA=50.9%  Dead=174.5%  Alive=6857.2%  Unguided=0.0%
   RRPV@evict DoA   : [0]=0.0% [1]=0.0% [2]=0.0% [3]=100.0%  (ideal: ~100% at [3])
   RRPV@evict Dead  : [0]=0.0% [1]=0.0% [2]=0.0% [3]=100.0%
   RRPV@evict Alive : [0]=0.0% [1]=0.0% [2]=0.0% [3]=100.0%  (ideal: low RRPV after promotion)
-  Aging loops      : 71305  (0.23 per eviction)
-  Avg lifespan(cy) : DoA=2691326  Dead=3926553  Alive=5339841  Unguided=0
+  Aging loops      : 47436  (0.23 per eviction)
+  Avg lifespan(cy) : DoA=3128345  Dead=4506519  Alive=8707124  Unguided=0
 LLC repl_hist: unbounded (25485 entries)  scoring_mode=5
 LLC repl_hist transitions:
-  upward  : MA→MD=9701  MD→DoA=9315
-  downward: DoA→MD=7709  MD→MA=3881  DoA→MA=11764
-  up/down ratio: 0.82
+  upward  : MA→MD=5543  MD→DoA=7056
+  downward: DoA→MD=5873  MD→MA=2687  DoA→MA=7777
+  up/down ratio: 0.78
 

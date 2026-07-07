@@ -133,21 +133,21 @@ Channel 0
   ROW_BUFFER_MISS:      30282  FULL:          0
 
 LLC SRRIP-Live STATS:
-  Set dueling      : metric=hits  PSEL=1/1023  winner=config_A  sampler_a_hits=97858  sampler_b_hits=65113
+  Set dueling      : metric=hits  PSEL=1/1023  winner=config_A  sampler_a_hits=66183  sampler_b_hits=44086
   Config A: DoA ins=2 hit=2  MD ins=2 hit=1
   Config B: DoA ins=3 hit=0  MD ins=2 hit=1  (SRRIP_DOA_INS_RRPV_B / _HIT_RRPV_B / SRRIP_MD_INS_RRPV_B / _HIT_RRPV_B)
-  Activation rate  : 100.0%  (346407 guided / 346407 total insertions)
-  guided_insertions=346407
-  Insert mix       : DoA=48.5%  Dead=14.8%  Alive=36.9%  Unguided=0.0%
-  Hit rate/class   : DoA=52.0%  Dead=167.6%  Alive=3705.8%  Unguided=0.0%
+  Activation rate  : 100.0%  (207926 guided / 207926 total insertions)
+  guided_insertions=207926
+  Insert mix       : DoA=59.2%  Dead=19.0%  Alive=22.0%  Unguided=0.0%
+  Hit rate/class   : DoA=50.6%  Dead=173.2%  Alive=6962.0%  Unguided=0.0%
   RRPV@evict DoA   : [0]=0.0% [1]=0.0% [2]=0.0% [3]=100.0%  (ideal: ~100% at [3])
   RRPV@evict Dead  : [0]=0.0% [1]=0.0% [2]=0.0% [3]=100.0%
   RRPV@evict Alive : [0]=0.0% [1]=0.0% [2]=0.0% [3]=100.0%  (ideal: low RRPV after promotion)
-  Aging loops      : 70849  (0.23 per eviction)
-  Avg lifespan(cy) : DoA=2657788  Dead=3966370  Alive=5379399  Unguided=0
+  Aging loops      : 47096  (0.23 per eviction)
+  Avg lifespan(cy) : DoA=3090481  Dead=4545915  Alive=8829263  Unguided=0
 LLC repl_hist: unbounded (25478 entries)  scoring_mode=5
 LLC repl_hist transitions:
-  upward  : MA→MD=9552  MD→DoA=9284
-  downward: DoA→MD=7765  MD→MA=3806  DoA→MA=11672
-  up/down ratio: 0.82
+  upward  : MA→MD=5414  MD→DoA=7042
+  downward: DoA→MD=5952  MD→MA=2626  DoA→MA=7690
+  up/down ratio: 0.77
 

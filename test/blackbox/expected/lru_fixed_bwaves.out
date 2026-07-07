@@ -131,19 +131,20 @@ LLC LRU-Live STATS:
   DoA ins mode     : 2n3 (default)  (LRU_LIVE_DOA_INS)
   Insertion positions: DoA=10/MRU  Dead=5/MRU  Alive=0/MRU  (N=16)
   Hit promotion    : full to MRU
-  Activation rate  : 100.0%  (2833386 guided / 2833386 total insertions)
-  guided_insertions=2833386
-  Insert mix       : DoA=97.8%  Dead=0.0%  Alive=2.3%  Unguided=0.0%
-  Hit rate/class   : DoA=20.5%  Dead=0.0%  Alive=26.8%  Unguided=0.0%
-  Evict class mix  : DoA=98.5%  Dead=0.0%  Alive=1.6%  Unguided=0.0%
+  Activation rate  : 100.0%  (1558590 guided / 1558590 total insertions)
+  guided_insertions=1558590
+  Insert mix       : DoA=100.0%  Dead=0.0%  Alive=0.0%  Unguided=0.0%
+  Insert mix (raw) : DoA=1558590  Dead=0  Alive=0  Unguided=0
+  Hit rate/class   : DoA=0.0%  Dead=0.0%  Alive=0.0%  Unguided=0.0%
+  Promo capped (raw): DoA=0/0  Dead=0/0  (capped / hits-on-class, LRU_LIVE_HIT_INIT=0)
+  Evict class mix  : DoA=100.0%  Dead=0.0%  Alive=0.0%  Unguided=0.0%
   Residency (ticks) by class x reuse:
     Unguided     0hit: mean=      0.0 (n=0)   >=1hit: mean=      0.0 (n=0)   after-last-hit: mean=      0.0 (n=0)
-    DoA          0hit: mean=      6.3 (n=2757954)   >=1hit: mean=    425.4 (n=18)   after-last-hit: mean=    362.9 (n=18)
+    DoA          0hit: mean=      5.1 (n=1558590)   >=1hit: mean=      0.0 (n=0)   after-last-hit: mean=      0.0 (n=0)
     MostlyDead   0hit: mean=      0.0 (n=0)   >=1hit: mean=      0.0 (n=0)   after-last-hit: mean=      0.0 (n=0)
-    MostlyAlive  0hit: mean=    417.5 (n=42638)   >=1hit: mean=    927.7 (n=8)   after-last-hit: mean=    339.3 (n=8)
+    MostlyAlive  0hit: mean=      0.0 (n=0)   >=1hit: mean=      0.0 (n=0)   after-last-hit: mean=      0.0 (n=0)
 LLC repl_hist: unbounded (31 entries)  scoring_mode=5
 LLC repl_hist transitions:
-  upward  : MA→MD=1  MD→DoA=5
-  downward: DoA→MD=4  MD→MA=0  DoA→MA=16
-  up/down ratio: 0.31
+  upward  : MA→MD=0  MD→DoA=0
+  downward: DoA→MD=0  MD→MA=0  DoA→MA=0
 

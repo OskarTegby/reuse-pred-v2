@@ -133,19 +133,21 @@ LLC LRU-Live STATS:
   DoA ins mode     : 2n3 (default)  (LRU_LIVE_DOA_INS)
   Insertion positions: DoA=10/MRU  Dead=5/MRU  Alive=0/MRU  (N=16)
   Hit promotion    : full to MRU
-  Activation rate  : 100.0%  (407270 guided / 407270 total insertions)
-  guided_insertions=407270
-  Insert mix       : DoA=38.6%  Dead=52.7%  Alive=8.9%  Unguided=0.0%
-  Hit rate/class   : DoA=89.0%  Dead=371.1%  Alive=368.3%  Unguided=0.0%
-  Evict class mix  : DoA=40.4%  Dead=50.2%  Alive=9.6%  Unguided=0.0%
+  Activation rate  : 100.0%  (263658 guided / 263658 total insertions)
+  guided_insertions=263658
+  Insert mix       : DoA=43.3%  Dead=56.3%  Alive=0.5%  Unguided=0.0%
+  Insert mix (raw) : DoA=114061  Dead=148429  Alive=1168  Unguided=0
+  Hit rate/class   : DoA=63.9%  Dead=383.3%  Alive=1582.9%  Unguided=0.0%
+  Promo capped (raw): DoA=0/72858  Dead=0/568864  (capped / hits-on-class, LRU_LIVE_HIT_INIT=0)
+  Evict class mix  : DoA=43.0%  Dead=56.6%  Alive=0.6%  Unguided=0.0%
   Residency (ticks) by class x reuse:
     Unguided     0hit: mean=      0.0 (n=0)   >=1hit: mean=      0.0 (n=0)   after-last-hit: mean=      0.0 (n=0)
-    DoA          0hit: mean=     18.9 (n=142133)   >=1hit: mean=     85.8 (n=8906)   after-last-hit: mean=     69.1 (n=8906)
-    MostlyDead   0hit: mean=     43.2 (n=18130)   >=1hit: mean=     83.9 (n=169713)   after-last-hit: mean=     64.8 (n=169713)
-    MostlyAlive  0hit: mean=     55.8 (n=12801)   >=1hit: mean=     85.4 (n=22819)   after-last-hit: mean=     62.7 (n=22819)
+    DoA          0hit: mean=     18.6 (n=108492)   >=1hit: mean=     80.8 (n=4747)   after-last-hit: mean=     66.0 (n=4747)
+    MostlyDead   0hit: mean=     42.5 (n=11544)   >=1hit: mean=     82.4 (n=137509)   after-last-hit: mean=     64.2 (n=137509)
+    MostlyAlive  0hit: mean=     61.5 (n=841)   >=1hit: mean=    136.6 (n=525)   after-last-hit: mean=     61.5 (n=525)
 LLC repl_hist: unbounded (1294 entries)  scoring_mode=5
 LLC repl_hist transitions:
-  upward  : MA→MD=833  MD→DoA=4761
-  downward: DoA→MD=4671  MD→MA=145  DoA→MA=505
-  up/down ratio: 1.06
+  upward  : MA→MD=317  MD→DoA=2603
+  downward: DoA→MD=2552  MD→MA=111  DoA→MA=331
+  up/down ratio: 0.98
 

@@ -133,19 +133,21 @@ LLC LRU-Live STATS:
   cfgB DoA ins     : lru (rank 0)
   Insertion positions: DoA=10/MRU  Dead=5/MRU  Alive=0/MRU  (N=16)
   Hit promotion    : full to MRU
-  Activation rate  : 100.0%  (2696547 guided / 2696547 total insertions)
-  guided_insertions=2696547
-  Insert mix       : DoA=87.2%  Dead=0.6%  Alive=12.3%  Unguided=0.0%
-  Hit rate/class   : DoA=56.9%  Dead=4052.4%  Alive=824.3%  Unguided=0.0%
-  Evict class mix  : DoA=88.2%  Dead=0.6%  Alive=11.4%  Unguided=0.0%
+  Activation rate  : 100.0%  (933701 guided / 933701 total insertions)
+  guided_insertions=933701
+  Insert mix       : DoA=72.4%  Dead=1.7%  Alive=26.1%  Unguided=0.0%
+  Insert mix (raw) : DoA=675646  Dead=15205  Alive=242850  Unguided=0
+  Hit rate/class   : DoA=93.6%  Dead=4052.4%  Alive=1099.9%  Unguided=0.0%
+  Promo capped (raw): DoA=0/632013  Dead=0/616156  (capped / hits-on-class, LRU_LIVE_HIT_INIT=0)
+  Evict class mix  : DoA=73.3%  Dead=1.5%  Alive=25.3%  Unguided=0.0%
   Residency (ticks) by class x reuse:
     Unguided     0hit: mean=      0.0 (n=0)   >=1hit: mean=      0.0 (n=0)   after-last-hit: mean=      0.0 (n=0)
-    DoA          0hit: mean=      9.1 (n=2330880)   >=1hit: mean=    340.4 (n=16245)   after-last-hit: mean=     95.4 (n=16245)
+    DoA          0hit: mean=     13.0 (n=667961)   >=1hit: mean=    340.5 (n=16241)   after-last-hit: mean=     95.5 (n=16241)
     MostlyDead   0hit: mean=     74.9 (n=3260)   >=1hit: mean=    557.3 (n=10513)   after-last-hit: mean=    110.5 (n=10513)
-    MostlyAlive  0hit: mean=    170.5 (n=170938)   >=1hit: mean=    304.5 (n=131943)   after-last-hit: mean=     96.8 (n=131943)
+    MostlyAlive  0hit: mean=    114.2 (n=104490)   >=1hit: mean=    304.6 (n=131236)   after-last-hit: mean=     97.1 (n=131236)
 LLC repl_hist: unbounded (164 entries)  scoring_mode=5
 LLC repl_hist transitions:
-  upward  : MA→MD=1862  MD→DoA=1684
-  downward: DoA→MD=1406  MD→MA=1581  DoA→MA=37476
+  upward  : MA→MD=1861  MD→DoA=1684
+  downward: DoA→MD=1406  MD→MA=1581  DoA→MA=37471
   up/down ratio: 0.09
 
