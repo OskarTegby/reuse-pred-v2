@@ -852,7 +852,19 @@ bool CACHE::handle_fill(const PACKET& fill_mshr)
                    ? liveness_class::mostly_alive : liveness_class::mostly_dead;
       }
       evict_lv_for_stats = evict_lv;
-      update_eviction_counters(*way, evict_lv);
+      // TEMPORARY (MD_SUPPRESS_DOA_UPDATE=1): skip the history-table update
+      // entirely for DoA evictions, so the doa counter is never incremented at
+      // all while we're specifically isolating MD-vs-MA behavior. This is
+      // deliberately separate from MD_DISABLE_DOA_SCORE (which only decouples
+      // DoA's effect on the md counter, leaving the doa counter itself
+      // updating normally) — remove/restore normal DoA tracking once this
+      // phase of testing is done.
+      static const bool suppress_doa_update = [] {
+        const char* v = std::getenv("MD_SUPPRESS_DOA_UPDATE");
+        return v && v[0] && v[0] != '0';
+      }();
+      if (!(suppress_doa_update && evict_lv == liveness_class::doa))
+        update_eviction_counters(*way, evict_lv);
     }
   }
 
