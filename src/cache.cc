@@ -744,6 +744,10 @@ bool CACHE::handle_fill(const PACKET& fill_mshr)
   // wrong for any policy (no way was actually used). Instead we track the
   // bypass in a flag and handle it directly below.
   bool predictor_bypassed = false;
+  // Set below (non-bypassed case only) and reused by the reporting block
+  // further down (sim_stats.mostly_dead/mostly_alive) so both places agree
+  // on which signal actually classified this eviction.
+  liveness_class evict_lv_for_stats = liveness_class::mostly_alive;
   if (way != set_end && way->valid) {
     uint64_t bypass_key = repl_hist_use_addr
         ? (fill_mshr.address >> OFFSET_BITS) : fill_mshr.ip;
@@ -830,6 +834,15 @@ bool CACHE::handle_fill(const PACKET& fill_mshr)
         const char* v = std::getenv("MD_SIGNAL_END");
         return !(v && v[0] && std::string_view(v) == "lru");
       }();
+      // MD_DISABLE_DOA_SCORE=1: DoA evictions stop feeding the history-table
+      // score (repl_hist_pc) — only mostly-dead/mostly-alive evictions drive
+      // it from here on, isolating that signal's effect on future insertion
+      // decisions. DoA itself is still detected and reported (sim_stats.doa)
+      // exactly as before; only its contribution to the *score* is removed.
+      static const bool disable_doa_score = [] {
+        const char* v = std::getenv("MD_DISABLE_DOA_SCORE");
+        return v && v[0] && v[0] != '0';
+      }();
       liveness_class evict_lv;
       if (!way->accessed) {
         evict_lv = liveness_class::doa;
@@ -843,7 +856,9 @@ bool CACHE::handle_fill(const PACKET& fill_mshr)
         evict_lv = (lifetime == 0 || time_til_end <= lifetime / 2)
                    ? liveness_class::mostly_alive : liveness_class::mostly_dead;
       }
-      update_eviction_counters(*way, evict_lv);
+      evict_lv_for_stats = evict_lv;
+      if (!(disable_doa_score && evict_lv == liveness_class::doa))
+        update_eviction_counters(*way, evict_lv);
     }
   }
 
@@ -913,9 +928,11 @@ bool CACHE::handle_fill(const PACKET& fill_mshr)
             }
           }
         } else {
-          const uint64_t lifetime     = current_cycle - way->install_cycle;
-          const uint64_t time_til_end = current_cycle - way->last_hit_cycle;
-          if (lifetime == 0 || time_til_end <= lifetime / 2)
+          // Reuses the same classification computed above (evict_lv_for_stats)
+          // instead of recomputing the wall-clock halflife check independently,
+          // so this reported count reflects whichever signal is actually active
+          // (default halflife, or MD_SIGNAL_RECENCY's recency-rank signal).
+          if (evict_lv_for_stats == liveness_class::mostly_alive)
             sim_stats.back().mostly_alive++;
           else
             sim_stats.back().mostly_dead++;
