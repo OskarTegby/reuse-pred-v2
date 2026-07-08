@@ -470,10 +470,39 @@ black-box regeneration job.
 | 2026-07-08 15:33 | `doa_trace_debug/{pr,cactus,bwaves,qmm}` (jids 1409778–1409781) | First 4 representative traces (same as black-box), THD_DOA=6, BHIST_MODE=pc, LRU_LIVE_DOA_INS=2n3, 50M warmup/100M sim | completed |
 | 2026-07-08 15:41 | `doa_trace_debug/{gap,ligra,gms,ml,qmm,dpc3}_*` (jids 1409782–1409853, 72 jobs) | Broadened to fill the cluster (~75 slots): **all** of gap (9), ligra (17), gms (11), sampled ml (11), qmm (12), dpc3 (12). Same binary/env/scale. Submitted via `submit_doatrace_broad.sh` (ad hoc, not committed — lives only in the scratchpad) | completed — 76 files, 126.2M rows total, 5.9GB. 3 dpc3 traces (600.perlbench, 641.leela, 648.exchange2) produced zero eviction rows: `repl_hist: unbounded (0 entries)`, `Insert mix DoA=0.0%` in their logs — their working sets fit entirely in the 2MB LLC for the sampled ROI window, not a bug |
 | 2026-07-08 18:24 | job 1409974 (`doa_summarize`) | Too large to pull raw (5.9GB); aggregate in place with `awk` (`doa_summarize.awk`, ad hoc/scratchpad) into per-trace `summary.txt`: reset-streak histogram (score value at each alive-eviction reset) + per-PC detail (doa_count, reset_count, max_score, top_addr_doa_count) | **errored** (Eqw) — relative `-o` log path resolved against `$HOME` instead of `ChampSim-dev/` (no `-wd` set), so it couldn't open the log file. Never actually ran |
-| 2026-07-08 18:25 | job 1409975 (`doa_summarize`) | Same, resubmitted with absolute `-o` path and `-wd` set | submitted, running |
+| 2026-07-08 18:25 | job 1409975 (`doa_summarize`) | Same, resubmitted with absolute `-o` path and `-wd` set | **completed** — full analysis done inline in conversation (streak-length + per-suite/per-PC breakdown); see summary below |
 
-Next step: pull the `summary.txt` files down once 1409974 finishes and do the actual
-streak-length-at-reset + per-address contribution analysis.
+**Analysis conclusion**: reset-streak histogram (6.6M resets) shows 39.6%/21.5%/12.5%/7.7%
+at streak lengths 1/2/3/4; 46% of active PCs (doa_count>=5) never reset for the whole run.
+Per-suite split explains the established optimal thresholds (`docs/SPEEDUP_SUMMARY.md`):
+GAP/Ligra (THD=1) win via *abundance* (tens-of-thousands of DoA evictions per PC swamp
+occasional oscillation); QMM (THD=4) is driven by *scarcity* (median PC seen exactly once
+in the whole run, so there's rarely a second chance to wait for); DPC3/SPEC (THD=8-16) has
+the lowest per-PC activity plus a real oscillating tail, making wrong calls costliest.
+Top-address concentration is low (4-14% median) almost everywhere, so per-PC aggregation
+isn't masking one hot address in general.
+
+## Random DoA-insertion experiments on QMM (same branch, 2026-07-08)
+
+Two new opt-in `HistTable` mechanisms, built to test whether removing the "free pass"
+every key gets before any DoA evidence exists helps QMM specifically (per the scarcity
+finding above):
+  - **`DOA_DEFAULT_PCT=<0-100>`**: read-time override — that % of never-seen keys classify
+    as DoA on first sight instead of the default alive. No persistent state touched.
+  - **`DOA_FORCE_PCT=<0-100>`**: write-time override — forces an existing key's persistent
+    score up to max(THD_DOA, BYPASS_THD), once per candidate LLC fill under
+    `LIVENESS_BYPASS=1`, so the same event sees the forced value for bypass, insertion, and
+    later promotion alike (a decoupled subset of keys from DOA_DEFAULT_PCT).
+
+Both compile clean, smoke-tested locally on pagerank (small but real effect: DOA_FORCE_PCT=50
+raised LLC bypasses from 93182→95182).
+
+| Launch | Cluster dir | Purpose | Status |
+|---|---|---|---|
+| 2026-07-08 19:06 | `doa_random_qmm/{A,B}_*` (jids 1410041/1410042-1410053 and preceding, 78 jobs total) | 13 QMM traces (same as counter-trace study) × established config (THD_DOA=4, BHIST_MODE=pc, LRU_LIVE_DOA_INS=2n3) × 3 arms each: Experiment A = base/DOA_DEFAULT_PCT=25/50 (no bypass); Experiment B = base/DOA_FORCE_PCT=25/50 (LIVENESS_BYPASS=1, BYPASS_THD=4). Submitted via `submit_doa_random_qmm.sh` (ad hoc, scratchpad only) | submitted, running |
+
+Next step: pull IPC per scenario once done, compare each arm against its own baseline
+(A_base / B_base) per trace, geomean across the 13 QMM traces.
 
 ---
 
