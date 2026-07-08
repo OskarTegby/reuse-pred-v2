@@ -795,3 +795,11 @@ heartbeat output, not an instant error) before trusting it at this scale — see
 the two failed attempts above for why that check matters. The curated 6-trace
 batch (`md_doa_ablation_20260708_0026`) was left running rather than cancelled,
 since it gives an earlier partial read and costs little to leave alone.
+
+**Both finished clean overnight**: curated (24/24, 0 errors) and all-suites
+(1004/1004, 0 errors). See the curated IPC table and Explore-agent root-cause
+analysis (activation-rate/hit-rate driven, plus the `LRU_LIVE_HIT_INIT=1`
+promotion cap muting even correctly-classified reuse) on the
+`lru-live-recency-promotion-cap` branch's `docs/JOBS.md`, which also documents
+the follow-up experiment (a new `LRU_LIVE_HIT_INIT=5` recency-position-gated
+promotion mode) launched from this point.
