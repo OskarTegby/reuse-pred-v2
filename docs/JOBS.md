@@ -499,10 +499,11 @@ raised LLC bypasses from 93182→95182).
 
 | Launch | Cluster dir | Purpose | Status |
 |---|---|---|---|
-| 2026-07-08 19:06 | `doa_random_qmm/{A,B}_*` (jids 1410041/1410042-1410053 and preceding, 78 jobs total) | 13 QMM traces (same as counter-trace study) × established config (THD_DOA=4, BHIST_MODE=pc, LRU_LIVE_DOA_INS=2n3) × 3 arms each: Experiment A = base/DOA_DEFAULT_PCT=25/50 (no bypass); Experiment B = base/DOA_FORCE_PCT=25/50 (LIVENESS_BYPASS=1, BYPASS_THD=4). Submitted via `submit_doa_random_qmm.sh` (ad hoc, scratchpad only) | submitted, running |
+| 2026-07-08 19:06 | `doa_random_qmm/{A,B}_*` (jids 1410041/1410042-1410053 and preceding, 78 jobs total) | 13 QMM traces (same as counter-trace study) × established config (THD_DOA=4, BHIST_MODE=pc, LRU_LIVE_DOA_INS=2n3) × 3 arms each: Experiment A = base/DOA_DEFAULT_PCT=25/50 (no bypass); Experiment B = base/DOA_FORCE_PCT=25/50 (LIVENESS_BYPASS=1, BYPASS_THD=4). Submitted via `submit_doa_random_qmm.sh` (ad hoc, scratchpad only) | **completed, 78/78, REFUTED both ideas**: A (`DOA_DEFAULT_PCT`) 25%→-2.10% IPC, 50%→-5.15%; B (`DOA_FORCE_PCT`) 25%→-6.48%, 50%→-7.43% — geomean IPC vs each arm's own baseline. LLC miss rate climbs monotonically with the pct in both (A: 5.87%→7.07%; B: 6.29%→8.84%; B's bypass count roughly doubles), confirming the mechanism: forced/defaulted DoA calls are wrong often enough to cause real extra misses, not just bookkeeping churn. One severe outlier: B on `srv_575` at 50% — IPC -34.2%, miss rate 8.6%→25.8%, bypasses 108K→601K. Conclusion: QMM's cold-start "free pass" is not free — it protects blocks that really do get reused; blind random pessimism (no recurrence signal) mostly just injects false positives. Investigation closed; did not pursue `BYPASS_RECHECK_MODE` fix for B since the core hypothesis already failed. |
 
-Next step: pull IPC per scenario once done, compare each arm against its own baseline
-(A_base / B_base) per trace, geomean across the 13 QMM traces.
+Both `DOA_DEFAULT_PCT` and `DOA_FORCE_PCT` remain in the code as opt-in, zero-cost-when-off
+mechanisms (in case a future, recurrence-informed variant is worth trying), but this specific
+"random/blind" instantiation is a dead end for QMM.
 
 ---
 
