@@ -553,6 +553,23 @@ even when the informed check itself is a massive win, not just when it's a modes
 Next step: pull IPC + LLC miss rate + bypass count per trace for all remaining Ligra jobs once
 done, geomean vs each arm's own baseline, same methodology as the QMM comparison above.
 
+## Bug found + fixed: DOA_FORCE_PCT was coupled to LIVENESS_BYPASS (same day)
+
+`maybe_force_doa()` was gated behind `liveness_bypass` and forced scores to
+`max(THD_DOA, BYPASS_THD)`, so every `DOA_FORCE_PCT` result above (QMM -6.48%/-7.43%,
+Ligra -6.09%/-4.56%) actually tested "force interacting with bypass," not the original ask
+(force affecting insertion/promotion on its own, independent of bypass). Fixed: moved the
+force call to right before `classify_block_liveness()`, unconditional on bypass, forcing to
+plain `THD_DOA`. Rebuilt, smoke-tested (confirmed effect present with no `LIVENESS_BYPASS`
+set at all), committed (`0aa2d48e1162`), binary redeployed to Castillo.
+
+| Launch | Cluster dir | Purpose | Status |
+|---|---|---|---|
+| 2026-07-08 ~22:25 | `doa_random_qmm/F_qmm_dfp{25,50}_*` (26 jobs) + `F_ligra_dfp{25,50}_*` (34 jobs), jids 1410173-1410232 | Corrected `DOA_FORCE_PCT` rerun, no bypass: 13 QMM traces (THD_DOA=4, baseline=`A_base`) + 17 Ligra traces (THD_DOA=1, baseline=`L_base`). Submitted via `submit_dfp_fixed.sh` (ad hoc, scratchpad only) | submitted, running |
+
+Next step: compare vs A_base (QMM) / L_base (Ligra) once done — this is the real answer to
+whether randomly forcing insertion/promotion (not bypass) helps either suite.
+
 ---
 
 ## Still Pending / Not Yet Submitted
