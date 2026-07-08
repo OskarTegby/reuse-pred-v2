@@ -174,7 +174,7 @@ int main(int argc, char** argv)
 
       cfg << "# environment knobs (value or <unset>)\n";
       static const char* const env_keys[] = {
-          "SCORING_MODE", "THD_DOA", "THD_DEAD", "LLC_THD_DOA", "LLC_THD_DEAD", "STLB_THD_DOA", "STLB_THD_DEAD",
+          "THD_DOA", "LLC_THD_DOA", "STLB_THD_DOA",
           "MID_THD", "LOW_THD", "BHIST_MODE", "SRRIP_LIVE_TARGET", "LRU_LIVE_HIT_INIT",
           "LIVENESS_BYPASS", "BYPASS_THD", "STLB_LIVENESS_BYPASS", "STLB_BYPASS_THD",
           "CBPRED", "DPPRED", "CBPRED_IDX", "DPPRED_IDX", "CBPRED_KEY", "MAZ_UNBOUNDED", "BHIST_HASH", "PHIST_HASH",

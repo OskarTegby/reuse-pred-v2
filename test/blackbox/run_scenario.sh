@@ -21,7 +21,7 @@
 #                bypass - liveness with DoA blocks bypassing the LLC
 #                duel   - liveness with set dueling (each policy's kept metric)
 #                addr   - liveness with per-ADDRESS history indexing (bounded 4K,
-#                         tiered eviction) -- guards the per-address ablation used
+#                         lfu_doa eviction) -- guards the per-address ablation used
 #                         in the paper and the bounded-table eviction path
 #   traces     : pr     - ligra PageRank      (graph DoA; bypass + aggressive arm)
 #                cactus - 607.cactuBSSN_s-3477B (many PCs -> history table active;
@@ -60,12 +60,6 @@ trace_path() {
     *) return 1 ;;
   esac
 }
-trace_dead() {            # per-suite THD_DEAD, matches the cluster sweeps
-  case "$1" in
-    pr) echo 16 ;; cactus|bwaves) echo 4 ;; qmm) echo 2 ;; *) return 1 ;;
-  esac
-}
-
 # --- emit the full scenario list (single source of truth) --------------------
 if [ "${1:-}" = "--list" ]; then
   for p in "${POLICIES[@]}"; do for c in "${CONDITIONS[@]}"; do
@@ -78,12 +72,11 @@ SCEN="${1:?usage: run_scenario.sh <policy>_<condition>_<trace>  (or --list)}"
 IFS=_ read -r POL COND TRC <<< "$SCEN"
 
 TRACE="${TRACE:-$(trace_path "$TRC")}" || { echo "unknown trace key in '$SCEN'" >&2; exit 2; }
-DEAD="$(trace_dead "$TRC")"            || { echo "unknown trace key in '$SCEN'" >&2; exit 2; }
 
 # liveness base shared by every non-baseline condition
-BASE_ENV=(SCORING_MODE=5 THD_DOA=6 "THD_DEAD=$DEAD" BHIST_MODE=pc SRRIP_LIVE_TARGET=llc)
-# 'addr' condition: address-keyed history table, bounded to 4K with tiered eviction.
-ADDR_ENV=(REPL_HIST_MODE=addr REPL_HIST_LLC_CAP=4096 REPL_HIST_REPL=tiered)
+BASE_ENV=(THD_DOA=6 BHIST_MODE=pc SRRIP_LIVE_TARGET=llc)
+# 'addr' condition: address-keyed history table, bounded to 4K with lfu_doa eviction.
+ADDR_ENV=(REPL_HIST_MODE=addr REPL_HIST_LLC_CAP=4096 REPL_HIST_REPL=lfu_doa)
 
 # --- (policy, condition) -> binary + env -------------------------------------
 ENVV=()
@@ -104,10 +97,10 @@ case "${POL}_${COND}" in
 
   # -------- IPV-Live (ilB fixed; duel = ins2-vs-ins3, latency metric) ---------
   ipv_base)    BIN=champsim_ipv ;;
-  ipv_fixed)   BIN=champsim_ipv_live; ENVV=("${BASE_ENV[@]}" IPV_DOA=0:1:2:2:3 IPV_MOSTLY_DEAD=0:1:1:2:2) ;;
-  ipv_bypass)  BIN=champsim_ipv_live; ENVV=("${BASE_ENV[@]/SRRIP_LIVE_TARGET=llc/SRRIP_LIVE_TARGET=none}" LIVENESS_BYPASS=1 IPV_DOA=0:1:2:2:3 IPV_MOSTLY_DEAD=0:1:1:2:2) ;;
-  ipv_duel)    BIN=champsim_ipv_live; ENVV=("${BASE_ENV[@]}" DUEL_N_CONFIGS=2 DUEL_N_SAMPLERS=32 IPV_DOA_0=0:1:2:2:2 IPV_DOA_1=0:1:2:2:3 IPV_MOSTLY_DEAD=0:1:1:2:2 DUEL_METRIC=latency) ;;
-  ipv_addr)    BIN=champsim_ipv_live; ENVV=("${BASE_ENV[@]}" IPV_DOA=0:1:2:2:3 IPV_MOSTLY_DEAD=0:1:1:2:2 "${ADDR_ENV[@]}") ;;
+  ipv_fixed)   BIN=champsim_ipv_live; ENVV=("${BASE_ENV[@]}" IPV_DOA=0:1:2:2:3) ;;
+  ipv_bypass)  BIN=champsim_ipv_live; ENVV=("${BASE_ENV[@]/SRRIP_LIVE_TARGET=llc/SRRIP_LIVE_TARGET=none}" LIVENESS_BYPASS=1 IPV_DOA=0:1:2:2:3) ;;
+  ipv_duel)    BIN=champsim_ipv_live; ENVV=("${BASE_ENV[@]}" DUEL_N_CONFIGS=2 DUEL_N_SAMPLERS=32 IPV_DOA_0=0:1:2:2:2 IPV_DOA_1=0:1:2:2:3 DUEL_METRIC=latency) ;;
+  ipv_addr)    BIN=champsim_ipv_live; ENVV=("${BASE_ENV[@]}" IPV_DOA=0:1:2:2:3 "${ADDR_ENV[@]}") ;;
 
   *) echo "run_scenario.sh: unknown scenario '$SCEN'" >&2; exit 2 ;;
 esac

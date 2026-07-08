@@ -1,28 +1,29 @@
 // ipv_live.cc — IPV replacement with per-liveness-class vectors.
 //
-// Three IPVs: ipv_doa, ipv_mostly_dead, ipv_mostly_alive.
+// Two IPVs: ipv_doa, ipv_alive. (A third, intermediate "mostly-dead"
+// wall-clock-halflife class was tried and removed; see docs/JOBS.md
+// "Set-dueling MD isolation" for the evidence — no configuration showed it
+// contributing a real, reproducible IPC benefit.)
 // On miss: rrpv = ipv[4]       (insertion priority)
 // On hit:  rrpv = ipv[current] (promotion step)
 //
 // Statistics printed in replacement_final_stats()
 // ------------------------------------------------
 // Activation rate      — fraction of insertions where liveness selected the IPV.
-// Insert class mix     — DoA / mostly-dead / mostly-alive / unguided breakdown.
-// Hit rate per class   — discriminability metric. DoA and mostly-dead entries
-//                        should have much lower hit rates than mostly-alive.
+// Insert class mix     — DoA / alive / unguided breakdown.
+// Hit rate per class   — discriminability metric. DoA entries should have a
+//                        much lower hit rate than alive entries.
 // RRPV at eviction     — histogram per class showing how entries leave the cache.
-//   DoA / mostly-dead: ideally evicted at maxRRPV (low-priority insertion, no
-//                      promotion earned) — shows entries did not waste residency.
-//   Mostly-alive:      ideally evicted at low RRPV (promoted by hits before
-//                      eviction) — shows protected entries got the hits they
-//                      were predicted to earn.
+//   DoA:   ideally evicted at maxRRPV (low-priority insertion, no promotion
+//          earned) — shows entries did not waste residency.
+//   Alive: ideally evicted at low RRPV (promoted by hits before eviction) —
+//          shows protected entries got the hits they were predicted to earn.
 // Aging loops          — find_victim scan passes needed; fewer = less pressure
 //                        from protected entries crowding out eviction candidates.
 //
 // Runtime overrides (index layout: [hit@0, hit@1, hit@2, hit@3, insert]):
 //   IPV_DOA=0,1,2,2,2          default: insert@2, reset to 2 on hit (mirrors LRU-Live DoA)
-//   IPV_MOSTLY_DEAD=0,1,1,2,2  default: insert@2, hit@2→1, hit@1→1 (capped at RRPV=1)
-//   IPV_MOSTLY_ALIVE=0,0,0,0,2 default: insert@2, full promotion on first hit
+//   IPV_ALIVE=0,0,0,0,2        default: insert@2, full promotion on first hit
 //   SRRIP_LIVE_TARGET=llc|stlb|both
 //
 // N-way set dueling (DUEL_N_CONFIGS=N, DUEL_N_SAMPLERS=S):
@@ -30,7 +31,7 @@
 //   Each group i always uses IPV_DOA_i; followers use whichever group has the
 //   most demand hits so far (argmax of per-group hit counters).
 //   IPV_DOA_i defaults: config 0 → IPV_DOA, config 1 → IPV_DOA_B, rest → {0,1,2,2,3}.
-//   MD and MA IPVs are shared across all configs (only DoA varies).
+//   The alive IPV is shared across all configs (only DoA varies).
 //   DUEL_HYST: config i must lead all others by HYST hits to win followers.
 
 #include <algorithm>
@@ -51,7 +52,7 @@ constexpr int maxRRPV        = 3;
 constexpr int MAX_DUEL_CFGS  = 8;
 
 std::unordered_map<CACHE*, std::vector<int>>    rrpv_values;
-// 0=unguided  1=doa  2=mostly_dead  3=mostly_alive
+// 0=unguided  1=doa  2=alive
 std::unordered_map<CACHE*, std::vector<int8_t>> slot_class;
 // which duel config was active at insertion time (0..N-1)
 std::unordered_map<CACHE*, std::vector<uint8_t>> slot_cfg_idx;
@@ -62,10 +63,9 @@ std::unordered_map<CACHE*, std::array<int64_t, MAX_DUEL_CFGS>> hit_counts;
 std::unordered_map<CACHE*, std::array<int64_t, MAX_DUEL_CFGS>> miss_latency;
 
 struct Stats {
-    uint64_t ins_unguided = 0, ins_doa = 0, ins_dead = 0, ins_alive = 0;
-    uint64_t hit_unguided = 0, hit_doa = 0, hit_dead = 0, hit_alive = 0;
+    uint64_t ins_unguided = 0, ins_doa = 0, ins_alive = 0;
+    uint64_t hit_unguided = 0, hit_doa = 0, hit_alive = 0;
     std::array<uint64_t, 4> evict_rrpv_doa     = {};
-    std::array<uint64_t, 4> evict_rrpv_dead    = {};
     std::array<uint64_t, 4> evict_rrpv_alive   = {};
     std::array<uint64_t, 4> evict_rrpv_unguided= {};
     uint64_t aging_loops = 0;
@@ -73,8 +73,7 @@ struct Stats {
 std::unordered_map<CACHE*, Stats> stats;
 
 using ipv_t = std::array<int, 5>;
-ipv_t g_ipv_mostly_dead  = {0, 1, 1, 2, 2};
-ipv_t g_ipv_mostly_alive = {0, 0, 0, 0, 2};
+ipv_t g_ipv_alive = {0, 0, 0, 0, 2};
 
 // Shared (non-dueling) DoA config read from IPV_DOA; also used as duel config 0 default.
 ipv_t g_ipv_doa = {0, 1, 2, 2, 2};
@@ -86,8 +85,8 @@ int   g_n_samplers = 0;   // sampler sets per config
 int   g_hyst       = 0;   // hit-count lead required to win followers
 // Which insertion-class hits count toward the duel signal (DUEL_HIT_FILTER):
 //   0 = all hits (default)         — raw demand hits, any class
-//   1 = exclude DoA (cls != 1)     — MD+MA hits only
-//   2 = mostly-alive only (cls==3) — productive-residency hits only
+//   1 = exclude DoA (cls != 1)     — alive hits only
+//   2 = alive only (cls==2)        — productive-residency hits only
 // Rationale: counting DoA-block hits biases toward retention (ins@2), which on
 // some suites (qmm) is anti-correlated with IPC. The benefit of ins@3 shows up
 // as MORE non-DoA hits (freed space lets live data stay), so filtering DoA hits
@@ -122,9 +121,8 @@ void ensure_parsed()
 {
   if (g_parsed) return;
   g_parsed = true;
-  g_ipv_doa         = parse_ipv("IPV_DOA",         g_ipv_doa);
-  g_ipv_mostly_dead = parse_ipv("IPV_MOSTLY_DEAD",  g_ipv_mostly_dead);
-  g_ipv_mostly_alive= parse_ipv("IPV_MOSTLY_ALIVE", g_ipv_mostly_alive);
+  g_ipv_doa   = parse_ipv("IPV_DOA",   g_ipv_doa);
+  g_ipv_alive = parse_ipv("IPV_ALIVE", g_ipv_alive);
 }
 
 void ensure_parsed_duel()
@@ -261,8 +259,7 @@ uint32_t CACHE::find_victim(uint32_t triggering_cpu, uint64_t instr_id, uint32_t
 
   switch (cls) {
     case 1: st.evict_rrpv_doa    [rrpv]++; break;
-    case 2: st.evict_rrpv_dead   [rrpv]++; break;
-    case 3: st.evict_rrpv_alive  [rrpv]++; break;
+    case 2: st.evict_rrpv_alive  [rrpv]++; break;
     default:st.evict_rrpv_unguided[rrpv]++; break;
   }
 
@@ -300,14 +297,14 @@ void CACHE::update_replacement_state(uint32_t triggering_cpu, uint32_t set, uint
       const int sc = ::sampler_config_of(static_cast<int>(set), step, nc);
       if (sc >= 0) {
         // Sampler set: always uses its assigned config; records a hit for it.
-        // cls holds the block's insertion class (1=DoA, 2=MD, 3=MA). The hit
+        // cls holds the block's insertion class (1=DoA, 2=alive). The hit
         // filter (DUEL_HIT_FILTER) decides which classes contribute to the
         // duel signal — excluding DoA hits removes the retention bias.
         cfg = sc;
         if (hit) {
           bool count_hit = type != WRITE;
           if (count_hit && ::g_hit_filter == 1) count_hit = (cls != 1);
-          if (count_hit && ::g_hit_filter == 2) count_hit = (cls == 3);
+          if (count_hit && ::g_hit_filter == 2) count_hit = (cls == 2);
           if (count_hit)
             ::hit_counts[this][sc]++;
         } else if (type != WRITE) {
@@ -328,26 +325,20 @@ void CACHE::update_replacement_state(uint32_t triggering_cpu, uint32_t set, uint
     if (hit) {
       // Use the config stored at insertion time for promotion.
       const int c = static_cast<int>(cfg_stored);
-      const ipv_t& ipv = (cls == 1) ? ::g_duel_doa[c] :
-                         (cls == 2) ? ::g_ipv_mostly_dead :
-                                      ::g_ipv_mostly_alive;
+      const ipv_t& ipv = (cls == 1) ? ::g_duel_doa[c] : ::g_ipv_alive;
       if (type != WRITE) rrpv = ipv[rrpv];
-      if      (cls == 1) st.hit_doa++;
-      else if (cls == 2) st.hit_dead++;
-      else               st.hit_alive++;
+      if (cls == 1) st.hit_doa++;
+      else          st.hit_alive++;
     } else {
       const liveness_class lc = classify_block_liveness(full_addr, ip);
-      const ipv_t& ipv = (lc == liveness_class::doa)         ? ::g_duel_doa[cfg] :
-                         (lc == liveness_class::mostly_dead)  ? ::g_ipv_mostly_dead :
-                                                                 ::g_ipv_mostly_alive;
+      const ipv_t& ipv = (lc == liveness_class::doa) ? ::g_duel_doa[cfg] : ::g_ipv_alive;
       cfg_stored = static_cast<uint8_t>(cfg);
       rrpv = ipv[4];
-      if      (lc == liveness_class::doa)         { cls = 1; st.ins_doa++;   }
-      else if (lc == liveness_class::mostly_dead)  { cls = 2; st.ins_dead++;  }
-      else                                         { cls = 3; st.ins_alive++; }
+      if (lc == liveness_class::doa) { cls = 1; st.ins_doa++;   }
+      else                           { cls = 2; st.ins_alive++; }
     }
   } else {
-    const auto& ipv = ::g_ipv_mostly_alive;
+    const auto& ipv = ::g_ipv_alive;
     if (hit) { if (type != WRITE) rrpv = ipv[rrpv]; st.hit_unguided++; }
     else     { rrpv = ipv[4]; cls = 0; st.ins_unguided++; }
   }
@@ -356,8 +347,8 @@ void CACHE::update_replacement_state(uint32_t triggering_cpu, uint32_t set, uint
 void CACHE::replacement_final_stats()
 {
   const auto& st = ::stats[this];
-  const uint64_t total_ins  = st.ins_unguided + st.ins_doa + st.ins_dead + st.ins_alive;
-  const uint64_t guided_ins = st.ins_doa + st.ins_dead + st.ins_alive;
+  const uint64_t total_ins  = st.ins_unguided + st.ins_doa + st.ins_alive;
+  const uint64_t guided_ins = st.ins_doa + st.ins_alive;
 
   auto pct = [](uint64_t n, uint64_t d) -> double {
     return d ? 100.0 * n / d : 0.0;
@@ -367,10 +358,9 @@ void CACHE::replacement_final_stats()
   };
 
   const uint64_t evict_doa  = tot(st.evict_rrpv_doa);
-  const uint64_t evict_dead = tot(st.evict_rrpv_dead);
   const uint64_t evict_alive= tot(st.evict_rrpv_alive);
   const uint64_t evict_ung  = tot(st.evict_rrpv_unguided);
-  const uint64_t evict_total= evict_doa+evict_dead+evict_alive+evict_ung;
+  const uint64_t evict_total= evict_doa+evict_alive+evict_ung;
 
   printf("%s IPV-Live STATS:\n", NAME.c_str());
 
@@ -388,45 +378,35 @@ void CACHE::replacement_final_stats()
              d[0],d[1],d[2],d[3],d[4],
              ::hit_counts[this][i], ::miss_latency[this][i]);
     }
-    printf("  MD: {%d,%d,%d,%d,%d}  MA: {%d,%d,%d,%d,%d}  (shared across configs)\n",
-           ::g_ipv_mostly_dead[0],::g_ipv_mostly_dead[1],::g_ipv_mostly_dead[2],
-           ::g_ipv_mostly_dead[3],::g_ipv_mostly_dead[4],
-           ::g_ipv_mostly_alive[0],::g_ipv_mostly_alive[1],::g_ipv_mostly_alive[2],
-           ::g_ipv_mostly_alive[3],::g_ipv_mostly_alive[4]);
+    printf("  Alive: {%d,%d,%d,%d,%d}  (shared across configs)\n",
+           ::g_ipv_alive[0],::g_ipv_alive[1],::g_ipv_alive[2],
+           ::g_ipv_alive[3],::g_ipv_alive[4]);
   } else {
-    printf("  IPV_doa         : {%d,%d,%d,%d,%d}\n",
+    printf("  IPV_doa   : {%d,%d,%d,%d,%d}\n",
            ::g_ipv_doa[0],::g_ipv_doa[1],::g_ipv_doa[2],::g_ipv_doa[3],::g_ipv_doa[4]);
-    printf("  IPV_mostly_dead : {%d,%d,%d,%d,%d}\n",
-           ::g_ipv_mostly_dead[0],::g_ipv_mostly_dead[1],::g_ipv_mostly_dead[2],
-           ::g_ipv_mostly_dead[3],::g_ipv_mostly_dead[4]);
-    printf("  IPV_mostly_alive: {%d,%d,%d,%d,%d}\n",
-           ::g_ipv_mostly_alive[0],::g_ipv_mostly_alive[1],::g_ipv_mostly_alive[2],
-           ::g_ipv_mostly_alive[3],::g_ipv_mostly_alive[4]);
+    printf("  IPV_alive : {%d,%d,%d,%d,%d}\n",
+           ::g_ipv_alive[0],::g_ipv_alive[1],::g_ipv_alive[2],
+           ::g_ipv_alive[3],::g_ipv_alive[4]);
   }
 
   printf("  Activation rate : %.1f%%  (%lu guided / %lu total insertions)\n",
          pct(guided_ins, total_ins), guided_ins, total_ins);
   printf("  guided_insertions=%lu\n", guided_ins);
-  printf("  Insert mix      : DoA=%.1f%%  Dead=%.1f%%  Alive=%.1f%%  Unguided=%.1f%%\n",
-         pct(st.ins_doa,total_ins), pct(st.ins_dead,total_ins),
-         pct(st.ins_alive,total_ins), pct(st.ins_unguided,total_ins));
-  printf("  Hit rate/class  : DoA=%.1f%%  Dead=%.1f%%  Alive=%.1f%%  Unguided=%.1f%%\n",
-         pct(st.hit_doa,st.ins_doa), pct(st.hit_dead,st.ins_dead),
-         pct(st.hit_alive,st.ins_alive), pct(st.hit_unguided,st.ins_unguided));
+  printf("  Insert mix      : DoA=%.1f%%  Alive=%.1f%%  Unguided=%.1f%%\n",
+         pct(st.ins_doa,total_ins), pct(st.ins_alive,total_ins), pct(st.ins_unguided,total_ins));
+  printf("  Hit rate/class  : DoA=%.1f%%  Alive=%.1f%%  Unguided=%.1f%%\n",
+         pct(st.hit_doa,st.ins_doa), pct(st.hit_alive,st.ins_alive), pct(st.hit_unguided,st.ins_unguided));
   printf("  RRPV@evict DoA  : [0]=%.1f%% [1]=%.1f%% [2]=%.1f%% [3]=%.1f%%"
          "  (ideal: ~100%% at [%d])\n",
          pct(st.evict_rrpv_doa[0],evict_doa), pct(st.evict_rrpv_doa[1],evict_doa),
          pct(st.evict_rrpv_doa[2],evict_doa), pct(st.evict_rrpv_doa[3],evict_doa),
          ::maxRRPV);
-  printf("  RRPV@evict Dead : [0]=%.1f%% [1]=%.1f%% [2]=%.1f%% [3]=%.1f%%\n",
-         pct(st.evict_rrpv_dead[0],evict_dead), pct(st.evict_rrpv_dead[1],evict_dead),
-         pct(st.evict_rrpv_dead[2],evict_dead), pct(st.evict_rrpv_dead[3],evict_dead));
   printf("  RRPV@evict Alive: [0]=%.1f%% [1]=%.1f%% [2]=%.1f%% [3]=%.1f%%"
          "  (ideal: low RRPV after promotion)\n",
          pct(st.evict_rrpv_alive[0],evict_alive), pct(st.evict_rrpv_alive[1],evict_alive),
          pct(st.evict_rrpv_alive[2],evict_alive), pct(st.evict_rrpv_alive[3],evict_alive));
   printf("  Aging loops     : %lu  (%.2f per eviction)\n",
          st.aging_loops, pct(st.aging_loops, evict_total) / 100.0);
-  repl_hist_pc.print_stats(NAME.c_str(), thd_doa, thd_dead);
+  repl_hist_pc.print_stats(NAME.c_str(), thd_doa);
   printf("\n");
 }

@@ -1,27 +1,27 @@
 // srrip_live — SRRIP with liveness-informed insertion and promotion.
 //
-// Policy rules (three liveness classes)
+// Policy rules (two liveness classes: was the block ever touched before
+// eviction? A third, intermediate "mostly-dead" wall-clock-halflife class was
+// tried and removed; see docs/JOBS.md "Set-dueling MD isolation" for the
+// evidence — no configuration showed it contributing a real, reproducible
+// IPC benefit.)
 // --------------------------------------
-//   DoA fill:         RRPV = SRRIP_DOA_INS_RRPV  (default 2: moderate, not immediate eviction)
-//   DoA hit:          RRPV = SRRIP_DOA_HIT_RRPV  (default 2: reset to insertion, no reward)
-//   Mostly-dead fill: RRPV = maxRRPV-1   (standard SRRIP insertion)
-//   Mostly-dead hit:  RRPV = maxRRPV-2   (moderate promotion)
-//   Mostly-alive fill:RRPV = maxRRPV-1   (same insertion as mostly-dead)
-//   Mostly-alive hit: RRPV = 0           (full promotion, protect the block)
+//   DoA fill:   RRPV = SRRIP_DOA_INS_RRPV  (default 2: moderate, not immediate eviction)
+//   DoA hit:    RRPV = SRRIP_DOA_HIT_RRPV  (default 2: reset to insertion, no reward)
+//   Alive fill: RRPV = maxRRPV-1           (standard SRRIP insertion)
+//   Alive hit:  RRPV = 0                   (full promotion, protect the block)
 //
-// Runtime overrides (LRU-Live mapping: DoA→2N/3 from MRU=RRPV2, MD→N/3 from MRU=RRPV1):
+// Runtime overrides (LRU-Live mapping: DoA→2N/3 from MRU=RRPV2):
 //   SRRIP_DOA_INS_RRPV=N  insertion RRPV for DoA blocks (default 2).
 //   SRRIP_DOA_HIT_RRPV=N  RRPV on DoA hit; 2=reset-to-ins (default, no reward), 1=mild.
-//   SRRIP_MD_INS_RRPV=N   insertion RRPV for mostly-dead blocks (default 2, LRU-Live mirror=1).
-//   SRRIP_MD_HIT_RRPV=N   RRPV on MD hit; 1=one-step (default), 0=full (LRU-Live mirror).
 //
 // Statistics printed in replacement_final_stats()
 // ------------------------------------------------
 // Activation rate      — fraction of insertions where liveness set the RRPV.
 //                        Low rate → policy mostly falling back to plain SRRIP.
-// Insert class mix     — DoA / mostly-alive / unguided breakdown.
+// Insert class mix     — DoA / alive / unguided breakdown.
 // Hit rate per class   — key discriminability metric: DoA entries should have
-//                        a much lower hit rate than mostly-alive entries.
+//                        a much lower hit rate than alive entries.
 //                        If similar, the predictor is not discriminating well.
 // RRPV at eviction     — histogram of RRPV values when each class is evicted.
 //   DoA entries:   ideally maxRRPV (evicted immediately, no aging needed).
@@ -46,23 +46,22 @@ namespace
 constexpr int maxRRPV = 3;
 
 std::unordered_map<CACHE*, std::vector<int>>    rrpv_values;
-// 0=unguided  1=doa  2=mostly_dead  3=mostly_alive
+// 0=unguided  1=doa  2=alive
 std::unordered_map<CACHE*, std::vector<int8_t>> slot_class;
 
 struct Stats {
-    uint64_t ins_unguided = 0, ins_doa = 0, ins_dead = 0, ins_alive = 0;
-    uint64_t hit_unguided = 0, hit_doa = 0, hit_dead = 0, hit_alive = 0;
+    uint64_t ins_unguided = 0, ins_doa = 0, ins_alive = 0;
+    uint64_t hit_unguided = 0, hit_doa = 0, hit_alive = 0;
     std::array<uint64_t, 4> evict_rrpv_doa      = {};
-    std::array<uint64_t, 4> evict_rrpv_dead      = {};
     std::array<uint64_t, 4> evict_rrpv_alive     = {};
     std::array<uint64_t, 4> evict_rrpv_unguided  = {};
     uint64_t aging_loops = 0;
     uint64_t sampler_a_hits = 0;
     uint64_t sampler_b_hits = 0;
     // Lifespan (cycles from insertion to eviction) per insertion class:
-    //   [0]=unguided  [1]=doa  [2]=mostly_dead  [3]=mostly_alive
-    std::array<uint64_t, 4> lifespan_sum   = {};
-    std::array<uint64_t, 4> lifespan_count = {};
+    //   [0]=unguided  [1]=doa  [2]=alive
+    std::array<uint64_t, 3> lifespan_sum   = {};
+    std::array<uint64_t, 3> lifespan_count = {};
 };
 std::unordered_map<CACHE*, Stats> stats;
 
@@ -90,8 +89,6 @@ extern "C" void srrip_live_reset_phase_stats(CACHE* c)
 static int g_duel_metric  = -1;  // 0=hits (PSEL), 1=latency (argmin)
 static int g_doa_ins_rrpv = -1;
 static int g_doa_hit_rrpv = -1;
-static int g_md_ins_rrpv  = -1;
-static int g_md_hit_rrpv  = -1;
 
 static int parse_env_rrpv(const char* var, int dflt)
 {
@@ -101,20 +98,16 @@ static int parse_env_rrpv(const char* var, int dflt)
 
 static int doa_ins_rrpv() { if (g_doa_ins_rrpv < 0) g_doa_ins_rrpv = parse_env_rrpv("SRRIP_DOA_INS_RRPV", 2); return g_doa_ins_rrpv; }
 static int doa_hit_rrpv() { if (g_doa_hit_rrpv < 0) g_doa_hit_rrpv = parse_env_rrpv("SRRIP_DOA_HIT_RRPV", 2); return g_doa_hit_rrpv; }
-static int md_ins_rrpv()  { if (g_md_ins_rrpv  < 0) g_md_ins_rrpv  = parse_env_rrpv("SRRIP_MD_INS_RRPV",  2); return g_md_ins_rrpv;  }
-static int md_hit_rrpv()  { if (g_md_hit_rrpv  < 0) g_md_hit_rrpv  = parse_env_rrpv("SRRIP_MD_HIT_RRPV",  1); return g_md_hit_rrpv;  }
 
 // Config B: default is ins3/hit0 for DoA (opposite of default A's ins2/hit2).
-// Override via SRRIP_DOA_INS_RRPV_B / SRRIP_DOA_HIT_RRPV_B / SRRIP_MD_INS_RRPV_B / SRRIP_MD_HIT_RRPV_B.
+// Override via SRRIP_DOA_INS_RRPV_B / SRRIP_DOA_HIT_RRPV_B.
 // Set dueling (DUEL_N_SAMPLERS=N) picks A or B per workload via PSEL counter.
-static int g_doa_ins_b = -1, g_doa_hit_b = -1, g_md_ins_b = -1, g_md_hit_b = -1;
+static int g_doa_ins_b = -1, g_doa_hit_b = -1;
 static int     g_n_samplers = -1;
 static int64_t g_hyst       = -1;  // cfgB must lead cfgA by this margin to win followers
 
 static int doa_ins_b()  { if (g_doa_ins_b  < 0) g_doa_ins_b  = parse_env_rrpv("SRRIP_DOA_INS_RRPV_B", 3); return g_doa_ins_b;  }
 static int doa_hit_b()  { if (g_doa_hit_b  < 0) g_doa_hit_b  = parse_env_rrpv("SRRIP_DOA_HIT_RRPV_B", 0); return g_doa_hit_b;  }
-static int md_ins_b()   { if (g_md_ins_b   < 0) g_md_ins_b   = parse_env_rrpv("SRRIP_MD_INS_RRPV_B",  2); return g_md_ins_b;   }
-static int md_hit_b()   { if (g_md_hit_b   < 0) g_md_hit_b   = parse_env_rrpv("SRRIP_MD_HIT_RRPV_B",  1); return g_md_hit_b;   }
 static int n_samplers() {
   if (g_n_samplers < 0) {
     const char* e = std::getenv("DUEL_N_SAMPLERS");
@@ -147,8 +140,8 @@ void CACHE::initialize_replacement()
   ::psel[this]         = PSEL_MID;
   ::miss_lat_a[this]   = 0;
   ::miss_lat_b[this]   = 0;
-  (void)doa_ins_rrpv(); (void)doa_hit_rrpv(); (void)md_ins_rrpv(); (void)md_hit_rrpv();
-  (void)doa_ins_b();    (void)doa_hit_b();    (void)md_ins_b();    (void)md_hit_b();
+  (void)doa_ins_rrpv(); (void)doa_hit_rrpv();
+  (void)doa_ins_b();    (void)doa_hit_b();
   (void)n_samplers();   (void)duel_metric();  (void)hyst();
 }
 
@@ -177,14 +170,13 @@ uint32_t CACHE::find_victim(uint32_t triggering_cpu, uint64_t instr_id, uint32_t
 
   switch (cls) {
     case 1: st.evict_rrpv_doa    [rrpv]++; break;
-    case 2: st.evict_rrpv_dead   [rrpv]++; break;
-    case 3: st.evict_rrpv_alive  [rrpv]++; break;
+    case 2: st.evict_rrpv_alive  [rrpv]++; break;
     default:st.evict_rrpv_unguided[rrpv]++; break;
   }
 
   const uint64_t ins_cycle = current_set[way].install_cycle;
   if (ins_cycle > 0 && current_cycle >= ins_cycle) {
-    const int ci = (cls >= 0 && cls <= 3) ? cls : 0;
+    const int ci = (cls >= 0 && cls <= 2) ? cls : 0;
     st.lifespan_sum[ci]   += current_cycle - ins_cycle;
     st.lifespan_count[ci] += 1;
   }
@@ -198,7 +190,7 @@ void CACHE::update_replacement_state(uint32_t triggering_cpu, uint32_t set, uint
 {
   // NOTE: plain SRRIP promotes every hit (including write hits) to RRPV 0.
   // We deliberately do NOT special-case write hits here, so that when liveness
-  // provides no signal (block defaults to mostly-alive), this policy behaves
+  // provides no signal (block defaults to alive), this policy behaves
   // identically to baseline SRRIP. Any speedup over SRRIP is then attributable
   // to liveness guidance alone, not to incidental write-hit handling.
   const std::size_t idx = set * NUM_WAY + way;
@@ -253,15 +245,13 @@ void CACHE::update_replacement_state(uint32_t triggering_cpu, uint32_t set, uint
       const bool promote = (type != WRITE);
       switch (cls) {
         case 1:  if (promote) rrpv = cfg_b ? ::doa_hit_b() : ::doa_hit_rrpv(); st.hit_doa++;  break;
-        case 2:  if (promote) rrpv = cfg_b ? ::md_hit_b()  : ::md_hit_rrpv();  st.hit_dead++; break;
         default: if (promote) rrpv = 0;                                         st.hit_alive++; break;
       }
     } else {
       const liveness_class lc = classify_block_liveness(full_addr, ip);
       cfg_b = ub;
-      if      (lc == liveness_class::doa)         { rrpv = ub ? ::doa_ins_b() : ::doa_ins_rrpv(); cls = 1; st.ins_doa++;  }
-      else if (lc == liveness_class::mostly_dead)  { rrpv = ub ? ::md_ins_b()  : ::md_ins_rrpv();  cls = 2; st.ins_dead++; }
-      else                                         { rrpv = ::maxRRPV - 1; cls = 3; st.ins_alive++; }
+      if (lc == liveness_class::doa) { rrpv = ub ? ::doa_ins_b() : ::doa_ins_rrpv(); cls = 1; st.ins_doa++; }
+      else                           { rrpv = ::maxRRPV - 1; cls = 2; st.ins_alive++; }
     }
   } else {
     // No liveness signal: behave exactly like baseline SRRIP.
@@ -273,8 +263,8 @@ void CACHE::update_replacement_state(uint32_t triggering_cpu, uint32_t set, uint
 void CACHE::replacement_final_stats()
 {
   const auto& st = ::stats[this];
-  const uint64_t total_ins  = st.ins_unguided + st.ins_doa + st.ins_dead + st.ins_alive;
-  const uint64_t guided_ins = st.ins_doa + st.ins_dead + st.ins_alive;
+  const uint64_t total_ins  = st.ins_unguided + st.ins_doa + st.ins_alive;
+  const uint64_t guided_ins = st.ins_doa + st.ins_alive;
 
   auto pct = [](uint64_t n, uint64_t d) -> double {
     return d ? 100.0 * n / d : 0.0;
@@ -284,10 +274,9 @@ void CACHE::replacement_final_stats()
   };
 
   const uint64_t evict_doa  = tot(st.evict_rrpv_doa);
-  const uint64_t evict_dead = tot(st.evict_rrpv_dead);
   const uint64_t evict_alive= tot(st.evict_rrpv_alive);
   const uint64_t evict_ung  = tot(st.evict_rrpv_unguided);
-  const uint64_t evict_total= evict_doa + evict_dead + evict_alive + evict_ung;
+  const uint64_t evict_total= evict_doa + evict_alive + evict_ung;
 
   printf("%s SRRIP-Live STATS:\n", NAME.c_str());
   if (::n_samplers() > 0) {
@@ -306,34 +295,26 @@ void CACHE::replacement_final_stats()
              p, PSEL_MAX, b_wins ? "config_B" : "config_A",
              st.sampler_a_hits, st.sampler_b_hits);
     }
-    printf("  Config A: DoA ins=%d hit=%d  MD ins=%d hit=%d\n",
-           ::doa_ins_rrpv(), ::doa_hit_rrpv(), ::md_ins_rrpv(), ::md_hit_rrpv());
-    printf("  Config B: DoA ins=%d hit=%d  MD ins=%d hit=%d"
-           "  (SRRIP_DOA_INS_RRPV_B / _HIT_RRPV_B / SRRIP_MD_INS_RRPV_B / _HIT_RRPV_B)\n",
-           ::doa_ins_b(), ::doa_hit_b(), ::md_ins_b(), ::md_hit_b());
+    printf("  Config A: DoA ins=%d hit=%d\n", ::doa_ins_rrpv(), ::doa_hit_rrpv());
+    printf("  Config B: DoA ins=%d hit=%d"
+           "  (SRRIP_DOA_INS_RRPV_B / _HIT_RRPV_B)\n",
+           ::doa_ins_b(), ::doa_hit_b());
   } else {
     printf("  DoA ins RRPV     : %d  (SRRIP_DOA_INS_RRPV; 2=default, 3=legacy)\n",    ::doa_ins_rrpv());
     printf("  DoA hit RRPV     : %d  (SRRIP_DOA_HIT_RRPV; 2=reset-to-ins, 1=mild)\n", ::doa_hit_rrpv());
-    printf("  MD  ins RRPV     : %d  (SRRIP_MD_INS_RRPV;  2=default, 1=lru-live-mirror)\n", ::md_ins_rrpv());
-    printf("  MD  hit RRPV     : %d  (SRRIP_MD_HIT_RRPV;  1=default, 0=full-promotion)\n",  ::md_hit_rrpv());
   }
   printf("  Activation rate  : %.1f%%  (%lu guided / %lu total insertions)\n",
          pct(guided_ins, total_ins), guided_ins, total_ins);
   printf("  guided_insertions=%lu\n", guided_ins);
-  printf("  Insert mix       : DoA=%.1f%%  Dead=%.1f%%  Alive=%.1f%%  Unguided=%.1f%%\n",
-         pct(st.ins_doa,total_ins), pct(st.ins_dead,total_ins),
-         pct(st.ins_alive,total_ins), pct(st.ins_unguided,total_ins));
-  printf("  Hit rate/class   : DoA=%.1f%%  Dead=%.1f%%  Alive=%.1f%%  Unguided=%.1f%%\n",
-         pct(st.hit_doa,st.ins_doa), pct(st.hit_dead,st.ins_dead),
-         pct(st.hit_alive,st.ins_alive), pct(st.hit_unguided,st.ins_unguided));
+  printf("  Insert mix       : DoA=%.1f%%  Alive=%.1f%%  Unguided=%.1f%%\n",
+         pct(st.ins_doa,total_ins), pct(st.ins_alive,total_ins), pct(st.ins_unguided,total_ins));
+  printf("  Hit rate/class   : DoA=%.1f%%  Alive=%.1f%%  Unguided=%.1f%%\n",
+         pct(st.hit_doa,st.ins_doa), pct(st.hit_alive,st.ins_alive), pct(st.hit_unguided,st.ins_unguided));
   printf("  RRPV@evict DoA   : [0]=%.1f%% [1]=%.1f%% [2]=%.1f%% [3]=%.1f%%"
          "  (ideal: ~100%% at [%d])\n",
          pct(st.evict_rrpv_doa[0],evict_doa), pct(st.evict_rrpv_doa[1],evict_doa),
          pct(st.evict_rrpv_doa[2],evict_doa), pct(st.evict_rrpv_doa[3],evict_doa),
          ::maxRRPV);
-  printf("  RRPV@evict Dead  : [0]=%.1f%% [1]=%.1f%% [2]=%.1f%% [3]=%.1f%%\n",
-         pct(st.evict_rrpv_dead[0],evict_dead), pct(st.evict_rrpv_dead[1],evict_dead),
-         pct(st.evict_rrpv_dead[2],evict_dead), pct(st.evict_rrpv_dead[3],evict_dead));
   printf("  RRPV@evict Alive : [0]=%.1f%% [1]=%.1f%% [2]=%.1f%% [3]=%.1f%%"
          "  (ideal: low RRPV after promotion)\n",
          pct(st.evict_rrpv_alive[0],evict_alive), pct(st.evict_rrpv_alive[1],evict_alive),
@@ -344,10 +325,10 @@ void CACHE::replacement_final_stats()
   auto avg_life = [&](int ci) -> double {
     return st.lifespan_count[ci] ? static_cast<double>(st.lifespan_sum[ci]) / st.lifespan_count[ci] : 0.0;
   };
-  printf("  Avg lifespan(cy) : DoA=%.0f  Dead=%.0f  Alive=%.0f  Unguided=%.0f\n",
-         avg_life(1), avg_life(2), avg_life(3), avg_life(0));
+  printf("  Avg lifespan(cy) : DoA=%.0f  Alive=%.0f  Unguided=%.0f\n",
+         avg_life(1), avg_life(2), avg_life(0));
 
-  repl_hist_pc.print_stats(NAME.c_str(), thd_doa, thd_dead);
+  repl_hist_pc.print_stats(NAME.c_str(), thd_doa);
   if (bypass_fire_reset_period_ > 0)
     printf("%s bypass_fire_reset: period=%lu  resets=%lu\n",
            NAME.c_str(), bypass_fire_reset_period_,

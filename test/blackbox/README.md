@@ -20,7 +20,7 @@ mechanism where it engages, not a knob in isolation on a synthetic trace.
 | | `fixed` | liveness, single fixed insertion config (no dueling) |
 | | `bypass` | liveness with DoA blocks bypassing the LLC |
 | | `duel` | liveness with set dueling, at each policy's kept metric (LRU/IPV: miss-latency; SRRIP: hit-count/PSEL) |
-| | `addr` | liveness with **per-address** history indexing (`REPL_HIST_MODE=addr`), bounded 4K + tiered eviction — guards the per-address ablation reported in the paper *and* the bounded-table eviction path (which the other conditions, running unbounded, never exercise) |
+| | `addr` | liveness with **per-address** history indexing (`REPL_HIST_MODE=addr`), bounded 4K + lfu_doa eviction — guards the per-address ablation reported in the paper *and* the bounded-table eviction path (which the other conditions, running unbounded, never exercise) |
 | **trace** | `pr` — ligra PageRank | graph DoA: exercises bypass and the aggressive duel arm |
 | | `cactus` — 607.cactuBSSN | many PCs → history table active; temporal reuse → the gentle arm wins |
 | | `bwaves` — 603.bwaves | streaming → bypass has a large impact (~4× faster to simulate than lbm) |
@@ -53,8 +53,10 @@ sure each mechanism is *active* on some trace; trace selection does that.
 
 Paths we explored but did **not** keep are intentionally absent, so the suite
 tracks the shipped design rather than dead options: bypass set-dueling (regressed
-~4%), scoring modes other than 5, the comma-vs-colon parser variants, and the
-3-way duel. If one of these is revived, add it back as a condition.
+~4%), the comma-vs-colon parser variants, and the 3-way duel. Mostly-dead
+classification (the 3-way DoA/mostly-dead/mostly-alive scheme and its scoring-mode
+zoo) was removed entirely — see the replacement-policy source for the rationale.
+If one of these is revived, add it back as a condition.
 
 ## Running
 

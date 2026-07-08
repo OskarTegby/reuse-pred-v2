@@ -60,7 +60,6 @@ cpu0_L1I TRANSLATION  ACCESS:          0  HIT:          0  MISS:          0
 cpu0_L1I PREFETCH  REQUESTED:          0  ISSUED:          0  USEFUL:          0  USELESS:          0
 cpu0_L1I AVERAGE MISS LATENCY: 7.52025 cycles
 cpu0_L1I DOA: 2882555 / 2882555 (100.00%)
-cpu0_L1I LIVENESS EVICTIONS: 2882555  DOA: 2882555 (100.0%)  MOSTLY_DEAD: 0 (0.0%)  MOSTLY_ALIVE: 0 (0.0%)
 cpu0_ITLB TOTAL       ACCESS:   14491484  HIT:   14491484  MISS:          0
 cpu0_ITLB LOAD         ACCESS:   14491484  HIT:   14491484  MISS:          0
 cpu0_ITLB RFO          ACCESS:          0  HIT:          0  MISS:          0
@@ -76,9 +75,8 @@ cpu0_DTLB PREFETCH     ACCESS:          0  HIT:          0  MISS:          0
 cpu0_DTLB WRITE        ACCESS:          0  HIT:          0  MISS:          0
 cpu0_DTLB TRANSLATION  ACCESS:          0  HIT:          0  MISS:          0
 cpu0_DTLB PREFETCH  REQUESTED:          0  ISSUED:          0  USEFUL:          0  USELESS:          0
-cpu0_DTLB AVERAGE MISS LATENCY: 5.3 cycles
+cpu0_DTLB AVERAGE MISS LATENCY: 5.23 cycles
 cpu0_DTLB DOA: 3781177 / 3781177 (100.00%)
-cpu0_DTLB LIVENESS EVICTIONS: 3781177  DOA: 3781177 (100.0%)  MOSTLY_DEAD: 0 (0.0%)  MOSTLY_ALIVE: 0 (0.0%)
 cpu0_STLB TOTAL       ACCESS:    3781177  HIT:    3777124  MISS:       4053
 cpu0_STLB LOAD         ACCESS:    3781177  HIT:    3777124  MISS:       4053
 cpu0_STLB RFO          ACCESS:          0  HIT:          0  MISS:          0
@@ -86,9 +84,8 @@ cpu0_STLB PREFETCH     ACCESS:          0  HIT:          0  MISS:          0
 cpu0_STLB WRITE        ACCESS:          0  HIT:          0  MISS:          0
 cpu0_STLB TRANSLATION  ACCESS:          0  HIT:          0  MISS:          0
 cpu0_STLB PREFETCH  REQUESTED:          0  ISSUED:          0  USEFUL:          0  USELESS:          0
-cpu0_STLB AVERAGE MISS LATENCY: 670.7 cycles
+cpu0_STLB AVERAGE MISS LATENCY: 670.70 cycles
 cpu0_STLB DOA: 6 / 4053 (0.15%)
-cpu0_STLB LIVENESS EVICTIONS: 4053  DOA: 6 (0.2%)  MOSTLY_DEAD: 4047 (99.9%)  MOSTLY_ALIVE: 0 (0.0%)
 cpu0_L1D TOTAL       ACCESS:   50441787  HIT:   31133360  MISS:   19308427
 cpu0_L1D LOAD         ACCESS:   40091896  HIT:   23978509  MISS:   16113387
 cpu0_L1D RFO          ACCESS:          0  HIT:          0  MISS:          0
@@ -96,9 +93,8 @@ cpu0_L1D PREFETCH     ACCESS:          0  HIT:          0  MISS:          0
 cpu0_L1D WRITE        ACCESS:   10320527  HIT:    7154826  MISS:    3165701
 cpu0_L1D TRANSLATION  ACCESS:      29364  HIT:         25  MISS:      29339
 cpu0_L1D PREFETCH  REQUESTED:          0  ISSUED:          0  USEFUL:          0  USELESS:          0
-cpu0_L1D AVERAGE MISS LATENCY: 16.1 cycles
+cpu0_L1D AVERAGE MISS LATENCY: 16.04 cycles
 cpu0_L1D DOA: 7926844 / 7926844 (100.00%)
-cpu0_L1D LIVENESS EVICTIONS: 7926844  DOA: 7926844 (100.0%)  MOSTLY_DEAD: 0 (0.0%)  MOSTLY_ALIVE: 0 (0.0%)
 cpu0_L2C TOTAL       ACCESS:   11429692  HIT:   10554958  MISS:     874734
 cpu0_L2C LOAD         ACCESS:   10115403  HIT:    9322134  MISS:     793269
 cpu0_L2C RFO          ACCESS:     682390  HIT:     606800  MISS:      75590
@@ -106,9 +102,8 @@ cpu0_L2C PREFETCH     ACCESS:          0  HIT:          0  MISS:          0
 cpu0_L2C WRITE        ACCESS:     625831  HIT:     625750  MISS:         81
 cpu0_L2C TRANSLATION  ACCESS:       6068  HIT:        274  MISS:       5794
 cpu0_L2C PREFETCH  REQUESTED:          0  ISSUED:          0  USEFUL:          0  USELESS:          0
-cpu0_L2C AVERAGE MISS LATENCY: 236.2 cycles
+cpu0_L2C AVERAGE MISS LATENCY: 236.16 cycles
 cpu0_L2C DOA: 874732 / 874732 (100.00%)
-cpu0_L2C LIVENESS EVICTIONS: 874732  DOA: 874732 (100.0%)  MOSTLY_DEAD: 0 (0.0%)  MOSTLY_ALIVE: 0 (0.0%)
 LLC TOTAL       ACCESS:     939112  HIT:     675003  MISS:     264109
 LLC LOAD         ACCESS:     793246  HIT:     590801  MISS:     202445
 LLC RFO          ACCESS:      65507  HIT:       6808  MISS:      58699
@@ -116,9 +111,8 @@ LLC PREFETCH     ACCESS:          0  HIT:          0  MISS:          0
 LLC WRITE        ACCESS:      74565  HIT:      74523  MISS:         42
 LLC TRANSLATION  ACCESS:       5794  HIT:       2871  MISS:       2923
 LLC PREFETCH  REQUESTED:          0  ISSUED:          0  USEFUL:          0  USELESS:          0
-LLC AVERAGE MISS LATENCY: 652.6 cycles
+LLC AVERAGE MISS LATENCY: 652.55 cycles
 LLC DOA: 119011 / 264109 (45.07%)
-LLC LIVENESS EVICTIONS: 264109  DOA: 119011 (45.1%)  MOSTLY_DEAD: 144520 (54.8%)  MOSTLY_ALIVE: 578 (0.3%)
 LLC DOA_STLB_CORR: 40 / 118405 (0.04%)
 
 DRAM Statistics
@@ -126,32 +120,27 @@ Channel 0
  RQ ROW_BUFFER_HIT:     152094
   ROW_BUFFER_MISS:     111973
  AVG DBUS CONGESTED CYCLE:       3.96
- WQ ROW_BUFFER_HIT:       9010
-  ROW_BUFFER_MISS:      48318  FULL:          0
+ WQ ROW_BUFFER_HIT:       9011
+  ROW_BUFFER_MISS:      48317  FULL:          0
 
 LLC LRU-Live STATS:
   DoA ins mode     : 2n3 (default)  (LRU_LIVE_DOA_INS)
-  Insertion positions: DoA=10/MRU  Dead=5/MRU  Alive=0/MRU  (N=16)
+  Insertion positions: DoA=10/MRU  Alive=0/MRU  (N=16)
   Hit promotion    : full to MRU
   Activation rate  : 100.0%  (264109 guided / 264109 total insertions)
   guided_insertions=264109
-  Insert mix       : DoA=0.0%  Dead=0.1%  Alive=100.0%  Unguided=0.0%
-  Insert mix (raw) : DoA=0  Dead=158  Alive=263951  Unguided=0
-  Hit rate/class   : DoA=0.0%  Dead=1359.5%  Alive=255.0%  Unguided=0.0%
-  Promo capped (raw): DoA=0/0  Dead=0/2148  (capped / hits-on-class, LRU_LIVE_HIT_INIT=0)
-  Evict class mix  : DoA=0.0%  Dead=0.1%  Alive=100.0%  Unguided=0.0%
+  Insert mix       : DoA=0.0%  Alive=100.0%  Unguided=0.0%
+  Hit rate/class   : DoA=0.0%  Alive=255.6%  Unguided=0.0%
+  Promo capped (raw): DoA=0/0  (capped / hits-on-class, LRU_LIVE_HIT_INIT=0)
+  Evict class mix  : DoA=0.0%  Alive=100.0%  Unguided=0.0%
   Residency (ticks) by class x reuse:
     Unguided     0hit: mean=      0.0 (n=0)   >=1hit: mean=      0.0 (n=0)   after-last-hit: mean=      0.0 (n=0)
     DoA          0hit: mean=      0.0 (n=0)   >=1hit: mean=      0.0 (n=0)   after-last-hit: mean=      0.0 (n=0)
-    MostlyDead   0hit: mean=     35.8 (n=12)   >=1hit: mean=    109.0 (n=125)   after-last-hit: mean=     44.0 (n=125)
-    MostlyAlive  0hit: mean=     44.8 (n=118999)   >=1hit: mean=     64.9 (n=144973)   after-last-hit: mean=     45.8 (n=144973)
+    Alive        0hit: mean=     44.8 (n=119011)   >=1hit: mean=     64.9 (n=145098)   after-last-hit: mean=     45.8 (n=145098)
 LLC repl_hist occupancy : main 4096/4096 (100%) [was full]  buf 0/0 (0%)
-LLC repl_hist classify  : main=316 (0.1%)  buf_guided=0 (0.0%)  buf_weak=0 (0.0%)  warm_miss=5244 (1.0%)  cold_miss=522658 (99.0%)
-LLC repl_hist warm_miss : total=5244  buf_evicted=0 (0.0%)  main_evicted=5244 (1.0%)
-LLC repl_hist oracle    : warm_miss=5244  oracle_would_hit=0 (0.0% of warm)  oracle_buf_size=0
-LLC repl_hist evict_tier: total=370159  L0(MA)=44.7%  L1(MD-unsat)=0.0%  L2(DoA-unsat)=55.4%  L3(MD-sat)=0.0%  L4(DoA-sat)=0.0%
-LLC repl_hist transitions:
-  upward  : MA→MD=119011  MD→DoA=0  (cap_fires=0)
-  downward: DoA→MD=0  MD→MA=0  DoA→MA=0
-  up/down ratio: 99.00
+LLC repl_hist classify  : main=146 (0.1%)  buf_guided=0 (0.0%)  buf_weak=0 (0.0%)  warm_miss=5414 (1.1%)  cold_miss=522658 (99.0%)
+LLC repl_hist warm_miss : total=5414  buf_evicted=0 (0.0%)  main_evicted=5414 (1.1%)
+LLC repl_hist oracle    : warm_miss=5414  oracle_would_hit=0 (0.0% of warm)  oracle_buf_size=0
+LLC repl_hist evict_attr: total=161340  ma_penalty=-2  ma_loss: 0.0% of evictions  avg_loss=0.00  decisive=0.0%  |  aging: 100.0% of evictions  avg_penalty=1.99  decisive=0.0% (avg_hits=0.0)
+LLC repl_hist transitions: alive->doa=0  doa->alive=0
 

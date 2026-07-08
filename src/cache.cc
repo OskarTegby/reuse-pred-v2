@@ -75,8 +75,8 @@ PCSubsetTracker g_pc_subset;
 // Merged replacement history table (REPL_HIST_MERGED=1).
 // One HistTable shared by both LLC and cpu0_STLB. Both levels call update()
 // on the same object at eviction and classify() on it at fill time. Each
-// level still uses its own thd_doa/thd_dead for the classify call, so the
-// per-level threshold tuning continues to apply.
+// level still uses its own thd_doa for the classify call, so the per-level
+// threshold tuning continues to apply.
 // ChampSim is single-threaded, so sharing the table is race-condition-free.
 HistTable g_merged_repl_hist;
 bool      g_merged_hist_ready = false;
@@ -258,7 +258,7 @@ void CACHE::update_eviction_counters(const BLOCK& victim, liveness_class evict_l
   // cbpred / dppred bypass-predictor tables.
   // phist and bhist_flat are HistTable (take liveness_class); bhist_pc is
   // PCPartitionedTable and still uses bool accessed.
-  const liveness_class bypass_lv = victim.accessed ? liveness_class::mostly_alive : liveness_class::doa;
+  const liveness_class bypass_lv = victim.accessed ? liveness_class::alive : liveness_class::doa;
   if (dppred && NAME == "cpu0_STLB")
     phist.update(victim.ip, bypass_lv);
   else if (cbpred && NAME == "LLC") {
@@ -266,7 +266,7 @@ void CACHE::update_eviction_counters(const BLOCK& victim, liveness_class evict_l
       // Morph rung: learn on every eviction, same classification (evict_lv) + thresholds
       // for both key choices, so only the key (and BHIST_SCORING) varies between rungs.
       const uint64_t key = cbpred_key_addr_ ? (victim.address >> OFFSET_BITS) : victim.ip;
-      bhist_flat.update(key, evict_lv, thd_dead, thd_doa, 0);
+      bhist_flat.update(key, evict_lv, thd_doa);
     } else if (cbpred_pc_only_) {
       if (victim.dp) bhist_flat.update(victim.dp_pc, bypass_lv);  // PC-only: per dp_pc (needs PFQ)
     } else if (use_pc_bhist) {
@@ -301,13 +301,15 @@ void CACHE::update_eviction_counters(const BLOCK& victim, liveness_class evict_l
           ? ((NAME == "LLC") ? (victim.address >> OFFSET_BITS) : victim.address)
           : victim.ip;
     }
-    const uint64_t lifespan = (victim.install_cycle > 0 && current_cycle >= victim.install_cycle)
-                             ? current_cycle - victim.install_cycle : 0;
     if (do_update) {
-      if (::g_use_merged_hist)
-        ::g_merged_repl_hist.update(repl_key, evict_lv, thd_dead, thd_doa, lifespan);
-      else
-        repl_hist_pc.update(repl_key, evict_lv, thd_dead, thd_doa, lifespan);
+      HistTable& tbl = ::g_use_merged_hist ? ::g_merged_repl_hist : repl_hist_pc;
+      const int64_t old_score = (doa_trace_enable_ && !warmup) ? tbl.get_score(repl_key) : 0;
+      tbl.update(repl_key, evict_lv, thd_doa);
+      if (doa_trace_enable_ && !warmup) {
+        const int64_t new_score = tbl.get_score(repl_key);
+        doa_trace_file_ << current_cycle << ',' << victim.ip << ',' << (victim.address >> OFFSET_BITS) << ','
+                         << (evict_lv == liveness_class::doa ? 1 : 0) << ',' << old_score << ',' << new_score << '\n';
+      }
     }
 
     if (::g_pc_subset.enabled && victim.ip != 0) {
@@ -368,7 +370,6 @@ void CACHE::load_predictor_settings()
       if (std::string_view(v) == "lfu")     return HistTable::Policy::LFU;
       if (std::string_view(v) == "lfu_doa") return HistTable::Policy::LFU_DOA;
       if (std::string_view(v) == "srrip")   return HistTable::Policy::SRRIP;
-      if (std::string_view(v) == "tiered")  return HistTable::Policy::TIERED;
       return HistTable::Policy::LRU;
     };
     // PHIST_REPL and BHIST_REPL override HIST_REPL for their respective table.
@@ -403,9 +404,6 @@ void CACHE::load_predictor_settings()
       bhist_flat = maz_unbounded ? HistTable() : HistTable(bw, parse_policy(bhist_repl), buf_cap);
       if (!maz_unbounded && getenv_uint64("BHIST_HASH", 0))
         bhist_flat.set_hash(log2_floor(bw));
-      // bhist scoring mode (default 2 = Mazumdar dead-counter). Set BHIST_SCORING=5
-      // to give cbPred our liveness scoring, used by the access-PC convergence rung.
-      bhist_flat.set_scoring_mode(static_cast<int>(getenv_uint64("BHIST_SCORING", 2)));
       // pconly: same bhist_flat HistTable, but keyed by the dpPred PC alone (set below).
       if (const char* m = std::getenv("BHIST_MODE"); m && std::string_view(m) == "pconly")
         cbpred_pc_only_ = true;
@@ -425,21 +423,14 @@ void CACHE::load_predictor_settings()
   pfq_ema_alpha = getenv_double("PFQ_EMA_ALPHA", pfq_ema_alpha);
   pfq_ema_thd   = getenv_double("PFQ_EMA_THD", 10.0) / 100.0;
 
-  // Liveness-guided replacement: score thresholds θ_doa and θ_dead.
+  // Liveness-guided replacement: score threshold θ_doa.
   // Per-level vars (LLC_THD_DOA / STLB_THD_DOA) override THD_DOA for a specific
   // cache level, allowing LLC and STLB to use different optimal thresholds in a
-  // combined run. Falls back to THD_DOA / THD_DEAD if the level-specific var is unset.
+  // combined run. Falls back to THD_DOA if the level-specific var is unset.
   const char* level_doa  = (NAME == "LLC")      ? std::getenv("LLC_THD_DOA")
                          : (NAME == "cpu0_STLB") ? std::getenv("STLB_THD_DOA")
                          : nullptr;
-  const char* level_dead = (NAME == "LLC")      ? std::getenv("LLC_THD_DEAD")
-                         : (NAME == "cpu0_STLB") ? std::getenv("STLB_THD_DEAD")
-                         : nullptr;
   thd_doa  = (level_doa  && *level_doa)  ? std::stoull(level_doa)  : getenv_uint64("THD_DOA",  1);
-  thd_dead = (level_dead && *level_dead) ? std::stoull(level_dead) : getenv_uint64("THD_DEAD", 0);
-  repl_hist_pc.set_scoring_mode(static_cast<int>(getenv_uint64("SCORING_MODE", 2)));
-  if (const char* v = std::getenv("DOA_SATURATE_MD"); v && std::stoull(v))
-    repl_hist_pc.set_doa_saturate_md(true);
 
   // Bounded repl_hist_pc: 0 = unbounded (default, backward compatible).
   // REPL_HIST_REPL controls table management policy (same options as HIST_REPL).
@@ -456,13 +447,9 @@ void CACHE::load_predictor_settings()
         if (std::string_view(v) == "lfu")     return HistTable::Policy::LFU;
         if (std::string_view(v) == "lfu_doa") return HistTable::Policy::LFU_DOA;
         if (std::string_view(v) == "srrip")   return HistTable::Policy::SRRIP;
-        if (std::string_view(v) == "tiered")  return HistTable::Policy::TIERED;
         return HistTable::Policy::LRU;
       };
       repl_hist_pc = HistTable(rh_cap, parse_rh_policy(rh_repl), rh_buf);
-      repl_hist_pc.set_scoring_mode(static_cast<int>(getenv_uint64("SCORING_MODE", 2)));
-      if (const char* v = std::getenv("DOA_SATURATE_MD"); v && std::stoull(v))
-        repl_hist_pc.set_doa_saturate_md(true);
       const uint64_t rh_hash = getenv_uint64("REPL_HIST_HASH_BITS", 0);
       if (rh_hash > 0)
         repl_hist_pc.set_hash(static_cast<unsigned>(rh_hash));
@@ -472,12 +459,17 @@ void CACHE::load_predictor_settings()
     } else if ((NAME == "LLC"       && std::getenv("REPL_HIST_LLC_CAP")) ||
                (NAME == "cpu0_STLB" && std::getenv("REPL_HIST_STLB_CAP"))) {
       // This level's own cap var is explicitly set to 0: zero-capacity bounded
-      // table — classify() always returns mostly_alive. Keyed on the level's OWN
+      // table — classify() always returns alive. Keyed on the level's OWN
       // var so that bounding one level (e.g. LLC) leaves the other unbounded
       // rather than forcing it empty.
       repl_hist_pc = HistTable(0, HistTable::Policy::LRU, 0, 0);
     }
     // else (this level's env var absent): keep default-constructed HistTable (unbounded mode)
+  }
+  if (const char* v = std::getenv("DOA_COUNTER_TRACE"); v && std::stoull(v) && (NAME == "LLC" || NAME == "cpu0_STLB")) {
+    doa_trace_enable_ = true;
+    doa_trace_file_.open("doa_counter_trace_" + NAME + ".csv");
+    doa_trace_file_ << "cycle,pc,addr,evict_class,old_score,new_score\n";
   }
   if (const char* v = std::getenv("MID_PROMOTE"); v && std::stoull(v))
     mid_promote = true;
@@ -604,8 +596,8 @@ liveness_class CACHE::classify_block_liveness(uint64_t block_address, uint64_t p
       ? ((NAME == "LLC") ? (block_address >> OFFSET_BITS) : block_address)
       : pc;
   if (::g_use_merged_hist)
-    return ::g_merged_repl_hist.classify(key, thd_doa, thd_dead);
-  return repl_hist_pc.classify(key, thd_doa, thd_dead);
+    return ::g_merged_repl_hist.classify(key, thd_doa);
+  return repl_hist_pc.classify(key, thd_doa);
 }
 
 void CACHE::record_characterization(uint64_t dp_pc, uint64_t block_address)
@@ -778,7 +770,7 @@ bool CACHE::handle_fill(const PACKET& fill_mshr)
     // bypass so this fill is inserted as a probe and yields fresh eviction data.
     const bool lv_doa = liveness_bypass && NAME == "LLC"
         && fill_mshr.type != TRANSLATION && prop_ok
-        && repl_hist_pc.classify(bypass_key, bypass_thd, 0) == liveness_class::doa;
+        && repl_hist_pc.classify(bypass_key, bypass_thd) == liveness_class::doa;
     const bool lv_probe  = lv_doa && repl_hist_pc.should_probe(bypass_key);
     // When bypass dueling is active, arm A sets never bypass; arm B sets and
     // followers-using-B do.  This lets the PSEL compare the two policies and
@@ -799,7 +791,7 @@ bool CACHE::handle_fill(const PACKET& fill_mshr)
     }
 
     const bool stlb_lv_doa = stlb_liveness_bypass && NAME == "cpu0_STLB"
-        && repl_hist_pc.classify(fill_mshr.ip, stlb_bypass_thd, 0) == liveness_class::doa;
+        && repl_hist_pc.classify(fill_mshr.ip, stlb_bypass_thd) == liveness_class::doa;
     const bool stlb_lv_probe  = stlb_lv_doa && repl_hist_pc.should_probe(fill_mshr.ip);
     const bool stlb_lv_bypass = stlb_lv_doa && !stlb_lv_probe;
     if (stlb_lv_probe) sim_stats.back().liveness_probes++;
@@ -822,16 +814,7 @@ bool CACHE::handle_fill(const PACKET& fill_mshr)
       predictor_bypassed = true;
       way = set_end;
     } else {
-      // Compute liveness class using halflife criterion.
-      liveness_class evict_lv;
-      if (!way->accessed) {
-        evict_lv = liveness_class::doa;
-      } else {
-        const uint64_t lifetime     = current_cycle - way->install_cycle;
-        const uint64_t time_til_end = current_cycle - way->last_hit_cycle;
-        evict_lv = (lifetime == 0 || time_til_end <= lifetime / 2)
-                   ? liveness_class::mostly_alive : liveness_class::mostly_dead;
-      }
+      const liveness_class evict_lv = way->accessed ? liveness_class::alive : liveness_class::doa;
       update_eviction_counters(*way, evict_lv);
     }
   }
@@ -901,13 +884,6 @@ bool CACHE::handle_fill(const PACKET& fill_mshr)
               }
             }
           }
-        } else {
-          const uint64_t lifetime     = current_cycle - way->install_cycle;
-          const uint64_t time_til_end = current_cycle - way->last_hit_cycle;
-          if (lifetime == 0 || time_til_end <= lifetime / 2)
-            sim_stats.back().mostly_alive++;
-          else
-            sim_stats.back().mostly_dead++;
         }
       }
 
@@ -1430,8 +1406,6 @@ void CACHE::end_phase(unsigned finished_cpu)
 
   roi_stats.back().evictions    = sim_stats.back().evictions;
   roi_stats.back().doa          = sim_stats.back().doa;
-  roi_stats.back().mostly_dead  = sim_stats.back().mostly_dead;
-  roi_stats.back().mostly_alive = sim_stats.back().mostly_alive;
   roi_stats.back().doa_stlb_found    = sim_stats.back().doa_stlb_found;
   roi_stats.back().doa_stlb_also_doa = sim_stats.back().doa_stlb_also_doa;
   for (int i = 0; i < 4; ++i)
