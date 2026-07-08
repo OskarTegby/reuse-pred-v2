@@ -471,6 +471,11 @@ void CACHE::load_predictor_settings()
     doa_trace_file_.open("doa_counter_trace_" + NAME + ".csv");
     doa_trace_file_ << "cycle,pc,addr,evict_class,old_score,new_score\n";
   }
+  {
+    const uint64_t ddp = getenv_uint64("DOA_DEFAULT_PCT", 0);
+    if (ddp > 0)
+      repl_hist_pc.set_doa_default_pct(static_cast<int>(ddp));
+  }
   if (const char* v = std::getenv("MID_PROMOTE"); v && std::stoull(v))
     mid_promote = true;
 

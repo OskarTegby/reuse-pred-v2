@@ -127,6 +127,15 @@ public:
   void set_reset_period(uint64_t period) { reset_period_ = period; }
   void set_bypass_pc_reset(uint64_t period) { bypass_pc_reset_period_ = period; }
 
+  // DOA_DEFAULT_PCT=<0-100>: a deterministic per-key coin flip that makes that
+  // percentage of never-before-seen keys classify as DoA on their very first
+  // fill instead of the default alive/full-insertion treatment (every key
+  // normally gets one free "assume alive" pass before any score evidence
+  // exists). Tests whether removing that free pass helps workloads where a
+  // typical key is seen only once or twice in the whole run (e.g. QMM), where
+  // waiting for score evidence rarely pays off anyway. 0 = off (default).
+  void set_doa_default_pct(int pct) { doa_default_pct_ = pct; }
+
   // Call on each bypass fire for a key. If the key has bypassed bypass_pc_reset_period_
   // times without receiving an eviction update, its score is zeroed so it must
   // re-earn its DoA classification (breaks per-PC lock-in).
@@ -218,6 +227,7 @@ public:
     if (unbounded_) {
       auto it = unmap_.find(key);
       if (it != unmap_.end() && it->second >= (int64_t)thd_doa) return liveness_class::doa;
+      if (it == unmap_.end() && doa_default_(key)) return liveness_class::doa;
       return liveness_class::alive;
     }
     // 1. Main table.
@@ -255,6 +265,7 @@ public:
       }
     } else {
       ++stats_.classify_cold_miss;
+      if (doa_default_(key)) return liveness_class::doa;
     }
     return liveness_class::alive;
   }
@@ -601,6 +612,17 @@ private:
   std::unordered_map<uint64_t, bool>     recheck_probing_;   // awaiting probe eviction outcome
   std::string checkpoint_name_;
   unsigned hash_bits_ = 0;  // >0 → hash keys into this many bits (faithful Mazumdar)
+  int doa_default_pct_ = 0;  // DOA_DEFAULT_PCT: % of never-seen keys defaulted to DoA
+
+  static uint64_t mix64_(uint64_t x) {
+    x ^= x >> 33; x *= 0xff51afd7ed558ccdULL; x ^= x >> 33;
+    x *= 0xc4ceb9fe1a85ec53ULL; x ^= x >> 33;
+    return x;
+  }
+  // Deterministic per-key coin flip: true for doa_default_pct_% of keys.
+  bool doa_default_(uint64_t key) const {
+    return doa_default_pct_ > 0 && (mix64_(key) % 100) < static_cast<uint64_t>(doa_default_pct_);
+  }
   mutable std::unordered_map<uint64_t, int64_t> unmap_;  // DoA counter per key
   uint64_t cap_          = 0;
   Policy   pol_          = Policy::LRU;
