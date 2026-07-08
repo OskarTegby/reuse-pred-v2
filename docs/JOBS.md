@@ -505,6 +505,21 @@ Both `DOA_DEFAULT_PCT` and `DOA_FORCE_PCT` remain in the code as opt-in, zero-co
 mechanisms (in case a future, recurrence-informed variant is worth trying), but this specific
 "random/blind" instantiation is a dead end for QMM.
 
+**Clarifying control** (reused from `B_base`, no new jobs): plain earned-evidence bypass
+(`LIVENESS_BYPASS=1, BYPASS_THD=4`, no randomization) vs the true no-bypass baseline
+(`A_base`) — **+1.98% geomean IPC, positive on all 13 traces individually** (+1.2% to +3.0%,
+no outliers), despite LLC miss rate rising too (5.87%→6.29%, 99,291 avg bypasses). So
+bypassing itself isn't what broke Experiment B — bypassing *correctly* is a real, consistent
+win here even though it costs some miss rate. What failed was bypassing on random assignment
+instead of earned evidence: `DOA_FORCE_PCT` roughly doubled the bypass count (163,908–203,421)
+and pushed miss rate to 7.96–8.84%, which is where it flips from a net win to a net loss. Not
+a small tweak on top of a working mechanism — a different, worse regime entirely.
+
+(Note: a dedicated, more-conservative `BYPASS_THD` sweep — e.g. 8/16/32, mirroring the old
+`sweep_bypass_allsuites.sh` design — was considered but not run; the existing sweep results
+for that question, `bypass_allsuites_20260610_2312`/`bypass_only_allsuites_20260611_1200`,
+are the ones already flagged elsewhere as contaminated by `champsim_srrip_live_hrp`.)
+
 ---
 
 ## Still Pending / Not Yet Submitted
