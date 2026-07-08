@@ -38,17 +38,31 @@
 #include "memory_class.h"
 #include "operable.h"
 
-enum class liveness_class { doa, mostly_dead, mostly_alive };
+enum class liveness_class { doa, alive };
 
-// Bounded history table with pluggable replacement policy.
-// Used for both pHIST (PC-indexed) and bHIST (address-indexed).
+// Bounded history table: per-key DoA-eviction counter with a pluggable
+// replacement policy for its own (capacity-limited) storage. Used for both
+// pHIST (PC-indexed) and bHIST (address-indexed), as well as the replacement
+// policies' own repl_hist_pc/g_merged_repl_hist instances.
+//
+// Scoring is deliberately simple: a DoA eviction increments the key's score
+// by 1; any other (accessed) eviction resets it to 0. An earlier, much more
+// elaborate scheme (9 selectable "scoring modes", a third "mostly-dead"
+// classification tier between DoA and alive, lifespan-EMA adaptive
+// weighting, a TIERED bounded-table eviction policy keyed on that third
+// tier) was tried and removed for the replacement policies — see
+// docs/JOBS.md "Set-dueling MD isolation" for the evidence that the extra
+// machinery wasn't earning its complexity. The prefetch predictor (phist/
+// bhist_flat/bhist_pc) never consumed the 3-way classification either — it
+// only ever reads the raw DoA-tagged score via get_score()/get(), never
+// classify() — so this simplification doesn't change its behavior.
 class HistTable {
 public:
-  // LFU_DOA: freq increments only on dead (DoA) evictions — a live eviction
+  // LFU_DOA: freq increments only on DoA evictions — a live eviction
   // doesn't confirm bypass utility and shouldn't raise eviction priority.
-  // SRRIP: dead eviction → rrpv=0 (protect); live eviction → rrpv=SRRIP_MAX
+  // SRRIP: DoA eviction → rrpv=0 (protect); live eviction → rrpv=SRRIP_MAX
   // (demote immediately; entry becomes next eviction target and re-enters buffer).
-  enum class Policy { LRU, LFU, LFU_DOA, SRRIP, TIERED };
+  enum class Policy { LRU, LFU, LFU_DOA, SRRIP };
 
   struct Stats {
     uint64_t queries       = 0;  // total get() calls
@@ -79,21 +93,13 @@ public:
     mutable uint64_t classify_buf_weak  = 0;  // found in promo buffer but below threshold (demoted from main, doa lost)
     mutable uint64_t classify_warm_miss        = 0;  // not in table or buf, but PC was seen before (fully evicted)
     mutable uint64_t classify_warm_buf_evicted = 0;  // warm miss where entry was specifically evicted from the promotion buffer
-    mutable uint64_t classify_warm_oracle_hit  = 0;  // warm miss where oracle would have classified correctly (oracle dead_count >= mid_thd)
-    mutable uint64_t classify_warm_aged_out       = 0;  // warm miss where eviction was aging-decisive (eff_freq hit 0 due to aging)
-    mutable uint64_t classify_warm_aged_md        = 0;  // subset: aged-out AND score was in MD territory (thd_dead <= score < thd_doa)
-    mutable uint64_t classify_warm_aged_doa       = 0;  // subset: aged-out AND score was in DoA territory (score >= thd_doa)
-    mutable uint64_t classify_warm_aged_hitsum    = 0;  // sum of hit_count for all aged-out warm misses
-    mutable uint64_t classify_warm_aged_md_hsum   = 0;  // sum of hit_count for MD-territory aged-out warm misses
-    mutable uint64_t classify_warm_aged_doa_hsum  = 0;  // sum of hit_count for DoA-territory aged-out warm misses
+    mutable uint64_t classify_warm_oracle_hit  = 0;  // warm miss where oracle would have classified correctly (oracle dead_count >= thd_doa)
+    mutable uint64_t classify_warm_aged_out    = 0;  // warm miss where eviction was aging-decisive (eff_freq hit 0 due to aging)
+    mutable uint64_t classify_warm_aged_hitsum = 0;  // sum of hit_count for all aged-out warm misses
     mutable uint64_t classify_cold_miss        = 0;  // PC never seen before (no history — expected)
-    // Score tier transition counters (only meaningful when thd_dead/thd_doa are non-zero).
-    uint64_t cap_fires    = 0;  // MA→DoA jump intercepted and capped to mostly_dead
-    uint64_t trans_ma_md  = 0;  // score crossed thd_dead upward (mostly_alive → mostly_dead)
-    uint64_t trans_md_doa = 0;  // score crossed thd_doa  upward (mostly_dead  → DoA)
-    uint64_t trans_doa_md = 0;  // score dropped from DoA into mostly_dead (recovery)
-    uint64_t trans_md_ma  = 0;  // score dropped from mostly_dead into mostly_alive (recovery)
-    uint64_t trans_doa_ma = 0;  // score dropped from DoA past mostly_dead to mostly_alive
+    // Score tier transition counters (only meaningful when thd_doa is non-zero).
+    uint64_t trans_alive_doa = 0;  // score crossed thd_doa upward (alive → DoA)
+    uint64_t trans_doa_alive = 0;  // score dropped below thd_doa (DoA → alive, recovery)
   };
 
   // Default: unbounded mode — backed by an unordered_map, no eviction.
@@ -106,23 +112,11 @@ public:
       if (const char* ev = std::getenv("HIST_MA_PENALTY"))
         ma_penalty_ = std::atoi(ev);
     }
-    if (pol_ == Policy::TIERED) {
-      if (const char* ev = std::getenv("HIST_MA_PENALTY"))
-        ma_penalty_ = std::atoi(ev);
-    }
   }
 
-  // Enable periodic occupancy checkpoints to stderr every `interval` update() calls.
-  // Call after construction; name labels the output lines.
-  void set_scoring_mode(int m) { scoring_mode_ = m; }
   // Hash the key into `bits` bits before indexing (models Mazumdar's finite,
   // hashed history table). bits==0 → raw key (default, our idealized table).
   void set_hash(unsigned bits) { hash_bits_ = bits; }
-  // When a PC in DoA state receives a non-DoA eviction, saturate dead[pc] to
-  // θ_dead instead of resetting to zero.  The PC enters MD and must re-prove
-  // itself: a subsequent MA eviction resets it, a subsequent MD eviction
-  // continues building toward DoA (at the slower δ=3 MD rate).
-  void set_doa_saturate_md(bool on) { doa_saturate_md_ = on; }
 
   void set_checkpoint(uint64_t interval, std::string name) {
     checkpoint_interval_ = interval;
@@ -133,7 +127,7 @@ public:
   void set_bypass_pc_reset(uint64_t period) { bypass_pc_reset_period_ = period; }
 
   // Call on each bypass fire for a key. If the key has bypassed bypass_pc_reset_period_
-  // times without receiving an eviction update, its scores are zeroed so it must
+  // times without receiving an eviction update, its score is zeroed so it must
   // re-earn its DoA classification (breaks per-PC lock-in).
   void record_bypass(uint64_t key) {
     if (bypass_pc_reset_period_ == 0) return;
@@ -141,18 +135,18 @@ public:
     if (++cnt >= bypass_pc_reset_period_) {
       if (unbounded_) {
         auto it = unmap_.find(key);
-        if (it != unmap_.end()) it->second = {0, 0};
+        if (it != unmap_.end()) it->second = 0;
       } else {
         for (auto& e : entries_)
-          if (e.valid && e.key == key) { e.score = 0; e.md_score = 0; break; }
+          if (e.valid && e.key == key) { e.score = 0; break; }
       }
       cnt = 0;
     }
   }
 
   void reset_scores() {
-    if (unbounded_) { for (auto& [k, v] : unmap_) v = {0, 0}; }
-    else            { for (auto& e : entries_) { e.score = 0; e.md_score = 0; } }
+    if (unbounded_) { for (auto& [k, v] : unmap_) v = 0; }
+    else            { for (auto& e : entries_) e.score = 0; }
   }
 
   // Remove a key's entry entirely (used by the bypass shadow on a confirmed
@@ -201,7 +195,7 @@ public:
     key = hk_(key);
     if (unbounded_) {
       auto it = unmap_.find(key);
-      return it != unmap_.end() ? it->second.second : 0;  // doa_count used for bypass
+      return it != unmap_.end() ? it->second : 0;
     }
     stats_.queries++;
     for (const auto& e : entries_) {
@@ -216,31 +210,20 @@ public:
     return 0;
   }
 
-  // Classify a key against thd_doa / thd_dead, consulting main table then
-  // promotion buffer. Tracks which structure resolved the classification in stats.
-  liveness_class classify(uint64_t key, uint64_t thd_doa, uint64_t thd_dead) const {
+  // Classify a key against thd_doa, consulting main table then promotion
+  // buffer. Tracks which structure resolved the classification in stats.
+  liveness_class classify(uint64_t key, uint64_t thd_doa) const {
     key = hk_(key);
     if (unbounded_) {
       auto it = unmap_.find(key);
-      if (it != unmap_.end()) {
-        const int64_t md = it->second.first, doa = it->second.second;
-        if (doa >= (int64_t)thd_doa)                  return liveness_class::doa;
-        if (thd_dead > 0 && md >= (int64_t)thd_dead)  return liveness_class::mostly_dead;
-      }
-      return liveness_class::mostly_alive;
+      if (it != unmap_.end() && it->second >= (int64_t)thd_doa) return liveness_class::doa;
+      return liveness_class::alive;
     }
     // 1. Main table.
     for (const auto& e : entries_) {
       if (e.valid && e.key == key) {
         ++stats_.classify_main;
-        if (scoring_mode_ == 5) {
-          if (e.score    >= (int64_t)thd_doa)                  return liveness_class::doa;
-          if (thd_dead > 0 && e.md_score >= (int64_t)thd_dead) return liveness_class::mostly_dead;
-          return liveness_class::mostly_alive;
-        }
-        if (e.score >= (int64_t)thd_doa)                  return liveness_class::doa;
-        if (thd_dead > 0 && e.score >= (int64_t)thd_dead) return liveness_class::mostly_dead;
-        return liveness_class::mostly_alive;
+        return e.score >= (int64_t)thd_doa ? liveness_class::doa : liveness_class::alive;
       }
     }
     // 2. Promotion buffer: interprets dead_count as a score proxy.
@@ -251,7 +234,7 @@ public:
           return liveness_class::doa;
         }
         ++stats_.classify_buf_weak;
-        return liveness_class::mostly_alive;
+        return liveness_class::alive;
       }
     }
     // 3. Not found. Warm miss (entry evicted) or cold miss (never seen).
@@ -265,25 +248,14 @@ public:
       if (pol_ == Policy::LFU_DOA) {
         auto ait = aging_evicted_pcs_.find(key);
         if (ait != aging_evicted_pcs_.end()) {
-          const int64_t  aged_score = ait->second.first;
-          const uint64_t aged_hits  = ait->second.second;
           ++stats_.classify_warm_aged_out;
-          stats_.classify_warm_aged_hitsum += aged_hits;
-          if (thd_dead_cache_ > 0 && aged_score >= thd_dead_cache_) {
-            if (thd_doa_cache_ > 0 && aged_score >= thd_doa_cache_) {
-              ++stats_.classify_warm_aged_doa;
-              stats_.classify_warm_aged_doa_hsum += aged_hits;
-            } else {
-              ++stats_.classify_warm_aged_md;
-              stats_.classify_warm_aged_md_hsum += aged_hits;
-            }
-          }
+          stats_.classify_warm_aged_hitsum += ait->second.second;
         }
       }
     } else {
       ++stats_.classify_cold_miss;
     }
-    return liveness_class::mostly_alive;
+    return liveness_class::alive;
   }
 
   const Stats& get_stats() const { return stats_; }
@@ -295,46 +267,30 @@ public:
   // Print occupancy and shadow-buffer instrumentation to stdout.
   // thd_doa: used to flag shadow hits where dead_count >= thd_doa — recovered
   // classification that the bounded table missed.
-  void print_stats(const char* prefix, uint64_t thd_doa = 0, uint64_t thd_dead = 0) const {
+  void print_stats(const char* prefix, uint64_t thd_doa = 0) const {
     // TEMPORARY (testing): dump the PCs currently resident in the history table,
     // sorted by key for determinism. Opt-in via REPL_HIST_DUMP_PCS=1 so normal
     // runs are unaffected. Lets black-box tests verify which PCs survive under a
     // realistic cap on many-PC traces (QMM/SPEC), where the eviction policy is
     // actually exercised.
     if (const char* d = std::getenv("REPL_HIST_DUMP_PCS"); d && d[0] == '1') {
-      std::vector<std::tuple<uint64_t, int64_t, int64_t>> dump;
+      std::vector<std::pair<uint64_t, int64_t>> dump;
       if (unbounded_) {
-        for (const auto& [k, v] : unmap_) dump.emplace_back(k, v.second, v.first);
+        for (const auto& [k, v] : unmap_) dump.emplace_back(k, v);
       } else {
         for (const auto& e : entries_)
-          if (e.valid) dump.emplace_back(e.key, e.score, e.md_score);
+          if (e.valid) dump.emplace_back(e.key, e.score);
       }
       std::sort(dump.begin(), dump.end());
       printf("%s repl_hist PCS: count=%zu\n", prefix, dump.size());
-      for (const auto& [k, sc, md] : dump)
-        printf("%s repl_hist PC: key=0x%lx doa=%ld md=%ld\n", prefix, k, sc, md);
+      for (const auto& [k, sc] : dump)
+        printf("%s repl_hist PC: key=0x%lx doa=%ld\n", prefix, k, sc);
     }
     if (unbounded_) {
-      printf("%s repl_hist: unbounded (%zu entries)  scoring_mode=%d\n",
-             prefix, unmap_.size(), scoring_mode_);
-      if (scoring_mode_ == 6)
-        printf("%s repl_hist mode6    : delta=[%lu,%lu,%lu]  avg_life=[%.0f,%.0f,%.0f]cy"
-               "  samples=[%lu,%lu,%lu]\n",
-               prefix, delta_[0], delta_[1], delta_[2],
-               (double)avg_life_[0], (double)avg_life_[1], (double)avg_life_[2],
-               life_count_[0], life_count_[1], life_count_[2]);
-      if (thd_doa > 0) {
-        const uint64_t up   = stats_.trans_ma_md + stats_.trans_md_doa;
-        const uint64_t down = stats_.trans_doa_md + stats_.trans_md_ma + stats_.trans_doa_ma;
-        printf("%s repl_hist transitions:\n", prefix);
-        printf("  upward  : MA→MD=%lu  MD→DoA=%lu\n",
-               stats_.trans_ma_md, stats_.trans_md_doa);
-        printf("  downward: DoA→MD=%lu  MD→MA=%lu  DoA→MA=%lu\n",
-               stats_.trans_doa_md, stats_.trans_md_ma, stats_.trans_doa_ma);
-        if (up + down > 0)
-          printf("  up/down ratio: %.2f\n",
-                 down > 0 ? static_cast<double>(up) / down : 99.0);
-      }
+      printf("%s repl_hist: unbounded (%zu entries)\n", prefix, unmap_.size());
+      if (thd_doa > 0)
+        printf("%s repl_hist transitions: alive->doa=%lu  doa->alive=%lu\n",
+               prefix, stats_.trans_alive_doa, stats_.trans_doa_alive);
       return;
     }
     const uint64_t main_occ = static_cast<uint64_t>(
@@ -380,25 +336,12 @@ public:
                stats_.classify_warm_miss ? 100.0 * stats_.classify_warm_oracle_hit / stats_.classify_warm_miss : 0.0,
                oracle_buf_.size());
         if (pol_ == Policy::LFU_DOA && stats_.classify_warm_aged_out > 0) {
-          const uint64_t aged_scored = stats_.classify_warm_aged_md + stats_.classify_warm_aged_doa;
-          auto pct_a = [&](uint64_t n){ return stats_.classify_warm_aged_out ? 100.0 * n / stats_.classify_warm_aged_out : 0.0; };
-          const uint64_t aged_ma = stats_.classify_warm_aged_out - aged_scored;
           auto avg_h = [](uint64_t sum, uint64_t n) { return n ? (double)sum / n : 0.0; };
-          printf("%s repl_hist warm_aged : aged_out=%lu (%.1f%% of warm)  avg_hits=%.1f  "
-                 "of_aged: MA=%.1f%% (avg=%.1f)  MD=%.1f%% (avg=%.1f)  DoA=%.1f%% (avg=%.1f)"
-                 "  [scored=%lu=%.1f%% lost useful predictors]\n",
+          printf("%s repl_hist warm_aged : aged_out=%lu (%.1f%% of warm)  avg_hits=%.1f\n",
                  prefix,
                  stats_.classify_warm_aged_out,
                  pct_c(stats_.classify_warm_aged_out),
-                 avg_h(stats_.classify_warm_aged_hitsum, stats_.classify_warm_aged_out),
-                 pct_a(aged_ma),
-                 avg_h(stats_.classify_warm_aged_hitsum - stats_.classify_warm_aged_md_hsum
-                       - stats_.classify_warm_aged_doa_hsum, aged_ma),
-                 pct_a(stats_.classify_warm_aged_md),
-                 avg_h(stats_.classify_warm_aged_md_hsum,  stats_.classify_warm_aged_md),
-                 pct_a(stats_.classify_warm_aged_doa),
-                 avg_h(stats_.classify_warm_aged_doa_hsum, stats_.classify_warm_aged_doa),
-                 aged_scored, pct_a(aged_scored));
+                 avg_h(stats_.classify_warm_aged_hitsum, stats_.classify_warm_aged_out));
         }
       }
     }
@@ -406,8 +349,7 @@ public:
       auto pct = [](uint64_t n, uint64_t d) { return d ? 100.0 * n / d : 0.0; };
       printf("%s repl_hist evict_attr: total=%lu  ma_penalty=%d  "
              "ma_loss: %.1f%% of evictions  avg_loss=%.2f  decisive=%.1f%%  |  "
-             "aging: %.1f%% of evictions  avg_penalty=%.2f  decisive=%.1f%% (avg_hits=%.1f)"
-             "  aged_md=%.1f%% (avg_hits=%.1f)  aged_doa=%.1f%% (avg_hits=%.1f) (of aging-decisive)\n",
+             "aging: %.1f%% of evictions  avg_penalty=%.2f  decisive=%.1f%% (avg_hits=%.1f)\n",
              prefix, evict_count_, ma_penalty_,
              pct(evict_ma_nonzero_,    evict_count_),
              (double)evict_ma_loss_sum_    / evict_count_,
@@ -415,23 +357,7 @@ public:
              pct(evict_aging_nonzero_, evict_count_),
              (double)evict_aging_loss_sum_ / evict_count_,
              pct(evict_aging_decisive_, evict_count_),
-             evict_aging_decisive_ ? (double)evict_aging_hitsum_ / evict_aging_decisive_ : 0.0,
-             pct(evict_aging_md_,  evict_aging_decisive_),
-             evict_aging_md_  ? (double)evict_aging_md_hitsum_  / evict_aging_md_  : 0.0,
-             pct(evict_aging_doa_, evict_aging_decisive_),
-             evict_aging_doa_ ? (double)evict_aging_doa_hitsum_ / evict_aging_doa_ : 0.0);
-    }
-    if (pol_ == Policy::TIERED && evict_count_ > 0) {
-      auto pct = [](uint64_t n, uint64_t d) { return d ? 100.0 * n / d : 0.0; };
-      printf("%s repl_hist evict_tier: total=%lu  "
-             "L0(MA)=%.1f%%  L1(MD-unsat)=%.1f%%  L2(DoA-unsat)=%.1f%%  "
-             "L3(MD-sat)=%.1f%%  L4(DoA-sat)=%.1f%%\n",
-             prefix, evict_count_,
-             pct(evict_tier_[0], evict_count_),
-             pct(evict_tier_[1], evict_count_),
-             pct(evict_tier_[2], evict_count_),
-             pct(evict_tier_[3], evict_count_),
-             pct(evict_tier_[4], evict_count_));
+             evict_aging_decisive_ ? (double)evict_aging_hitsum_ / evict_aging_decisive_ : 0.0);
     }
     if (buf_cap_ > 0) {
       auto pct = [](uint64_t n, uint64_t d){ return d ? 100.0 * n / d : 0.0; };
@@ -483,33 +409,20 @@ public:
              pct(stats_.shadow_hits, stats_.doa_buf_miss),
              avg_doa, stats_.shadow_hit_nonzero);
     }
-    if (thd_doa > 0) {
-      const uint64_t up   = stats_.trans_ma_md + stats_.trans_md_doa;
-      const uint64_t down = stats_.trans_doa_md + stats_.trans_md_ma + stats_.trans_doa_ma;
-      printf("%s repl_hist transitions:\n", prefix);
-      printf("  upward  : MA→MD=%lu  MD→DoA=%lu  (cap_fires=%lu)\n",
-             stats_.trans_ma_md, stats_.trans_md_doa, stats_.cap_fires);
-      printf("  downward: DoA→MD=%lu  MD→MA=%lu  DoA→MA=%lu\n",
-             stats_.trans_doa_md, stats_.trans_md_ma, stats_.trans_doa_ma);
-      if (up + down > 0)
-        printf("  up/down ratio: %.2f\n",
-               down > 0 ? static_cast<double>(up) / down : 99.0);
-    }
-    (void)thd_dead;
+    if (thd_doa > 0)
+      printf("%s repl_hist transitions: alive->doa=%lu  doa->alive=%lu\n",
+             prefix, stats_.trans_alive_doa, stats_.trans_doa_alive);
   }
 
-  // Update the history table with one (insertion-class, eviction-class) observation.
-  // lifespan: cycles from block insertion to this eviction (0 = unknown). Used only
-  // by SCORING_MODE=6 to maintain per-class EMA and compute proportional deltas.
-  void update(uint64_t key, liveness_class evict_class,
-              int64_t thd_dead = 0, int64_t thd_doa = 0,
-              uint64_t lifespan = 0) {
+  // Update the history table with one eviction observation: a DoA eviction
+  // increments the key's score by 1; any other (accessed) eviction resets it
+  // to 0.
+  void update(uint64_t key, liveness_class evict_class, int64_t thd_doa = 0) {
     if (!unbounded_ && cap_ == 0 && buf_cap_ == 0) return;
     key = hk_(key);
     seen_pcs_.insert(key);
     ++update_count_;
-    if (thd_dead > 0) thd_dead_cache_ = thd_dead;
-    if (thd_doa  > 0) thd_doa_cache_  = thd_doa;
+    if (thd_doa > 0) thd_doa_cache_ = thd_doa;
     // Recheck backoff: if this eviction is the outcome of a forced probe, adjust
     // the per-key probe interval. DoA → confirmed dead, probe less often (double,
     // capped). Non-DoA → showed life, reset to the base interval.
@@ -523,16 +436,6 @@ public:
                  ? std::min(cur * 2, recheck_cap_)
                  : recheck_base_;
       }
-    }
-    // Mode 6: update per-class lifespan EMA and recompute proportional deltas.
-    if (scoring_mode_ == 6 && lifespan > 0) {
-      const int ci = class_idx(evict_class);
-      const uint64_t n = ++life_count_[ci];
-      if (n <= 32)
-        avg_life_[ci] = (avg_life_[ci] * (n - 1) + lifespan) / n;  // warmup: simple mean
-      else
-        avg_life_[ci] = (7 * avg_life_[ci] + lifespan) >> 3;        // steady-state: EMA α=7/8
-      recompute_deltas_();
     }
     if (buf_cap_ > 0 && evict_class == liveness_class::doa) {
       auto it = oracle_buf_.find(key);
@@ -554,137 +457,22 @@ public:
             stats_.buf_evictions, stats_.shadow_hits);
       }
     }
-    const int64_t d = (scoring_mode_ == 6)
-        ? ((evict_class == liveness_class::mostly_alive)
-           ? -(int64_t)delta_[2]
-           :  (int64_t)delta_[class_idx(evict_class)])
-        : score_delta(evict_class);
-    auto cap_score = [&](int64_t old_s, int64_t new_s) -> int64_t {
-      // Only enforce MD-band skip-prevention when the MD band actually exists below DoA
-      // (thd_dead < thd_doa). With two-counter mode 5, thd_dead > thd_doa is valid
-      // (they guard separate counters), but the bounded single-counter table would be
-      // capped permanently at thd_doa-1 if we applied this check unconditionally.
-      if (thd_dead > 0 && thd_dead < thd_doa) {
-        if (old_s < (int64_t)thd_dead && new_s >= (int64_t)thd_doa)  { ++stats_.cap_fires; return (int64_t)thd_doa - 1; }
-        if (old_s >= (int64_t)thd_doa && new_s < (int64_t)thd_dead)  return (int64_t)thd_dead;
-      }
-      return new_s;
-    };
     auto record_transition = [&](int64_t old_s, int64_t new_s) {
       if (thd_doa == 0 || old_s == new_s) return;
-      auto tier = [&](int64_t s) -> int {
-        if (s >= thd_doa)                    return 2;
-        if (thd_dead > 0 && s >= thd_dead)   return 1;
-        return 0;
-      };
-      const int ot = tier(old_s), nt = tier(new_s);
-      if (ot == nt) return;
-      if      (ot == 0 && nt == 1) ++stats_.trans_ma_md;
-      else if (ot == 1 && nt == 2) ++stats_.trans_md_doa;
-      else if (ot == 2 && nt == 1) ++stats_.trans_doa_md;
-      else if (ot == 1 && nt == 0) ++stats_.trans_md_ma;
-      else if (ot == 2 && nt == 0) ++stats_.trans_doa_ma;
+      const bool was_doa = old_s >= (int64_t)thd_doa;
+      const bool is_doa  = new_s >= (int64_t)thd_doa;
+      if (!was_doa && is_doa) ++stats_.trans_alive_doa;
+      else if (was_doa && !is_doa) ++stats_.trans_doa_alive;
     };
     if (unbounded_) {
       bypass_since_update_[key] = 0;  // eviction feedback arrived: no longer locked in
       auto& p = unmap_[key];
-      const int64_t old_md = p.first, old_doa = p.second;
-
-      // depth multiplier: 1 in MA, 2 in MD, 3 in DoA
-      int64_t delta = 1;
-      if (thd_doa > 0 && old_doa >= thd_doa)          delta = 3;
-      else if (thd_dead > 0 && old_md >= thd_dead)     delta = 2;
-
-      if (scoring_mode_ == 0) {
-        // Two-counter baseline: DoA→doa++, MD→md++, MA→reset both; no coupling
-        if      (evict_class == liveness_class::doa)          p.second = old_doa + 1;
-        else if (evict_class == liveness_class::mostly_dead)  p.first  = old_md  + 1;
-        else                                                  p = {0, 0};
-      } else if (scoring_mode_ == 1) {
-        // Approach A: symmetric state-dependent ±, no hard resets
-        if      (evict_class == liveness_class::doa) {
-          p.first  = std::max(int64_t{0}, old_md  + delta);
-          p.second = std::max(int64_t{0}, old_doa + delta);
-        } else if (evict_class == liveness_class::mostly_dead) {
-          p.first  = std::max(int64_t{0}, old_md  + delta);
-          p.second = std::max(int64_t{0}, old_doa - delta);
-        } else {
-          p.first  = std::max(int64_t{0}, old_md  - delta);
-          p.second = std::max(int64_t{0}, old_doa - delta);
-        }
-      } else if (scoring_mode_ == 2) {
-        // Approach B (coupled): hard resets, state-dependent increments; DoA eviction drives both
-        if      (evict_class == liveness_class::doa) {
-          p.first  = old_md  + delta;
-          p.second = old_doa + delta;
-        } else if (evict_class == liveness_class::mostly_dead) {
-          p.first  = old_md  + delta;
-          p.second = 0;
-        } else {
-          p = {0, 0};
-        }
-      } else if (scoring_mode_ == 6) {
-        // Lifespan-proportional: delta_[ci] ∝ avg lifespan of class ci.
-        // Decoupled (same structure as modes 3-5): DoA→doa, MD→md+reset doa, MA→reset both.
-        if      (evict_class == liveness_class::doa)          p.second = old_doa + (int64_t)delta_[0];
-        else if (evict_class == liveness_class::mostly_dead)  { p.first = old_md + (int64_t)delta_[1]; p.second = 0; }
-        else                                                  p = {0, 0};
-      } else {
-        // Modes 3, 4, 5 — Approach B decoupled: DoA→doa only, MD→md only, MA→reset both
-        // Mode 3: confirmatory δ (1/2/3 — deeper state = more weight)
-        // Mode 4: surprise-weighted δ (3/2/1 — shallower state = more weight, avoids self-fulfilling DoA)
-        // Mode 5: lifespan-scaled δ  (5/3/1 — wider spread, proportional to observed lifespan gaps)
-        const int64_t dd = (scoring_mode_ == 7)
-            ? 1
-            : (scoring_mode_ == 8)
-            ? ((thd_doa > 0 && old_doa >= thd_doa) ? 5
-             : (thd_dead > 0 && old_md  >= thd_dead) ? 3
-             : 1)
-            : (scoring_mode_ == 4 || scoring_mode_ == 5)
-            ? ((thd_doa > 0 && old_doa >= thd_doa) ? 1
-             : (thd_dead > 0 && old_md  >= thd_dead) ? (scoring_mode_ == 5 ? 3 : 2)
-             : (scoring_mode_ == 5 ? 5 : 3))
-            : delta;
-        if (evict_class == liveness_class::doa) {
-          p.second = old_doa + dd;
-        } else {
-          // Non-DoA eviction from DoA state: if DOA_SATURATE_MD is set, bump the
-          // dead counter up to θ_dead so the PC enters MD rather than MA.
-          // For MD evictions we take the max with the normal increment (never go
-          // backwards if the PC was already at or above θ_dead via the indirect path).
-          // For MA evictions the normal value is zero, so saturation always wins.
-          const bool leaving_doa = doa_saturate_md_ && thd_dead > 0
-                                   && thd_doa > 0 && old_doa >= (int64_t)thd_doa;
-          if (evict_class == liveness_class::mostly_dead) {
-            p.first  = leaving_doa ? std::max(old_md + dd, (int64_t)thd_dead)
-                                   : old_md + dd;
-            p.second = 0;
-          } else {  // mostly_alive
-            p.first  = leaving_doa ? (int64_t)thd_dead : 0;
-            p.second = 0;
-          }
-        }
-      }
-
-      // Record tier transitions for stats
-      if (thd_doa > 0) {
-        auto tier = [&](int64_t md, int64_t doa) -> int {
-          if (doa >= thd_doa)                   return 2;
-          if (thd_dead > 0 && md >= thd_dead)   return 1;
-          return 0;
-        };
-        const int ot = tier(old_md, old_doa), nt = tier(p.first, p.second);
-        if (ot != nt) {
-          if      (ot == 0 && nt == 1) ++stats_.trans_ma_md;
-          else if (ot == 1 && nt == 2) ++stats_.trans_md_doa;
-          else if (ot == 2 && nt == 1) ++stats_.trans_doa_md;
-          else if (ot == 1 && nt == 0) ++stats_.trans_md_ma;
-          else if (ot == 2 && nt == 0) ++stats_.trans_doa_ma;
-        }
-      }
+      const int64_t old_s = p;
+      p = (evict_class == liveness_class::doa) ? old_s + 1 : 0;
+      record_transition(old_s, p);
       // Periodic reset: break DoA lock-in by zeroing all scores every N updates.
       if (reset_period_ > 0 && update_count_ % reset_period_ == 0) {
-        for (auto& [k, v] : unmap_) v = {0, 0};
+        for (auto& [k, v] : unmap_) v = 0;
       }
       return;
     }
@@ -692,44 +480,9 @@ public:
     // 1. Main table hit: apply delta, floor at zero.
     for (auto& e : entries_) {
       if (e.valid && e.key == key) {
-        if (scoring_mode_ == 3 || scoring_mode_ == 4 || scoring_mode_ == 5
-            || scoring_mode_ == 7 || scoring_mode_ == 8) {
-          // Mirror the unbounded path: two independent counters.
-          // Mode 3: rising (1/2/3). Mode 4: weaker-falling (3/2/1). Mode 5: falling (5/3/1).
-          // Mode 7: uniform (1/1/1). Mode 8: rising-wide (1/3/5).
-          const int64_t old_doa = e.score, old_md = e.md_score;
-          const int64_t dd = (scoring_mode_ == 7)
-                           ? 1
-                           : (scoring_mode_ == 8)
-                           ? ((old_doa >= thd_doa)                ? 5
-                            : (thd_dead > 0 && old_md >= thd_dead) ? 3
-                            :                                        1)
-                           : (scoring_mode_ == 3)
-                           ? ((old_doa >= thd_doa)                ? 3
-                            : (thd_dead > 0 && old_md >= thd_dead) ? 2
-                            :                                        1)
-                           : (scoring_mode_ == 4)
-                           ? ((old_doa >= thd_doa)                ? 1
-                            : (thd_dead > 0 && old_md >= thd_dead) ? 2
-                            :                                        3)
-                           : ((old_doa >= thd_doa)                ? 1
-                            : (thd_dead > 0 && old_md >= thd_dead) ? 3
-                            :                                        5);
-          if (evict_class == liveness_class::doa) {
-            e.score = old_doa + dd;
-          } else if (evict_class == liveness_class::mostly_dead) {
-            e.md_score = old_md + dd;
-            e.score    = 0;
-          } else {
-            e.score    = 0;
-            e.md_score = 0;
-          }
-          record_transition(old_doa, e.score);
-        } else {
-          const int64_t old_s = e.score;
-          e.score = cap_score(old_s, std::max(int64_t{0}, old_s + d));
-          record_transition(old_s, e.score);
-        }
+        const int64_t old_s = e.score;
+        e.score = (evict_class == liveness_class::doa) ? old_s + 1 : 0;
+        record_transition(old_s, e.score);
         on_hit(e, evict_class);
         return;
       }
@@ -770,25 +523,11 @@ public:
       }
       return;
     }
-    // 3. No buffer: insert new entry on a dead signal.
-    if (scoring_mode_ == 3 || scoring_mode_ == 4 || scoring_mode_ == 5
-        || scoring_mode_ == 7 || scoring_mode_ == 8) {
-      // Modes 3/4/5/7/8: insert on DoA or MD (both carry evidence). New entry is in MA-state,
-      // so dd = MA-state delta: mode 3=1, mode 4=3, mode 5=5, mode 7=1, mode 8=1.
-      const int64_t init_dd = (scoring_mode_ == 5) ? 5 : (scoring_mode_ == 4) ? 3 : 1;
-      if (evict_class != liveness_class::mostly_alive) {
-        auto& slot   = victim_slot();
-        slot.key     = key;
-        slot.score    = (evict_class == liveness_class::doa)         ? init_dd : 0;
-        slot.md_score = (evict_class == liveness_class::mostly_dead)  ? init_dd : 0;
-        record_transition(0, slot.score);
-        slot.valid   = true;
-        on_insert(slot, evict_class);
-      }
-    } else if (d > 0) {
+    // 3. No buffer: insert new entry on a DoA signal.
+    if (evict_class == liveness_class::doa) {
       auto& slot   = victim_slot();
       slot.key     = key;
-      slot.score   = cap_score(0, std::max(int64_t{0}, d));
+      slot.score   = 1;
       record_transition(0, slot.score);
       slot.valid   = true;
       on_insert(slot, evict_class);
@@ -798,29 +537,16 @@ public:
   void reset(uint64_t key) {
     key = hk_(key);
     for (auto& e : entries_)
-      if (e.valid && e.key == key) { e.score = 0; e.md_score = 0; return; }
+      if (e.valid && e.key == key) { e.score = 0; return; }
   }
 
 private:
   static constexpr uint32_t SRRIP_INS  = 2;
   static constexpr uint32_t SRRIP_MAX  = 3;
   static constexpr uint64_t FREQ_CAP   = 64;
-  // Configurable MA eviction penalty for LFU_DOA (read from HIST_MA_PENALTY env var).
-  // Default -2: each MA eviction subtracts 2 from freq. Use -1 or 0 to reduce/remove penalty.
+  // Configurable non-DoA eviction penalty for LFU_DOA (read from HIST_MA_PENALTY env var).
+  // Default -2: each non-DoA eviction subtracts 2 from freq. Use -1 or 0 to reduce/remove penalty.
   int ma_penalty_ = -2;
-
-  // DoA gate + tier continuity: only DoA evictions increase the score.
-  // Mostly-dead evictions are neutral (cannot drive the DoA transition).
-  // Alive evictions decay the score by 1. Symmetric caps in update() prevent
-  // skipping the mostly-dead band in either direction.
-  static int8_t score_delta(liveness_class evict) {
-    switch (evict) {
-      case liveness_class::doa:          return +1;
-      case liveness_class::mostly_dead:  return  0;
-      case liveness_class::mostly_alive: return -1;
-    }
-    return 0;
-  }
 
   // Fold the low 32 bits of val into `bits` bits by XOR (Mazumdar-style hash).
   static uint64_t fold_(uint64_t val, unsigned bits) {
@@ -835,12 +561,11 @@ private:
 
   struct Entry {
     uint64_t key              = 0;
-    int64_t  score            = 0;  // doa score (mode 5: doa_counter; other modes: unified score)
-    int64_t  md_score         = 0;  // mostly-dead counter (mode 5 only; always 0 otherwise)
+    int64_t  score            = 0;  // DoA counter
     uint64_t freq             = 0;
     uint64_t ts               = 0;
     uint64_t last_seen_update = 0;  // update_count_ at last on_hit/on_insert/on_promote
-    uint64_t ma_loss          = 0;  // cumulative freq reduction from MA eviction penalties
+    uint64_t ma_loss          = 0;  // cumulative freq reduction from non-DoA eviction penalties
     uint64_t hit_count        = 0;  // number of on_hit() calls since last insertion/promotion
     uint32_t rrpv             = 0;
     bool          valid    = false;
@@ -855,14 +580,13 @@ private:
     bool     second_chance = false;  // true if this slot holds a main-table evictee
   };
 
-
   bool        unbounded_           = false;
   uint64_t    checkpoint_interval_ = 0;
   uint64_t    reset_period_        = 0;  // 0 = disabled; reset all scores every N updates
   uint64_t    update_count_        = 0;
   // Per-PC lock-in detection: counts bypass fires per key since the last eviction
   // update for that key. When the count reaches bypass_pc_reset_period_, the
-  // entry's scores are zeroed so the PC must re-earn its DoA classification.
+  // entry's score is zeroed so the PC must re-earn its DoA classification.
   // Cleared to 0 by update() whenever eviction feedback arrives for a key.
   uint64_t bypass_pc_reset_period_{0};
   mutable std::unordered_map<uint64_t, uint64_t> bypass_since_update_;
@@ -875,38 +599,8 @@ private:
   std::unordered_map<uint64_t, uint64_t> recheck_interval_;  // current interval (0 = base)
   std::unordered_map<uint64_t, bool>     recheck_probing_;   // awaiting probe eviction outcome
   std::string checkpoint_name_;
-  // Scoring modes — select via SCORING_MODE env var (default 2).
-  // 0 = two-counter baseline: DoA→doa++, MD→md++, MA→reset both (flat, fully decoupled)
-  // 1 = Approach A (gradual): state-depth-scaled ±, no hard resets (coupled: DoA drives both)
-  // 2 = Approach B coupled:   state-depth-scaled +, hard resets; DoA evictions drive both md+doa
-  // 3 = Approach B decoupled: confirmatory δ (1/2/3 for MA/MD/DoA); DoA→doa only, MD→md only
-  // 4 = Approach B decoupled: surprise-weighted δ (3/2/1 for MA/MD/DoA); DoA→doa only, MD→md only
-  //     Rationale for mode 4: a DoA eviction while already in DoA is self-fulfilling (block was
-  //     inserted at maxRRPV so it will always be evicted early). A DoA eviction while in MA is
-  //     genuinely surprising and informative. Inverted δ weights evidence by its surprise value.
-  // 5 = Approach B decoupled: lifespan-scaled δ (5/3/1 for MA/MD/DoA); wider spread than mode 4,
-  //     proportional to observed MA/MD/DoA lifespan gaps. Calibrate with THD_DEAD=10, THD_DOA=6
-  //     so that N=2 consecutive evictions from each state still saturates the respective counter.
-  // 7 = Approach B decoupled: uniform δ=1 regardless of state (MA/MD/DoA). Two counters like
-  //     mode 5, but dead evidence always contributes 1 — no state-dependent weighting. Serves
-  //     as the midpoint between rising (mode 8: 1/3/5) and falling (mode 5: 5/3/1) weights.
-  // 8 = Approach B decoupled: rising δ=1/3/5 for MA/MD/DoA — exact inverse of mode 5 (5/3/1).
-  //     Confirmatory: deeper in DoA state → stronger signal per eviction. Two counters like mode 5.
-  // 6 = Adaptive lifespan-proportional: 10 points distributed across classes proportional to their
-  //     observed average lifespans. Longer-lived classes (MA) get a larger per-event δ because
-  //     they are evicted less frequently; shorter-lived classes (DoA) get a smaller δ. Deltas
-  //     adapt via EMA over block lifespans passed in the lifespan= arg of update(). Stability
-  //     property: at a 50/50 MA/DoA boundary the score is exactly stationary.
-  int scoring_mode_ = 2;
   unsigned hash_bits_ = 0;  // >0 → hash keys into this many bits (faithful Mazumdar)
-  bool doa_saturate_md_ = false;  // DOA_SATURATE_MD: on DoA exit, saturate dead to θ_dead
-  // Mode 6: per-class EMA of observed block lifespans and resulting proportional deltas.
-  // Indexed: [0]=DoA  [1]=mostly_dead  [2]=mostly_alive
-  std::array<uint64_t, 3> avg_life_   = {};     // EMA of lifespan in cycles
-  std::array<uint64_t, 3> delta_      = {1, 3, 5}; // current 10-point proportional deltas
-  std::array<uint64_t, 3> life_count_ = {};     // samples seen (gates warmup vs EMA)
-  // pair: {md_count, doa_count}
-  mutable std::unordered_map<uint64_t, std::pair<int64_t,int64_t>> unmap_;
+  mutable std::unordered_map<uint64_t, int64_t> unmap_;  // DoA counter per key
   uint64_t cap_          = 0;
   Policy   pol_          = Policy::LRU;
   std::vector<Entry>    entries_;
@@ -925,8 +619,9 @@ private:
   std::unordered_map<uint64_t, uint64_t> oracle_buf_;
   mutable Stats stats_;
   // Eviction attribution counters (LFU_DOA bounded only, not reset with stats_).
-  // At each hist-table eviction: record how much MA penalty and aging contributed
-  // to the evicted entry's score reduction, and whether they drove it to zero.
+  // At each hist-table eviction: record how much non-DoA penalty and aging
+  // contributed to the evicted entry's score reduction, and whether they
+  // drove it to zero.
   uint64_t evict_count_          = 0;
   uint64_t evict_ma_nonzero_     = 0;  // evictions where ma_loss > 0
   uint64_t evict_ma_loss_sum_    = 0;  // sum of ma_loss across all evicted entries
@@ -934,44 +629,21 @@ private:
   uint64_t evict_aging_nonzero_  = 0;  // evictions where aging penalty > 0
   uint64_t evict_aging_loss_sum_ = 0;  // sum of aging penalties on evicted entries
   uint64_t evict_aging_decisive_ = 0;  // evictions where eff_freq==0 AND aging_penalty > 0
-  uint64_t evict_aging_md_          = 0;  // aging-decisive evictions where victim.score was in MD territory
-  uint64_t evict_aging_doa_         = 0;  // aging-decisive evictions where victim.score was in DoA territory
-  uint64_t evict_aging_hitsum_      = 0;  // sum of hit_count for all aging-decisive evictions
-  uint64_t evict_aging_md_hitsum_   = 0;  // sum of hit_count for MD-territory aging-decisive evictions
-  uint64_t evict_aging_doa_hitsum_  = 0;  // sum of hit_count for DoA-territory aging-decisive evictions
-  uint64_t evict_tier_[5]           = {};  // evictions per TIERED protection level (0=MA-terr … 4=DoA-sat)
-  // Cached thresholds (updated from update() args) for use in victim_slot().
-  int64_t  thd_dead_cache_ = 0;
+  uint64_t evict_aging_hitsum_   = 0;  // sum of hit_count for all aging-decisive evictions
+  // Cached threshold (updated from update()'s arg) for use in victim_slot().
   int64_t  thd_doa_cache_  = 0;
   // PCs whose hist-table entry was last evicted due to aging (eff_freq==0 caused by aging).
   // Maps PC → {score, hit_count} at eviction time. Cleared when the PC is re-inserted.
   std::unordered_map<uint64_t, std::pair<int64_t,uint64_t>> aging_evicted_pcs_;
 
-  static int class_idx(liveness_class c) {
-    switch (c) {
-    case liveness_class::doa:         return 0;
-    case liveness_class::mostly_dead: return 1;
-    default:                          return 2;
-    }
-  }
-
-  void recompute_deltas_() {
-    const uint64_t S = avg_life_[0] + avg_life_[1] + avg_life_[2];
-    if (S == 0) return;
-    for (int i = 0; i < 3; ++i)
-      delta_[i] = std::max(uint64_t{1}, avg_life_[i] * 10 / S);
-  }
-
   void on_hit(Entry& e, liveness_class evict_class) {
     const bool is_doa = evict_class == liveness_class::doa;
-    const bool is_md  = evict_class == liveness_class::mostly_dead;
     e.last_seen_update = update_count_;
     switch (pol_) {
     case Policy::LRU:     e.ts = ++clock_;                                break;
     case Policy::LFU:     ++e.freq; e.ts = ++clock_;                      break;
     case Policy::LFU_DOA:
-      if (is_doa)      e.freq = std::min(FREQ_CAP, e.freq + 3);
-      else if (is_md)  e.freq = std::min(FREQ_CAP, e.freq + 1);
+      if (is_doa) e.freq = std::min(FREQ_CAP, e.freq + 3);
       else if (ma_penalty_ < 0) {
         const uint64_t loss   = static_cast<uint64_t>(-ma_penalty_);
         const uint64_t actual = std::min(e.freq, loss);
@@ -981,19 +653,8 @@ private:
       ++e.hit_count;
       e.ts = ++clock_;
       break;
-    // Dead → protect (rrpv=0). Live → demote to eviction target (rrpv=SRRIP_MAX).
+    // DoA → protect (rrpv=0). Live → demote to eviction target (rrpv=SRRIP_MAX).
     case Policy::SRRIP:   e.rrpv = is_doa ? 0 : SRRIP_MAX;               break;
-    case Policy::TIERED:
-      if (is_doa)      e.freq = std::min(FREQ_CAP, e.freq + 3);
-      else if (is_md)  e.freq = std::min(FREQ_CAP, e.freq + 1);
-      else if (ma_penalty_ < 0) {
-        const uint64_t loss   = static_cast<uint64_t>(-ma_penalty_);
-        const uint64_t actual = std::min(e.freq, loss);
-        e.freq -= actual;
-      }
-      if (is_doa || is_md) ++e.hit_count;
-      e.ts = ++clock_;
-      break;
     }
   }
 
@@ -1001,23 +662,17 @@ private:
     e.promoted = false;
     e.last_seen_update = update_count_;
     const bool is_doa = evict_class == liveness_class::doa;
-    const bool is_md  = evict_class == liveness_class::mostly_dead;
     switch (pol_) {
     case Policy::LRU:     e.ts = ++clock_; e.freq = 0; e.rrpv = 0;                break;
     case Policy::LFU:     e.freq = 1; e.ts = ++clock_; e.rrpv = 0;                break;
     case Policy::LFU_DOA:
-      e.freq      = is_doa ? 3 : is_md ? 1 : 0;
+      e.freq      = is_doa ? 3 : 0;
       e.ma_loss   = 0;
       e.hit_count = 0;
       e.ts = ++clock_; e.rrpv = 0;
       aging_evicted_pcs_.erase(e.key);
       break;
     case Policy::SRRIP:   e.rrpv = SRRIP_INS; e.freq = 0; e.ts = 0;              break;
-    case Policy::TIERED:
-      e.freq      = is_doa ? 3 : is_md ? 1 : 0;
-      e.hit_count = 0;
-      e.ts = ++clock_; e.rrpv = 0;
-      break;
     }
   }
 
@@ -1035,11 +690,6 @@ private:
                           e.ts = ++clock_; e.rrpv = 0;
                           aging_evicted_pcs_.erase(e.key);                    break;
     case Policy::SRRIP:   e.rrpv = 0; e.freq = 0; e.ts = 0;                  break;
-    case Policy::TIERED:
-      e.freq      = std::min(FREQ_CAP, dead_count * 3);
-      e.hit_count = 0;
-      e.ts = ++clock_; e.rrpv = 0;
-      break;
     }
   }
 
@@ -1065,8 +715,7 @@ private:
       switch (pol_) {
       case Policy::LRU:
       case Policy::LFU:
-      case Policy::LFU_DOA:
-      case Policy::TIERED: {
+      case Policy::LFU_DOA: {
         uint64_t min_freq = UINT64_MAX;
         for (const auto& e : entries_) min_freq = std::min(min_freq, e.freq);
         promote = best->dead_count > min_freq;
@@ -1138,13 +787,6 @@ private:
           ++evict_aging_decisive_;
           aging_evicted_pcs_[victim.key] = {victim.score, victim.hit_count};
           evict_aging_hitsum_ += victim.hit_count;
-          if (thd_dead_cache_ > 0 && victim.score >= thd_dead_cache_) {
-            if (thd_doa_cache_ > 0 && victim.score >= thd_doa_cache_) {
-              ++evict_aging_doa_; evict_aging_doa_hitsum_ += victim.hit_count;
-            } else {
-              ++evict_aging_md_; evict_aging_md_hitsum_ += victim.hit_count;
-            }
-          }
         }
       }
       return victim;
@@ -1154,36 +796,6 @@ private:
         for (auto& e : entries_) if (e.rrpv == SRRIP_MAX) return e;
         for (auto& e : entries_) e.rrpv = std::min(e.rrpv + 1, SRRIP_MAX);
       }
-    case Policy::TIERED: {
-      // Protection hierarchy (plevel 0=evict first, 4=evict last):
-      //   Single-score modes: 0=MA  1=MD-unsat  2=DoA-unsat  3=MD-sat  4=DoA-sat
-      //   Mode 5 (two counters): 0=MA  2=MD-classified  4=DoA-classified
-      // Within a level: lower hit_count evicted first; LRU tiebreak.
-      auto plevel = [&](const Entry& e) -> int {
-        if (scoring_mode_ == 3 || scoring_mode_ == 4 || scoring_mode_ == 5
-          || scoring_mode_ == 7 || scoring_mode_ == 8) {
-          if (thd_doa_cache_  > 0 && e.score    >= thd_doa_cache_)  return 4;
-          if (thd_dead_cache_ > 0 && e.md_score >= thd_dead_cache_) return 2;
-          return 0;
-        }
-        const int64_t s = e.score;
-        if (thd_doa_cache_  > 0 && s >= thd_doa_cache_)
-          return (s >= 2 * thd_doa_cache_) ? 4 : 2;
-        if (thd_dead_cache_ > 0 && s >= thd_dead_cache_)
-          return (s >= 2 * thd_dead_cache_) ? 3 : 1;
-        return 0;
-      };
-      Entry& victim = *std::min_element(entries_.begin(), entries_.end(),
-        [&](const Entry& a, const Entry& b) {
-          const int pa = plevel(a), pb = plevel(b);
-          if (pa != pb) return pa < pb;
-          if (a.hit_count != b.hit_count) return a.hit_count < b.hit_count;
-          return a.ts < b.ts;
-        });
-      ++evict_count_;
-      ++evict_tier_[plevel(victim)];
-      return victim;
-    }
     }
     return entries_[0];
   }
@@ -1236,16 +848,6 @@ public:
     return 0;
   }
 
-  uint64_t get_dead(uint64_t pc, uint64_t addr) const {
-    for (const auto& e : entries_) {
-      if (!e.valid || e.pc != pc) continue;
-      for (const auto& a : e.addrs)
-        if (a.valid && a.addr == addr) return a.mostly_dead;
-      return 0;
-    }
-    return 0;
-  }
-
   void update(uint64_t pc, uint64_t addr, liveness_class lv) {
     // --- PC level: find or insert ---
     PCEntry* pe = nullptr;
@@ -1264,20 +866,8 @@ public:
     // --- Addr level: check main slots ---
     for (auto& a : pe->addrs) {
       if (a.valid && a.addr == addr) {
-        switch (lv) {
-          case liveness_class::doa:
-            a.count = std::min(a.count + 1, MAX_COUNTER);
-            a.freq++;
-            break;
-          case liveness_class::mostly_dead:
-            a.mostly_dead = std::min(a.mostly_dead + 1, MAX_COUNTER);
-            a.count = 0;
-            break;
-          case liveness_class::mostly_alive:
-            a.count = 0;
-            a.mostly_dead = 0;
-            break;
-        }
+        if (lv == liveness_class::doa) { a.count = std::min(a.count + 1, MAX_COUNTER); a.freq++; }
+        else                           { a.count = 0; }
         return;
       }
     }
@@ -1289,12 +879,11 @@ public:
           if (lv == liveness_class::doa) {
             b.dead_count++;
             if (b.dead_count > addr_lfu_victim_freq(*pe)) {
-              auto& slot       = evict_addr(*pe);
-              slot.addr        = b.addr;
-              slot.count       = b.dead_count;
-              slot.mostly_dead = 0;
-              slot.freq        = b.dead_count;
-              slot.valid       = true;
+              auto& slot  = evict_addr(*pe);
+              slot.addr   = b.addr;
+              slot.count  = b.dead_count;
+              slot.freq   = b.dead_count;
+              slot.valid  = true;
               b = BufEntry{};
             }
           } else {
@@ -1314,14 +903,13 @@ public:
       return;
     }
 
-    // --- No buffer: insert on dead evictions only ---
-    if (lv != liveness_class::mostly_alive) {
-      auto& slot       = evict_addr(*pe);
-      slot.addr        = addr;
-      slot.count       = (lv == liveness_class::doa) ? 1 : 0;
-      slot.mostly_dead = (lv == liveness_class::mostly_dead) ? 1 : 0;
-      slot.freq        = (lv == liveness_class::doa) ? 1 : 0;
-      slot.valid       = true;
+    // --- No buffer: insert on DoA evictions only ---
+    if (lv == liveness_class::doa) {
+      auto& slot = evict_addr(*pe);
+      slot.addr  = addr;
+      slot.count = 1;
+      slot.freq  = 1;
+      slot.valid = true;
     }
   }
 
@@ -1330,8 +918,7 @@ private:
 
   struct AddrEntry {
     uint64_t addr        = 0;
-    uint64_t count       = 0;  // DoA counter (renamed from count for clarity)
-    uint64_t mostly_dead = 0;  // mostly-dead counter
+    uint64_t count       = 0;  // DoA counter
     uint64_t freq        = 0;  // DoA-LFU: dead confirmation count
     bool     valid       = false;
   };
@@ -1412,8 +999,6 @@ struct cache_stats {
   // and also unaccessed (i.e., the LLC and STLB DoA are correlated).
   uint64_t evictions    = 0;
   uint64_t doa          = 0;
-  uint64_t mostly_dead  = 0;
-  uint64_t mostly_alive = 0;
   // Recency 4-state census (LIVENESS_CHAR only): indexed by BLOCK::eviction_state
   // [0]=dead [1]=mid_lru [2]=mid_mru [3]=live.
   uint64_t recency_state[4] = {};
@@ -1484,7 +1069,7 @@ class CACHE : public champsim::operable, public MemoryRequestConsumer, public Me
 
     uint64_t install_cycle   = 0; // cycle when block was installed (for halflife classification)
     uint64_t last_hit_cycle  = 0; // cycle of most recent hit (0 = never hit)
-    liveness_class ins_class = liveness_class::mostly_alive; // class predicted at fill time
+    liveness_class ins_class = liveness_class::alive; // class predicted at fill time
     uint8_t eviction_state = 0; // 2-bit recency liveness state: 0=dead 1=mid_lru 2=mid_mru
                                 // 3=live. Set online on each demand hit from the block's
                                 // recency-stack rank, per RECENCY_VERSION. Reset to 0 on fill.
@@ -1520,8 +1105,7 @@ class CACHE : public champsim::operable, public MemoryRequestConsumer, public Me
   bool cbpred = false;
   uint64_t pconf_thd = 6; // phist confidence threshold
   uint64_t bconf_thd = 6; // bhist confidence threshold
-  uint64_t thd_doa  = 1;  // repl_hist_pc: score >= thd_doa  → DoA        (θ_doa)
-  uint64_t thd_dead = 0;  // repl_hist_pc: score >= thd_dead → mostly-dead (θ_dead, 0 = disabled)
+  uint64_t thd_doa  = 1;  // repl_hist_pc: score >= thd_doa  → DoA (θ_doa)
   bool mid_promote = false; // promote DoA blocks to MRU on hit (srrip_live)
   uint64_t st_size = 2;   // shadow table capacity
 
@@ -1544,10 +1128,10 @@ class CACHE : public champsim::operable, public MemoryRequestConsumer, public Me
   std::deque<std::tuple<uint64_t, uint64_t, uint64_t>> shadow_table; // (VPN, data, PC)
 
   // Liveness-bypass shadow: block addresses our own predictor bypassed. A later
-  // re-reference to one is a confirmed bypass mistake → we feed a mostly_alive
-  // observation for that PC (which zeroes its score in mode 5), so it stops
-  // bypassing. Self-calibrating: silent when bypass is correct (no re-refs → no
-  // cost). Enabled by BYPASS_SHADOW_SIZE (0 = disabled). Tags only, no data.
+  // re-reference to one is a confirmed bypass mistake → we feed an alive
+  // observation for that PC (which zeroes its score), so it stops bypassing.
+  // Self-calibrating: silent when bypass is correct (no re-refs → no cost).
+  // Enabled by BYPASS_SHADOW_SIZE (0 = disabled). Tags only, no data.
   uint64_t bypass_shadow_cap_ = 0;
   std::unordered_map<uint64_t, std::pair<uint64_t, uint64_t>> bypass_shadow_;  // block_addr → (pc, data)
   std::deque<uint64_t> bypass_shadow_fifo_;               // FIFO eviction order
@@ -1570,8 +1154,8 @@ class CACHE : public champsim::operable, public MemoryRequestConsumer, public Me
   uint64_t get_repl_guidance_score(uint64_t block_address, uint64_t dp_pc) const;
 
   // Per-PC replacement guidance history.
-  // Tracks two counters per PC: doa (consecutive DoA evictions) and mostly_dead
-  // (consecutive mostly-dead evictions). Updated at every LLC/STLB eviction.
+  // Tracks a single score per PC: +1 on every DoA eviction, reset to 0 on any
+  // accessed eviction. Updated at every LLC/STLB eviction.
   // Default: unbounded (unordered_map fallback, backward compatible).
   // Bounded: configured via REPL_HIST_{LLC,STLB}_CAP + REPL_HIST_{BUF_CAP,REPL} env vars
   // in load_predictor_settings(). Uses the same HistTable replacement policies

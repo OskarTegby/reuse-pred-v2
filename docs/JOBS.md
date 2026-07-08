@@ -436,6 +436,24 @@ blocked on `ipv_old_flat_20260706_2338` finishing.
 
 ---
 
+## Mostly-dead removal (branch `remove-mostly-dead`, 2026-07-08)
+
+Merged `blackbox-phase-reset-fix` into `main` (fast-forward, `f5d4138e168c`), then
+branched `remove-mostly-dead` off `main` to delete the 3-way DoA/mostly-dead/mostly-alive
+classification entirely from `lru_live.cc`, `srrip_live.cc`, `ipv_live.cc`, and
+`HistTable`/`PCPartitionedTable` in `cache.h`/`cache.cc` — collapsed to a flat scheme:
++1 score on every DoA eviction, reset to 0 on any accessed eviction, single `THD_DOA`
+threshold, no scoring-mode zoo (`SCORING_MODE` removed), no `HistTable::Policy::TIERED`.
+Rebuilt both `champsim_maz_policies.json` and `champsim_config_redwoodcove.json` configs
+locally (0 errors), smoke-tested 5 binaries on a local trace.
+
+| Launch | Cluster dir | Purpose | Status |
+|---|---|---|---|
+| 2026-07-08 ~16:03 (local) | — | `blackbox_run_cluster.sh generate`, 60 scenarios (3 policies × 5 conditions × 4 traces), regenerating `test/blackbox/expected/*.out` against the MD-free binaries | ran to completion, 60/60 finished; committed by the script itself |
+| 2026-07-08 ~17:19 (local) | — | `blackbox_run_cluster.sh` (verify), confirming the regenerated references reproduce cleanly | running, 0 FAIL so far |
+
+---
+
 ## Still Pending / Not Yet Submitted
 
 - **All suites — hist_size sweep** (`sweep_hist_size.sh`): large pHIST×bHIST grid with LRU/LFU/hashed; not yet submitted for any suite
