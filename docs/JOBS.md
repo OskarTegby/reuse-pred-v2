@@ -533,9 +533,24 @@ the block at all, so if anything it should be more exposed to that risk, not les
 | Launch | Cluster dir | Purpose | Status |
 |---|---|---|---|
 | 2026-07-08 ~20:20 | `doa_random_qmm/L_{base,byp}_*` (jids 1410080-onward, 34 jobs) | 17 Ligra traces × base (no bypass) / `LIVENESS_BYPASS=1,BYPASS_THD=1`, THD_DOA=1, BHIST_MODE=pc, LRU_LIVE_DOA_INS=2n3, 50M warmup/100M sim. Submitted via `submit_bypass_ligra.sh` (ad hoc, scratchpad only) | submitted, running |
-| 2026-07-08 ~20:35 | `doa_random_qmm/L{A,B}_*` (jids 1410148-onward, 68 jobs) | Same random-insertion experiments as QMM, now on Ligra: LA_ddp25/50 (`DOA_DEFAULT_PCT`, baseline=`L_base`), LB_dfp25/50 (`DOA_FORCE_PCT` under bypass, baseline=`L_byp`). Submitted via `submit_random_ligra.sh` (ad hoc, scratchpad only) | submitted, running |
+| 2026-07-08 ~20:35 | `doa_random_qmm/L{A,B}_*` (jids 1410148-onward, 68 jobs) | Same random-insertion experiments as QMM, now on Ligra: LA_ddp25/50 (`DOA_DEFAULT_PCT`, baseline=`L_base`), LB_dfp25/50 (`DOA_FORCE_PCT` under bypass, baseline=`L_byp`). Submitted via `submit_random_ligra.sh` (ad hoc, scratchpad only) | **93/102 completed**, results below |
+| 2026-07-08 ~20:55 | `doa_random_qmm/LB_dfp100_*` (jids 1410156-1410172, 17 jobs) | "Bypass without checking" control: `DOA_FORCE_PCT=100` forces every fill's score to the bypass bar before `classify()` runs, so every valid eviction bypasses unconditionally regardless of real evidence. Baseline=`L_byp` (informed bypass). Submitted via `submit_bypass_all_ligra.sh` (ad hoc, scratchpad only) | submitted, running |
 
-Next step: pull IPC + LLC miss rate + bypass count per trace for all 102 Ligra jobs once
+**Plain bypass results (L_byp vs L_base, 16/17 traces)**: +34.95% geomean IPC — much larger
+than QMM's +1.98%. LLC miss rate rises sharply too (59%→81% avg; several traces hit
+99.99-100%, meaning almost everything bypasses). Consistent with the counter-trace finding
+that Ligra's PCs are overwhelmingly persistent 100%-DoA generators with near-zero resets —
+at THD_DOA=1 nearly everything qualifies, and skipping LLC install/evict machinery for
+genuinely one-touch traffic frees the LLC for the reused minority. Not universal: 3/16 traces
+regressed (`PageRank` 0.60x, `Triangle` 0.78x, `MIS_21250M` 0.86x) — matches FINDINGS.md's
+documented 2-25%-per-trace real DoA reuse rate on Ligra.
+
+**Randomization still fails here too (15/17 traces)**: `DOA_DEFAULT_PCT` -2.50%/-3.66%
+(25%/50% vs L_base); `DOA_FORCE_PCT` -6.09%/-4.56% (25%/50% vs L_byp, the already-winning
+bypass baseline). Same conclusion as QMM: degrading the informed check with randomness hurts
+even when the informed check itself is a massive win, not just when it's a modest one.
+
+Next step: pull IPC + LLC miss rate + bypass count per trace for all remaining Ligra jobs once
 done, geomean vs each arm's own baseline, same methodology as the QMM comparison above.
 
 ---
