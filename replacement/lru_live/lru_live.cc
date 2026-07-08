@@ -281,13 +281,15 @@ void CACHE::update_replacement_state(uint32_t triggering_cpu, uint32_t set, uint
         // to MRU; with LRU_LIVE_HIT_INIT a guided block is instead moved to its
         // class's initial insertion position (capped promotion).
         if (type != WRITE) {
-            // 0=off (MRU), 1=both DoA/MD to init positions, 2=only MD to stack middle
+            // 0=off (MRU), 1=both DoA/MD to init positions, 2=only MD to stack middle,
+            // 5=recency-position-gated (class-independent, see below)
             static const int hit_mode = []{
                 const char* e = std::getenv("LRU_LIVE_HIT_INIT");
                 if (!e || e[0] == '\0' || e[0] == '0') return 0;
                 if (e[0] == '2') return 2;
                 if (e[0] == '3') return 3;
                 if (e[0] == '4') return 4;
+                if (e[0] == '5') return 5;
                 return 1;
             }();
 
@@ -313,6 +315,18 @@ void CACHE::update_replacement_state(uint32_t triggering_cpu, uint32_t set, uint
                     // Cap only DoA (to 2N/3 as mode 1); MD promotes to MRU (no cap).
                     if (cls == 1) target = N - 1 - (2 * N / 3);  // DoA -> 2N/3
                     // cls == 2 (MD), cls == 3 (MA), cls == 0 (unguided) keep MRU
+                } else if (hit_mode == 5) {
+                    // Class-independent, gated purely by the block's CURRENT recency-
+                    // stack position at hit time (not its insertion-time DoA/MD/MA
+                    // classification -- classification/insertion positions are
+                    // unchanged; only this on-hit promotion rule differs):
+                    //   hit while in the LRU half (rank < N/2): promote only to just
+                    //     above the middle, two steps closer to MRU than dead-center
+                    //     ((N-1-N/2)+2). A repeat hit while still in the LRU half
+                    //     lands at this same capped position again (no escalation).
+                    //   hit while already in the MRU half (rank >= N/2): promote fully
+                    //     to MRU, same as an ordinary uncapped hit.
+                    target = (ranks[way] < N / 2) ? ((N - 1 - N / 2) + 2) : (N - 1);
                 }
             }
 
@@ -461,7 +475,12 @@ void CACHE::replacement_final_stats()
     const uint32_t pos_dead = N / 3;
 
     const char* hi = std::getenv("LRU_LIVE_HIT_INIT");
-    const int hit_mode = (!hi || hi[0] == '\0' || hi[0] == '0') ? 0 : (hi[0] == '2' ? 2 : 1);
+    const int hit_mode = (!hi || hi[0] == '\0' || hi[0] == '0') ? 0
+                        : (hi[0] == '2') ? 2
+                        : (hi[0] == '3') ? 3
+                        : (hi[0] == '4') ? 4
+                        : (hi[0] == '5') ? 5
+                        : 1;
 
     auto ins_str = [](DoAIns m) -> const char* {
         switch (m) {
@@ -496,7 +515,8 @@ void CACHE::replacement_final_stats()
     printf("  Insertion positions: DoA=%u/MRU  Dead=%u/MRU  Alive=0/MRU  (N=%u)\n",
            pos_doa, pos_dead, N);
     printf("  Hit promotion    : %s\n",
-           hit_mode == 4 ? "DoA to 2N/3, MD to MRU (LRU_LIVE_HIT_INIT=4)"
+           hit_mode == 5 ? "recency-gated: LRU-half hit -> (N-1-N/2)+2, MRU-half hit -> MRU (LRU_LIVE_HIT_INIT=5)"
+           : hit_mode == 4 ? "DoA to 2N/3, MD to MRU (LRU_LIVE_HIT_INIT=4)"
            : hit_mode == 3 ? "DoA to N/3, MD to N/3 (LRU_LIVE_HIT_INIT=3)"
            : hit_mode == 2 ? "DoA to 2N/3, MD to stack middle N/2 (LRU_LIVE_HIT_INIT=2)"
            : hit_mode == 1 ? "DoA/MD capped to class initial position (LRU_LIVE_HIT_INIT=1)"
