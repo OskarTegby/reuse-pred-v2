@@ -580,27 +580,28 @@ Next step: finish both reruns, compare vs A_base/L_base (DOA_FORCE_PCT) and vs L
 (recheck), then add forced-key outcome tagging to DOA_COUNTER_TRACE (measure the force
 mechanism's real false-positive rate directly instead of inferring it from IPC/miss deltas).
 
-## Bypass threshold sensitivity across 6 suites (2026-07-09)
+## Bypass threshold, one value higher than THD_DOA, across 6 suites (2026-07-09)
 
 Random-insertion and random-recheck mechanisms both washed out or hurt (see above); the
-remaining open question is whether a *higher, more conservative* bypass threshold than
-plain THD_DOA (dedicated `BYPASS_THD`, per the earlier "wasn't there a dedicated bypass
-threshold" question) helps, and since bypass suitability clearly varies a lot by suite
-(QMM modest +1.98%, Ligra massive +34.95% but 3 regressing traces), testing this needs a
-varied trace set, not just QMM/Ligra.
+remaining ask was to test **one** bypass threshold higher than plain THD_DOA (not a sweep),
+across a varied trace set since bypass suitability clearly varies a lot by suite (QMM
+modest +1.98%, Ligra massive +34.95% but 3 regressing traces).
 
 4 representative traces each, from dpc3/gap/gms/ligra/ml/qmm (24 traces total), each suite
-at its own established THD_DOA (dpc3=8, gap=1, gms=4, ligra=1, ml=16, qmm=4), 4 arms per
-trace: no-bypass base, BYPASS_THD=1x/2x/4x of that suite's THD_DOA.
+at its own established THD_DOA (dpc3=8, gap=1, gms=4, ligra=1, ml=16, qmm=4), 2 arms per
+trace: no-bypass base, BYPASS_THD=2x that suite's THD_DOA.
+
+**Correction**: originally launched as a 4-arm 1x/2x/4x sweep (96 jobs) — that was a
+misread of the request (explicitly *not* a sweep, one higher value). Cancelled the 1x/4x
+arms (48 jobs, jids listed in the cancel command) once caught; kept base+2x only (48 jobs).
 
 | Launch | Cluster dir | Purpose | Status |
 |---|---|---|---|
-| 2026-07-09 ~00:10 | `doa_random_qmm/T_{suite}_{base,byp1x,byp2x,byp4x}_*` (96 jobs, jids 1410250-1410345) | dpc3: mcf/omnetpp/xalancbmk/fotonik3d. gap: bc-0/cc-13/bfs-10/sssp-10. gms: triangle_count_117/k_clique_edge_367/maxclique_3852/k_clique_node_236. ligra: PageRank/Triangle/BFSCC_15500/MIS_15750 (2 regressing + 2 winning traces from the earlier bypass result). ml: llama110M/biogpt/rwkv/whisper. qmm: srv_12/575/128/21. Submitted via `submit_bypass_thd_multisuite.sh` (ad hoc, scratchpad only) | submitted, running |
+| 2026-07-09 ~00:10 | `doa_random_qmm/T_{suite}_{base,byp2x}_*` (48 jobs, jids 1410250-1410345, thinned from 96) | dpc3: mcf/omnetpp/xalancbmk/fotonik3d. gap: bc-0/cc-13/bfs-10/sssp-10. gms: triangle_count_117/k_clique_edge_367/maxclique_3852/k_clique_node_236. ligra: PageRank/Triangle/BFSCC_15500/MIS_15750 (2 regressing + 2 winning traces from the earlier bypass result). ml: llama110M/biogpt/rwkv/whisper. qmm: srv_12/575/128/21. Submitted via `submit_bypass_thd_multisuite.sh` (ad hoc, scratchpad only) | submitted, running |
 
-Next step: for each suite, geomean IPC per bypass-threshold arm vs that suite's own
-no-bypass base, to see whether 2x/4x recovers regressing traces (Ligra PageRank/Triangle)
-without giving up the gains on winning traces, and whether the right multiplier is
-suite-dependent.
+Next step: for each suite, geomean IPC for byp2x vs that suite's own no-bypass base, to see
+whether 2x THD_DOA recovers Ligra's regressing traces (PageRank/Triangle) without giving up
+the gains on winning traces, and whether that holds across the other 5 suites too.
 
 ---
 
