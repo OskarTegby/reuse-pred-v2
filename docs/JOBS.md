@@ -795,3 +795,58 @@ heartbeat output, not an instant error) before trusting it at this scale — see
 the two failed attempts above for why that check matters. The curated 6-trace
 batch (`md_doa_ablation_20260708_0026`) was left running rather than cancelled,
 since it gives an earlier partial read and costs little to leave alone.
+
+**Both ablation batches finished clean overnight**: curated (24/24, 0 errors) and
+all-suites (1004/1004, 0 errors). Curated results (IPC % vs plain-LRU baseline):
+
+| trace | both | doa_only | md_only |
+|---|---|---|---|
+| roms | +7.30% | +7.95% | +0.45% |
+| lbm | -3.85% | -3.50% | 0.00% |
+| cactuBSSN | -1.08% | -0.78% | +0.06% |
+| xalancbmk | +1.22% | +1.07% | +0.87% |
+| MIS | +0.03% | +0.03% | -0.03% |
+| PageRank | -0.60% | +0.25% | -0.51% |
+
+`md_only` is consistently near-zero/mixed-sign — real trace-dependent interaction
+(DoA actively hurts on lbm; MD's marginal contribution is negative on PageRank
+even though DoA-only there is positive). A follow-up Explore-agent investigation
+found this isn't simply "MD carries no signal": where MD activates rarely
+(lbm 0%, cactuBSSN 0.1% of insertions) there's nothing to move IPC; where it
+activates substantially with clean class separation (roms, xalancbmk — Dead hit
+rate ~4-5% vs Alive ~40-50%), IPC moves modestly positive; but
+`LRU_LIVE_HIT_INIT=1` caps every hit on an MD slot back to its N/3 insertion
+rank regardless of outcome, so even correctly-identified reuse gets no reward —
+plausibly explaining the flat-to-negative net effect. Also noted: this whole
+ablation ran `SCORING_MODE=2`/`THD_DOA=8`/`THD_DEAD=2`, not the project's own
+previously-chosen config (`docs/FINDINGS.md`: `SCORING_MODE=5`,
+`THD_DOA=6`/`THD_DEAD=10`) — a possible confound not yet tested.
+
+---
+
+## Recency-position-gated promotion (LRU_LIVE_HIT_INIT=5) — 2026-07-08
+
+User's read on the above: "mostly-dead just doesn't work so well." One last
+experiment before setting the classify()-driven MD signal aside: replace
+class-based promotion capping with a purely **recency-position-gated** rule,
+independent of DoA/MD/MA classification entirely (insertion positions/
+classification unchanged — only the on-hit promotion rule differs):
+- hit while in the LRU half (rank < N/2): promoted only to just above the
+  middle, two steps closer to MRU than dead-center (`(N-1-N/2)+2`). A repeat
+  hit while still in the LRU half lands at this same capped position again
+  (no escalation).
+- hit while already in the MRU half (rank >= N/2): promoted fully to MRU, same
+  as an ordinary uncapped hit.
+
+Implemented as a new `LRU_LIVE_HIT_INIT=5` mode in `replacement/lru_live/lru_live.cc`
+(also extended the `replacement_final_stats()` print-side `hit_mode` parser,
+which had only ever supported 0/1/2, to recognize 3/4/5 too, for accurate
+"Hit promotion" description text). On a **new branch, `lru-live-recency-promotion-cap`**
+(off `mru-end-mostly-dead`), commit `9c185e7fffa8`. Rebuilt, statically-linked
+verified, smoke-tested locally (no crash, correct stats block) before deploying.
+
+**Launched (`recency_promo_test_20260708_0936`, jids 1409693–1409710, 18 tasks)**:
+3 arms (lru baseline / hit_init_1 existing class-capped / hit_init_5 new
+recency-gated) × the same 6 curated traces, 50M/100M, `THD_DOA=8`/`THD_DEAD=2`
+for both LRU-Live arms (DoA+MD both enabled/classify()-driven insertion
+unchanged — only promotion-on-hit differs between arms 2 and 3).
