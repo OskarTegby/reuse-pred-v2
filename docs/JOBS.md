@@ -533,9 +533,10 @@ the block at all, so if anything it should be more exposed to that risk, not les
 | Launch | Cluster dir | Purpose | Status |
 |---|---|---|---|
 | 2026-07-08 ~20:20 | `doa_random_qmm/L_{base,byp}_*` (jids 1410080-onward, 34 jobs) | 17 Ligra traces × base (no bypass) / `LIVENESS_BYPASS=1,BYPASS_THD=1`, THD_DOA=1, BHIST_MODE=pc, LRU_LIVE_DOA_INS=2n3, 50M warmup/100M sim. Submitted via `submit_bypass_ligra.sh` (ad hoc, scratchpad only) | submitted, running |
+| 2026-07-08 ~20:35 | `doa_random_qmm/L{A,B}_*` (jids 1410148-onward, 68 jobs) | Same random-insertion experiments as QMM, now on Ligra: LA_ddp25/50 (`DOA_DEFAULT_PCT`, baseline=`L_base`), LB_dfp25/50 (`DOA_FORCE_PCT` under bypass, baseline=`L_byp`). Submitted via `submit_random_ligra.sh` (ad hoc, scratchpad only) | submitted, running |
 
-Next step: pull IPC + LLC miss rate + bypass count per trace once done, geomean vs base,
-same methodology as the QMM comparison above.
+Next step: pull IPC + LLC miss rate + bypass count per trace for all 102 Ligra jobs once
+done, geomean vs each arm's own baseline, same methodology as the QMM comparison above.
 
 ---
 
