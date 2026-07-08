@@ -450,7 +450,8 @@ locally (0 errors), smoke-tested 5 binaries on a local trace.
 | Launch | Cluster dir | Purpose | Status |
 |---|---|---|---|
 | 2026-07-08 ~16:03 (local) | — | `blackbox_run_cluster.sh generate`, 60 scenarios (3 policies × 5 conditions × 4 traces), regenerating `test/blackbox/expected/*.out` against the MD-free binaries | ran to completion, 60/60 finished; committed by the script itself |
-| 2026-07-08 ~17:19 (local) | — | `blackbox_run_cluster.sh` (verify), confirming the regenerated references reproduce cleanly | running, 0 FAIL so far |
+| 2026-07-08 ~17:19 (local) | — | `blackbox_run_cluster.sh` (verify), confirming the regenerated references reproduce cleanly | **contaminated**: `git checkout main` + merge ran in this same working dir while the poll loop was mid-diff against it, so all 20 `lru_*` scenarios read a briefly-reverted `expected/` and were falsely FAILed/cancelled. No real regression (confirmed post-merge file content was correct). Cancelled the leftover jobs and relaunched (jids 1409914–1409973) |
+| 2026-07-08 18:06 (local) | jids 1409914–1409973 | Clean re-verify from stable `main`, no concurrent git ops this time. The local polling script itself got killed by session teardown mid-run, but the cluster jobs ran to completion independently (SGE doesn't depend on the poller staying alive) | **60/60 PASS** — pulled `test_outputs` from Castillo directly and diffed by hand against `expected/` (mod the wall-clock line) since the poller was dead; byte-identical |
 
 ## DoA counter-trace diagnostic (same branch, 2026-07-08)
 
