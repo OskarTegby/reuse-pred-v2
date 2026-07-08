@@ -452,6 +452,26 @@ locally (0 errors), smoke-tested 5 binaries on a local trace.
 | 2026-07-08 ~16:03 (local) | — | `blackbox_run_cluster.sh generate`, 60 scenarios (3 policies × 5 conditions × 4 traces), regenerating `test/blackbox/expected/*.out` against the MD-free binaries | ran to completion, 60/60 finished; committed by the script itself |
 | 2026-07-08 ~17:19 (local) | — | `blackbox_run_cluster.sh` (verify), confirming the regenerated references reproduce cleanly | running, 0 FAIL so far |
 
+## DoA counter-trace diagnostic (same branch, 2026-07-08)
+
+Follow-up investigation into *why* a low `THD_DOA` is optimal: added `DOA_COUNTER_TRACE=1`
+to `HistTable`'s eviction path in `cache.cc`/`cache.h` — logs every LLC/STLB repl_hist score
+update (ROI only) to `doa_counter_trace_<NAME>.csv` as
+`cycle,pc,addr,evict_class,old_score,new_score`, so the full per-key counter time series can
+be reconstructed offline: does a PC's score climb once and saturate (rare resets), or
+oscillate; and within a PC, which block addresses actually drive the score. Zero cost when
+disabled. Deployed as a separate binary (`champsim_lru_live_doatrace`) rather than
+overwriting `champsim_lru_live`, specifically to avoid any risk to the concurrently-running
+black-box regeneration job.
+
+| Launch | Cluster dir | Purpose | Status |
+|---|---|---|---|
+| 2026-07-08 15:33 | `doa_trace_debug/{pr,cactus,bwaves,qmm}` (jids 1409778–1409781) | First 4 representative traces (same as black-box), THD_DOA=6, BHIST_MODE=pc, LRU_LIVE_DOA_INS=2n3, 50M warmup/100M sim | completed |
+| 2026-07-08 15:41 | `doa_trace_debug/{gap,ligra,gms,ml,qmm,dpc3}_*` (jids 1409782–1409853, 72 jobs) | Broadened to fill the cluster (~75 slots): **all** of gap (9), ligra (17), gms (11), sampled ml (11), qmm (12), dpc3 (12). Same binary/env/scale. Submitted via `submit_doatrace_broad.sh` (ad hoc, not committed — lives only in the scratchpad) | nearly done, 9/76 still running as of last check |
+
+Next step: pull the CSVs down from `$ROOT/doa_trace_debug/*/doa_counter_trace_LLC.csv` on
+Castillo and analyze streak-length-at-reset + per-address contribution per PC.
+
 ---
 
 ## Still Pending / Not Yet Submitted

@@ -302,10 +302,14 @@ void CACHE::update_eviction_counters(const BLOCK& victim, liveness_class evict_l
           : victim.ip;
     }
     if (do_update) {
-      if (::g_use_merged_hist)
-        ::g_merged_repl_hist.update(repl_key, evict_lv, thd_doa);
-      else
-        repl_hist_pc.update(repl_key, evict_lv, thd_doa);
+      HistTable& tbl = ::g_use_merged_hist ? ::g_merged_repl_hist : repl_hist_pc;
+      const int64_t old_score = (doa_trace_enable_ && !warmup) ? tbl.get_score(repl_key) : 0;
+      tbl.update(repl_key, evict_lv, thd_doa);
+      if (doa_trace_enable_ && !warmup) {
+        const int64_t new_score = tbl.get_score(repl_key);
+        doa_trace_file_ << current_cycle << ',' << victim.ip << ',' << (victim.address >> OFFSET_BITS) << ','
+                         << (evict_lv == liveness_class::doa ? 1 : 0) << ',' << old_score << ',' << new_score << '\n';
+      }
     }
 
     if (::g_pc_subset.enabled && victim.ip != 0) {
@@ -461,6 +465,11 @@ void CACHE::load_predictor_settings()
       repl_hist_pc = HistTable(0, HistTable::Policy::LRU, 0, 0);
     }
     // else (this level's env var absent): keep default-constructed HistTable (unbounded mode)
+  }
+  if (const char* v = std::getenv("DOA_COUNTER_TRACE"); v && std::stoull(v) && (NAME == "LLC" || NAME == "cpu0_STLB")) {
+    doa_trace_enable_ = true;
+    doa_trace_file_.open("doa_counter_trace_" + NAME + ".csv");
+    doa_trace_file_ << "cycle,pc,addr,evict_class,old_score,new_score\n";
   }
   if (const char* v = std::getenv("MID_PROMOTE"); v && std::stoull(v))
     mid_promote = true;

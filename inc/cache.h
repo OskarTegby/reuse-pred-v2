@@ -23,6 +23,7 @@
 #include <cassert>
 #include <cstdlib>
 #include <deque>
+#include <fstream>
 #include <functional>
 #include <list>
 #include <map>
@@ -1162,6 +1163,14 @@ class CACHE : public champsim::operable, public MemoryRequestConsumer, public Me
   // (lru/lfu/lfu_doa/srrip) and optional promotion buffer as phist/bhist.
   HistTable repl_hist_pc;
   bool repl_hist_use_addr{false};  // REPL_HIST_MODE=addr: index by block addr (LLC) or VPN (STLB)
+
+  // DOA_COUNTER_TRACE=1: log every repl_hist_pc score update (ROI only) to
+  // doa_counter_trace_<NAME>.csv as "cycle,pc,addr,evict_class,old_score,new_score",
+  // so the full per-key counter time series can be reconstructed offline to
+  // check whether scores saturate cleanly per PC or oscillate, and which
+  // block addresses within a PC are driving its score.
+  bool doa_trace_enable_ = false;
+  std::ofstream doa_trace_file_;
   bool liveness_bypass{false};      // LIVENESS_BYPASS=1: bypass DoA LLC fills using repl_hist
   uint64_t bypass_thd{0};           // BYPASS_THD: score >= bypass_thd → bypass (must be >= thd_doa)
   bool stlb_liveness_bypass{false}; // STLB_LIVENESS_BYPASS=1: bypass DoA STLB fills using repl_hist
