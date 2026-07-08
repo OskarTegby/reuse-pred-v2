@@ -475,6 +475,9 @@ void CACHE::load_predictor_settings()
     const uint64_t ddp = getenv_uint64("DOA_DEFAULT_PCT", 0);
     if (ddp > 0)
       repl_hist_pc.set_doa_default_pct(static_cast<int>(ddp));
+    const uint64_t dfp = getenv_uint64("DOA_FORCE_PCT", 0);
+    if (dfp > 0)
+      repl_hist_pc.set_doa_force_pct(static_cast<int>(dfp));
   }
   if (const char* v = std::getenv("MID_PROMOTE"); v && std::stoull(v))
     mid_promote = true;
@@ -771,6 +774,12 @@ bool CACHE::handle_fill(const PACKET& fill_mshr)
         }
       }
     }
+    // DOA_FORCE_PCT: for a random subset of fills, force this key's persistent
+    // score up to the DoA bar before classifying, so the same event sees the
+    // forced value for bypass, insertion, and later promotion alike.
+    if (liveness_bypass && NAME == "LLC" && fill_mshr.type != TRANSLATION && prop_ok)
+      repl_hist_pc.maybe_force_doa(bypass_key, static_cast<int64_t>(std::max(thd_doa, bypass_thd)));
+
     // DoA classification first; then, if a periodic recheck is due, suppress the
     // bypass so this fill is inserted as a probe and yields fresh eviction data.
     const bool lv_doa = liveness_bypass && NAME == "LLC"

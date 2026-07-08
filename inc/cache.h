@@ -136,6 +136,23 @@ public:
   // waiting for score evidence rarely pays off anyway. 0 = off (default).
   void set_doa_default_pct(int pct) { doa_default_pct_ = pct; }
 
+  // DOA_FORCE_PCT=<0-100>: a separate deterministic per-key coin flip (distinct
+  // subset from doa_default_pct_) that, once per fill, force-writes a key's
+  // *persistent* score up to `value` -- unlike set_doa_default_pct (a read-time
+  // override for never-seen keys only), this mutates real state, so it applies
+  // to already-tracked keys too and the effect persists until the normal
+  // update() path resets or changes it. Meant to be called once per candidate
+  // fill from the caller (e.g. right before a bypass decision), so the same
+  // event sees the forced value for classification, bypass, insertion, and
+  // later promotion alike. Unbounded table only (no-op when bounded). 0 = off.
+  void set_doa_force_pct(int pct) { doa_force_pct_ = pct; }
+  void maybe_force_doa(uint64_t key, int64_t value) {
+    if (doa_force_pct_ <= 0 || !unbounded_) return;
+    const uint64_t k = hk_(key);
+    if ((mix64_(k ^ 0x9E3779B97F4A7C15ULL) % 100) < static_cast<uint64_t>(doa_force_pct_))
+      unmap_[k] = value;
+  }
+
   // Call on each bypass fire for a key. If the key has bypassed bypass_pc_reset_period_
   // times without receiving an eviction update, its score is zeroed so it must
   // re-earn its DoA classification (breaks per-PC lock-in).
@@ -613,6 +630,7 @@ private:
   std::string checkpoint_name_;
   unsigned hash_bits_ = 0;  // >0 → hash keys into this many bits (faithful Mazumdar)
   int doa_default_pct_ = 0;  // DOA_DEFAULT_PCT: % of never-seen keys defaulted to DoA
+  int doa_force_pct_   = 0;  // DOA_FORCE_PCT: % of fills whose persistent score is forced up
 
   static uint64_t mix64_(uint64_t x) {
     x ^= x >> 33; x *= 0xff51afd7ed558ccdULL; x ^= x >> 33;
