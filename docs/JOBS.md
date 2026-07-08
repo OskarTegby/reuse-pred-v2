@@ -520,6 +520,23 @@ a small tweak on top of a working mechanism — a different, worse regime entire
 for that question, `bypass_allsuites_20260610_2312`/`bypass_only_allsuites_20260611_1200`,
 are the ones already flagged elsewhere as contaminated by `champsim_srrip_live_hrp`.)
 
+## Plain bypass on Ligra (same branch, 2026-07-08)
+
+Testing the same plain, earned-evidence bypass (no randomization) that won on QMM, on Ligra
+instead — its own established optimal threshold (THD_DOA=1, per `docs/SPEEDUP_SUMMARY.md`),
+all 17 traces. Not a guaranteed win the way QMM was: `docs/FINDINGS.md` documents Ligra's
+DoA blocks have a real 2-25%-per-trace reuse rate, and SRRIP-Live's `ins@3` (aggressive but
+less drastic than bypass — still installs the block, just at immediate-eviction RRPV) already
+regressed up to -5.2% vs SRRIP there specifically because of that reuse. Bypass never installs
+the block at all, so if anything it should be more exposed to that risk, not less.
+
+| Launch | Cluster dir | Purpose | Status |
+|---|---|---|---|
+| 2026-07-08 ~20:20 | `doa_random_qmm/L_{base,byp}_*` (jids 1410080-onward, 34 jobs) | 17 Ligra traces × base (no bypass) / `LIVENESS_BYPASS=1,BYPASS_THD=1`, THD_DOA=1, BHIST_MODE=pc, LRU_LIVE_DOA_INS=2n3, 50M warmup/100M sim. Submitted via `submit_bypass_ligra.sh` (ad hoc, scratchpad only) | submitted, running |
+
+Next step: pull IPC + LLC miss rate + bypass count per trace once done, geomean vs base,
+same methodology as the QMM comparison above.
+
 ---
 
 ## Still Pending / Not Yet Submitted
