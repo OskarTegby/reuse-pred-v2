@@ -849,4 +849,44 @@ verified, smoke-tested locally (no crash, correct stats block) before deploying.
 3 arms (lru baseline / hit_init_1 existing class-capped / hit_init_5 new
 recency-gated) × the same 6 curated traces, 50M/100M, `THD_DOA=8`/`THD_DEAD=2`
 for both LRU-Live arms (DoA+MD both enabled/classify()-driven insertion
-unchanged — only promotion-on-hit differs between arms 2 and 3).
+unchanged — only promotion-on-hit differs between arms 2 and 3). Result
+(5/6 done, lbm pending): hit_init_5 does not beat hit_init_1 on any
+completed trace — roms -1.87%, cactuBSSN -0.05%, xalancbmk +0.09%, MIS
+0.00%, PageRank -0.34% (hit_init_5 vs hit_init_1).
+
+---
+
+## Set-dueling MD isolation — 2026-07-08
+
+User's methodological correction: all of this session's DoA/MD ablation work
+(`md_doa_ablation_*`) used a simplified, non-dueling, fixed-arm config
+(`SCORING_MODE=2`, `THD_DOA=8`, flat `THD_DEAD=2`) — **not** the actual
+established production config, which uses set dueling for the DoA arm choice
+(`arch_rerun_zen4_redwoodcove_20260702_2100`: `SCORING_MODE=5`, `THD_DOA=6`,
+per-suite `THD_DEAD`, `LRU_LIVE_DOA_INS=2n3` vs `LRU_LIVE_DOA_INS_B=lru`,
+`DUEL_METRIC=latency`, `DUEL_N_SAMPLERS=32`). Since set dueling only chooses
+between DoA insertion arms — MD's own contribution is never part of what's
+being dueled — the only way to know MD's *true* marginal effect is to compare
+the full production config against the same config with MD disabled,
+holding the dueling mechanism itself completely fixed.
+
+Confirmed the exact production env vars via
+`scripts/submit/arch_rerun_zen4_redwoodcove.sh` (line 41: per-suite
+`THD_DEAD` table; line 43: `LRU_LIVE_DUEL` string) and one existing
+`run_info.txt` (`redwoodcove/lru_live/dpc3/654.roms_s-1070B`:
+`scoring_mode=5, thd_doa=6, thd_dead=4`). Reusing the existing "with MD"
+data (already on Castillo, `arch_rerun_zen4_redwoodcove_20260702_2100`) —
+no need to rerun it.
+
+**Launched (`duel_no_md_20260708_1044`, jids 1409711–1409717, 7 array jobs /
+251 tasks, all 7 suites)**: identical production config, but `THD_DEAD=0`
+(disables `classify()`'s mostly-dead branch entirely; DoA + dueling
+untouched). Verified correct config via `run_info.txt`
+(`scoring_mode=5, thd_doa=6, thd_dead=0`) before trusting at scale.
+`champsim_lru_live_redwoodcove` binary (built on this branch, includes
+today's phase-reset fix — doesn't change IPC, only reporting counters).
+Once done: compare per-suite + per-suite-equal-weighted-pooled IPC against
+the existing `arch_rerun_zen4_redwoodcove_20260702_2100/redwoodcove/lru_live`
+data (same binary family, same architecture, same dueling mechanism, only
+MD switched off) to isolate MD's true contribution within the real
+production setup.
