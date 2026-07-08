@@ -565,10 +565,20 @@ set at all), committed (`0aa2d48e1162`), binary redeployed to Castillo.
 
 | Launch | Cluster dir | Purpose | Status |
 |---|---|---|---|
-| 2026-07-08 ~22:25 | `doa_random_qmm/F_qmm_dfp{25,50}_*` (26 jobs) + `F_ligra_dfp{25,50}_*` (34 jobs), jids 1410173-1410232 | Corrected `DOA_FORCE_PCT` rerun, no bypass: 13 QMM traces (THD_DOA=4, baseline=`A_base`) + 17 Ligra traces (THD_DOA=1, baseline=`L_base`). Submitted via `submit_dfp_fixed.sh` (ad hoc, scratchpad only) | submitted, running |
+| 2026-07-08 ~22:25 | `doa_random_qmm/F_qmm_dfp{25,50}_*` (26 jobs) + `F_ligra_dfp{25,50}_*` (34 jobs), jids 1410173-1410232 | Corrected `DOA_FORCE_PCT` rerun, no bypass: 13 QMM traces (THD_DOA=4, baseline=`A_base`) + 17 Ligra traces (THD_DOA=1, baseline=`L_base`). Submitted via `submit_dfp_fixed.sh` (ad hoc, scratchpad only) | **QMM complete (13/13): still negative but smaller than the buggy version — dfp25 -1.70% (was -6.48%), dfp50 -4.89% (was -7.43%). Ligra 13/17 so far: dfp25 -1.87%, dfp50 -9.86%.** Confirms the corrected conclusion holds (forcing without evidence still hurts), just less severely than when coupled to bypass (bypass is unrecoverable; distant insertion isn't) |
 
-Next step: compare vs A_base (QMM) / L_base (Ligra) once done — this is the real answer to
-whether randomly forcing insertion/promotion (not bypass) helps either suite.
+**Recheck experiment on Ligra** (jids 1410233-onward, 17 jobs, `R_recheck_*`): `L_byp` config
+(THD_DOA=1, LIVENESS_BYPASS=1, BYPASS_THD=1) + `BYPASS_RECHECK_MODE=backoff,
+BYPASS_RECHECK_INTERVAL=32, BYPASS_RECHECK_CAP=256` (code defaults) — tests whether
+periodically letting a bypassed key through as a real fill (to observe reality, not overwrite
+scores) recovers the 3 traces that regressed under plain bypass (`PageRank` 0.60x, `Triangle`
+0.78x, `MIS_21250M` 0.86x) without costing the traces where plain bypass is winning big.
+Submitted via `submit_recheck_ligra.sh` (ad hoc, scratchpad only). Baseline for comparison:
+`L_byp`.
+
+Next step: finish both reruns, compare vs A_base/L_base (DOA_FORCE_PCT) and vs L_byp
+(recheck), then add forced-key outcome tagging to DOA_COUNTER_TRACE (measure the force
+mechanism's real false-positive rate directly instead of inferring it from IPC/miss deltas).
 
 ---
 
