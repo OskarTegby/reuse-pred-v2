@@ -141,10 +141,12 @@ public:
   // *persistent* score up to `value` -- unlike set_doa_default_pct (a read-time
   // override for never-seen keys only), this mutates real state, so it applies
   // to already-tracked keys too and the effect persists until the normal
-  // update() path resets or changes it. Meant to be called once per candidate
-  // fill from the caller (e.g. right before a bypass decision), so the same
-  // event sees the forced value for classification, bypass, insertion, and
-  // later promotion alike. Unbounded table only (no-op when bounded). 0 = off.
+  // update() path resets or changes it. Called once per fill right before
+  // classify_block_liveness(), independent of whether bypass is enabled -- it
+  // affects insertion depth and later hit-time promotion on its own. If bypass
+  // is also enabled, its classify() call reads the same persistent score, so a
+  // forced key can incidentally become bypass-eligible too, but that's not
+  // this mechanism's target. Unbounded table only (no-op when bounded). 0 = off.
   void set_doa_force_pct(int pct) { doa_force_pct_ = pct; }
   void maybe_force_doa(uint64_t key, int64_t value) {
     if (doa_force_pct_ <= 0 || !unbounded_) return;

@@ -774,12 +774,6 @@ bool CACHE::handle_fill(const PACKET& fill_mshr)
         }
       }
     }
-    // DOA_FORCE_PCT: for a random subset of fills, force this key's persistent
-    // score up to the DoA bar before classifying, so the same event sees the
-    // forced value for bypass, insertion, and later promotion alike.
-    if (liveness_bypass && NAME == "LLC" && fill_mshr.type != TRANSLATION && prop_ok)
-      repl_hist_pc.maybe_force_doa(bypass_key, static_cast<int64_t>(std::max(thd_doa, bypass_thd)));
-
     // DoA classification first; then, if a periodic recheck is due, suppress the
     // bypass so this fill is inserted as a probe and yields fresh eviction data.
     const bool lv_doa = liveness_bypass && NAME == "LLC"
@@ -932,6 +926,14 @@ bool CACHE::handle_fill(const PACKET& fill_mshr)
       way->ip = fill_mshr.ip;
       way->install_cycle  = current_cycle;
       way->last_hit_cycle = current_cycle;
+      // DOA_FORCE_PCT: force a random subset of keys' persistent score up to
+      // THD_DOA before classifying, so insertion depth and later hit-time
+      // promotion treat them as DoA -- independent of bypass (see maybe_force_doa).
+      {
+        const uint64_t force_key = repl_hist_use_addr
+            ? (fill_mshr.address >> OFFSET_BITS) : fill_mshr.ip;
+        repl_hist_pc.maybe_force_doa(force_key, static_cast<int64_t>(thd_doa));
+      }
       way->ins_class = classify_block_liveness(fill_mshr.address, fill_mshr.ip);
 
       metadata_thru =
