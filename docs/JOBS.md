@@ -783,3 +783,15 @@ MIS/PageRank), 50M/100M. 4 arms per trace:
   contributes
 
 Verified trace-filter regex matches exactly 1 file per trace name before submitting.
+
+**Superseded by an all-suites run per explicit user request** ("I wanted you to
+run these different categories on all suites... run now overnight"). Launched
+**`md_doa_ablation_allsuites_20260708_0038`** (jids 1409665–1409692, 28 array
+jobs / 1004 tasks total, `mru-end-mostly-dead` branch): same 4 arms
+(lru/both/doa_only/md_only) as above, but across **all 7 suites, all 251 traces**
+(dpc3 95, gap 9, ligra 17, gms 11, google 43, qmm 45, ml 31), 50M/100M,
+`champsim_lru_live_redwoodcove`. Verified actually running (real ChampSim
+heartbeat output, not an instant error) before trusting it at this scale — see
+the two failed attempts above for why that check matters. The curated 6-trace
+batch (`md_doa_ablation_20260708_0026`) was left running rather than cancelled,
+since it gives an earlier partial read and costs little to leave alone.
