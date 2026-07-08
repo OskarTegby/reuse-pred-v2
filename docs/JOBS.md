@@ -468,10 +468,11 @@ black-box regeneration job.
 | Launch | Cluster dir | Purpose | Status |
 |---|---|---|---|
 | 2026-07-08 15:33 | `doa_trace_debug/{pr,cactus,bwaves,qmm}` (jids 1409778–1409781) | First 4 representative traces (same as black-box), THD_DOA=6, BHIST_MODE=pc, LRU_LIVE_DOA_INS=2n3, 50M warmup/100M sim | completed |
-| 2026-07-08 15:41 | `doa_trace_debug/{gap,ligra,gms,ml,qmm,dpc3}_*` (jids 1409782–1409853, 72 jobs) | Broadened to fill the cluster (~75 slots): **all** of gap (9), ligra (17), gms (11), sampled ml (11), qmm (12), dpc3 (12). Same binary/env/scale. Submitted via `submit_doatrace_broad.sh` (ad hoc, not committed — lives only in the scratchpad) | nearly done, 9/76 still running as of last check |
+| 2026-07-08 15:41 | `doa_trace_debug/{gap,ligra,gms,ml,qmm,dpc3}_*` (jids 1409782–1409853, 72 jobs) | Broadened to fill the cluster (~75 slots): **all** of gap (9), ligra (17), gms (11), sampled ml (11), qmm (12), dpc3 (12). Same binary/env/scale. Submitted via `submit_doatrace_broad.sh` (ad hoc, not committed — lives only in the scratchpad) | completed — 76 files, 126.2M rows total, 5.9GB. 3 dpc3 traces (600.perlbench, 641.leela, 648.exchange2) produced zero eviction rows: `repl_hist: unbounded (0 entries)`, `Insert mix DoA=0.0%` in their logs — their working sets fit entirely in the 2MB LLC for the sampled ROI window, not a bug |
+| 2026-07-08 18:24 | job 1409974 (`doa_summarize`) | Too large to pull raw (5.9GB); aggregate in place with `awk` (`doa_summarize.awk`, ad hoc/scratchpad) into per-trace `summary.txt`: reset-streak histogram (score value at each alive-eviction reset) + per-PC detail (doa_count, reset_count, max_score, top_addr_doa_count) | submitted, running |
 
-Next step: pull the CSVs down from `$ROOT/doa_trace_debug/*/doa_counter_trace_LLC.csv` on
-Castillo and analyze streak-length-at-reset + per-address contribution per PC.
+Next step: pull the `summary.txt` files down once 1409974 finishes and do the actual
+streak-length-at-reset + per-address contribution analysis.
 
 ---
 
