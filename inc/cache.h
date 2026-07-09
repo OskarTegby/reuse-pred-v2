@@ -497,10 +497,17 @@ public:
     };
     if (unbounded_) {
       bypass_since_update_[key] = 0;  // eviction feedback arrived: no longer locked in
-      auto& p = unmap_[key];
-      const int64_t old_s = p;
-      p = (evict_class == liveness_class::doa) ? old_s + 1 : 0;
-      record_transition(old_s, p);
+      // Allocate only on a DoA eviction: an alive eviction of an untracked key
+      // carries no information (its classification is already the default,
+      // alive), so storing a zero entry for it would only waste space.
+      auto it = unmap_.find(key);
+      if (it == unmap_.end()) {
+        if (evict_class != liveness_class::doa) return;
+        it = unmap_.emplace(key, 0).first;
+      }
+      const int64_t old_s = it->second;
+      it->second = (evict_class == liveness_class::doa) ? old_s + 1 : 0;
+      record_transition(old_s, it->second);
       // Periodic reset: break DoA lock-in by zeroing all scores every N updates.
       if (reset_period_ > 0 && update_count_ % reset_period_ == 0) {
         for (auto& [k, v] : unmap_) v = 0;
