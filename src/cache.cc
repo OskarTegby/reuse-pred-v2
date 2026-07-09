@@ -310,6 +310,8 @@ void CACHE::update_eviction_counters(const BLOCK& victim, liveness_class evict_l
         doa_trace_file_ << current_cycle << ',' << victim.ip << ',' << (victim.address >> OFFSET_BITS) << ','
                          << (evict_lv == liveness_class::doa ? 1 : 0) << ',' << old_score << ',' << new_score << '\n';
       }
+      if (doa_addr_summary_enable_ && !warmup)
+        record_doa_addr_summary(victim.ip, victim.address >> OFFSET_BITS, evict_lv);
     }
 
     if (::g_pc_subset.enabled && victim.ip != 0) {
@@ -471,6 +473,8 @@ void CACHE::load_predictor_settings()
     doa_trace_file_.open("doa_counter_trace_" + NAME + ".csv");
     doa_trace_file_ << "cycle,pc,addr,evict_class,old_score,new_score\n";
   }
+  if (const char* v = std::getenv("DOA_ADDR_SUMMARY"); v && std::stoull(v) && (NAME == "LLC" || NAME == "cpu0_STLB"))
+    doa_addr_summary_enable_ = true;
   {
     const uint64_t ddp = getenv_uint64("DOA_DEFAULT_PCT", 0);
     if (ddp > 0)
@@ -686,6 +690,36 @@ void CACHE::print_liveness_char() const
            pc, e.total, e.doa, e.mostly_dead, e.mostly_alive);
   }
   printf("%s LIVENESS_CHAR END\n", NAME.c_str());
+}
+
+void CACHE::record_doa_addr_summary(uint64_t pc, uint64_t addr, liveness_class evict_lv)
+{
+  auto& e = doa_addr_table_[pc][addr];
+  if (evict_lv == liveness_class::doa) {
+    e.score++;
+    doa_addr_pc_doa_total_[pc]++;
+  } else {
+    if (e.score > 0) e.ever_reset = true;
+    e.score = 0;
+  }
+}
+
+void CACHE::print_doa_addr_summary() const
+{
+  if (!doa_addr_summary_enable_ || doa_addr_table_.empty())
+    return;
+
+  printf("%s DOA_ADDR_SUMMARY BEGIN\n", NAME.c_str());
+  for (const auto& [pc, addrs] : doa_addr_table_) {
+    uint64_t n_always_doa = 0, n_has_reset = 0;
+    for (const auto& [addr, e] : addrs)
+      (e.ever_reset ? n_has_reset : n_always_doa)++;
+    const auto it = doa_addr_pc_doa_total_.find(pc);
+    const uint64_t pc_doa_total = (it != doa_addr_pc_doa_total_.end()) ? it->second : 0;
+    printf("  PC=0x%016lx n_addr=%lu always_doa=%lu has_reset=%lu doa_total=%lu\n",
+           pc, addrs.size(), n_always_doa, n_has_reset, pc_doa_total);
+  }
+  printf("%s DOA_ADDR_SUMMARY END\n", NAME.c_str());
 }
 
 bool CACHE::handle_fill(const PACKET& fill_mshr)
@@ -1443,6 +1477,7 @@ void CACHE::end_phase(unsigned finished_cpu)
 
   print_characterization_stats();
   print_liveness_char();
+  print_doa_addr_summary();
 }
 
 bool CACHE::should_activate_prefetcher(const PACKET& pkt) const { return ((1 << pkt.type) & pref_activate_mask) && !pkt.prefetch_from_this; }

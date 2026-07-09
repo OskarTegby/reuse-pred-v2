@@ -1274,6 +1274,21 @@ class CACHE : public champsim::operable, public MemoryRequestConsumer, public Me
                             bool accessed);
   void print_liveness_char() const;
 
+  // Per-(PC, address) DoA counter: enabled by DOA_ADDR_SUMMARY=1. Replays the
+  // same +1-on-DoA/reset-on-alive rule as repl_hist_pc, but keyed by (pc, addr)
+  // instead of pc alone, so we can see the distribution of counter values
+  // *within* a PC's own address population -- not something the live
+  // replacement decision ever computes (repl_hist_pc is always single-keyed),
+  // this is diagnostic only. Aggregated per-PC summary printed at end_phase
+  // instead of an event log, so it scales to suites with huge address counts
+  // without writing multi-GB files.
+  struct AddrCounterEntry { int64_t score = 0; bool ever_reset = false; };
+  bool doa_addr_summary_enable_ = false;
+  std::unordered_map<uint64_t, std::unordered_map<uint64_t, AddrCounterEntry>> doa_addr_table_;
+  std::unordered_map<uint64_t, uint64_t> doa_addr_pc_doa_total_;  // pc -> total DoA events
+  void record_doa_addr_summary(uint64_t pc, uint64_t addr, liveness_class evict_lv);
+  void print_doa_addr_summary() const;
+
   // PFQ gate control: when false, cbPred bypasses on bhist alone (no PFQ hit required).
   // pfq_ema_mode tracks the hit rate with an EMA and dynamically flips pfq_gate.
   bool pfq_gate = true;
