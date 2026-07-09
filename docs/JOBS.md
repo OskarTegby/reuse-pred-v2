@@ -620,6 +620,26 @@ First submitted as job 1410346, a single job looping over all 76 traces sequenti
 why it wasn't parallelized (each trace's pass is fully independent). Resubmitted as 76
 separate `bkt_<trace>` jobs (jids 1410347-1410422) via `submit_bucket_parallel.sh`.
 
+**Per-(PC,address) analysis, GAP+Ligra only (26 jobs, `as_<trace>`)**: `doa_addr_summary.awk`
+replays the same score rule keyed by `(pc,addr)` instead of `pc`, over the existing raw
+CSVs. Pooled by address count: gap 91.6% always-doa addresses / 8.4% has-reset; ligra 99.1%
+/ 0.9% — most individual addresses are simple and predictable; a PC gets flagged
+"oscillating" because of a small reused-address minority, not because most of its addresses
+are unpredictable.
+
+**Native DOA_ADDR_SUMMARY diagnostic** (`inc/cache.h`/`src/cache.cc`, commit `11c90fc47866`):
+built the same (PC,address) replay directly into ChampSim instead of post-processing, since
+post-processing raw CSVs doesn't scale to QMM/ML/DPC3's address counts. Prints an aggregated
+per-PC summary (`n_addr, always_doa, has_reset, doa_total`) at `end_phase`, gated by
+`DOA_ADDR_SUMMARY=1`, zero cost when off. Smoke-tested locally, matches expected pattern.
+
+| Launch | Cluster dir | Purpose | Status |
+|---|---|---|---|
+| 2026-07-09 ~15:40 | `doa_addrsum_debug/{suite}_*` (72 jobs, jids 1410449-1410520) | Same trace lists/config as the original counter-trace study (THD_DOA=6, all 6 suites), `DOA_ADDR_SUMMARY=1` instead of `DOA_COUNTER_TRACE=1`. Submitted via `submit_addrsum_allsuites.sh` (ad hoc, scratchpad only) | submitted, running |
+
+Next step: pull the per-suite `always_doa`/`has_reset` address split for dpc3/gms/ml/qmm,
+extending the gap/ligra numbers above to all 6 suites.
+
 ---
 
 ## Still Pending / Not Yet Submitted
