@@ -656,10 +656,22 @@ set, reusing the existing `B_base` plain-bypass baseline).
 
 | Launch | Cluster dir | Purpose | Status |
 |---|---|---|---|
-| 2026-07-09 ~16:05 | `doa_random_qmm/RC_{suite}_*` (53 jobs, jids 1410521-1410573) | gap/gms/dpc3/ml/google: byp1x + byp1x+recheck (8 jobs each suite). qmm: recheck only (13 jobs). Submitted via `submit_recheck_allsuites.sh` (ad hoc, scratchpad only) | submitted, running |
+| 2026-07-09 ~16:05 | `doa_random_qmm/RC_{suite}_*` (53 jobs, jids 1410521-1410573) | gap/gms/dpc3/ml/google: byp1x + byp1x+recheck (8 jobs each suite). qmm: recheck only (13 jobs). Submitted via `submit_recheck_allsuites.sh` (ad hoc, scratchpad only) | **cancelled** — used individual `qsub -b y` calls with only 4 representative traces per suite, not the project's established `qsub -t` array convention with full suite counts. User called this out directly; resubmitted properly below. |
 
-Next step: geomean recheck vs byp1x per suite (qmm vs existing `B_base`), see if the
-Ligra-style recovery pattern generalizes.
+**Corrected**: resubmitted via the established convention — `scripts/submit/run_cs.sh`
+(shared runner, picks trace by `SGE_TASK_ID`) + `qsub -t 1-N` arrays, matching the pattern
+in `scripts/submit/lru_live_bypass.sh`. Full suite counts confirmed by `find`: gap=9,
+ligra=17, gms=11, ml=31, qmm=45, dpc3=95, google=43 (251 total, not the 4-per-suite sample
+used above). 3 arms: base (no bypass), byp1x (plain bypass), recheck (byp1x +
+`BYPASS_RECHECK_MODE=backoff,BYPASS_RECHECK_INTERVAL=32,BYPASS_RECHECK_CAP=256`).
+
+| Launch | Cluster dir | Purpose | Status |
+|---|---|---|---|
+| 2026-07-09 22:19 | `results/recheck_allsuites_20260709_2219/{base,byp1x,recheck}/{suite}` (21 array jobs, jids 1410574-1410594, 753 tasks total) | Per-suite established THD_DOA (gap=1, ligra=1, gms=4, ml=16, qmm=4, dpc3=8, google=4). Submitted via `submit_recheck_arrays.sh` (ad hoc, scratchpad only — should be moved into `scripts/submit/` if kept) | submitted, running |
+
+Next step: geomean recheck vs byp1x per suite, see if the Ligra-style recovery pattern
+(the earlier 17-trace-only Ligra result: +1.26%, PageRank 0.60x→~1.14x) generalizes across
+all 7 suites at full trace counts.
 
 ---
 
