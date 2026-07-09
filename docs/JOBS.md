@@ -597,11 +597,25 @@ arms (48 jobs, jids listed in the cancel command) once caught; kept base+2x only
 
 | Launch | Cluster dir | Purpose | Status |
 |---|---|---|---|
-| 2026-07-09 ~00:10 | `doa_random_qmm/T_{suite}_{base,byp2x}_*` (48 jobs, jids 1410250-1410345, thinned from 96) | dpc3: mcf/omnetpp/xalancbmk/fotonik3d. gap: bc-0/cc-13/bfs-10/sssp-10. gms: triangle_count_117/k_clique_edge_367/maxclique_3852/k_clique_node_236. ligra: PageRank/Triangle/BFSCC_15500/MIS_15750 (2 regressing + 2 winning traces from the earlier bypass result). ml: llama110M/biogpt/rwkv/whisper. qmm: srv_12/575/128/21. Submitted via `submit_bypass_thd_multisuite.sh` (ad hoc, scratchpad only) | submitted, running |
+| 2026-07-09 ~00:10 | `doa_random_qmm/T_{suite}_{base,byp2x}_*` (48 jobs, jids 1410250-1410345, thinned from 96) | dpc3: mcf/omnetpp/xalancbmk/fotonik3d. gap: bc-0/cc-13/bfs-10/sssp-10. gms: triangle_count_117/k_clique_edge_367/maxclique_3852/k_clique_node_236. ligra: PageRank/Triangle/BFSCC_15500/MIS_15750 (2 regressing + 2 winning traces from the earlier bypass result). ml: llama110M/biogpt/rwkv/whisper. qmm: srv_12/575/128/21. Submitted via `submit_bypass_thd_multisuite.sh` (ad hoc, scratchpad only) | **completed, 48/48**: dpc3 +12.99%, gap +10.98%, ligra +34.56% (confirms 1x result holds at 2x; also fixes `PageRank` specifically — 1.186x — but not `Triangle` — 0.777x, unchanged), qmm +1.81%, gms +0.08% and ml +0.32% (bypass barely matters either way for those two) |
 
-Next step: for each suite, geomean IPC for byp2x vs that suite's own no-bypass base, to see
-whether 2x THD_DOA recovers Ligra's regressing traces (PageRank/Triangle) without giving up
-the gains on winning traces, and whether that holds across the other 5 suites too.
+**Final results, all 3 experiments complete:**
+- **`DOA_FORCE_PCT` corrected (full data)**: still refuted — QMM -1.70%/-4.89% (25%/50%),
+  Ligra -1.73%/-8.63% (16/17 traces). Confirms forcing without evidence hurts regardless of
+  whether it's coupled to bypass or not.
+- **Bypass recheck on Ligra** (`BYPASS_RECHECK_MODE=backoff`, jids 1410233+, 17 jobs,
+  vs `L_byp`): **+1.26% geomean, 16/17 traces** — the first addition on top of plain bypass
+  that actually helped. Recovered `PageRank` from 0.60x (vs no-bypass) to ~1.14x — a full
+  flip from big loser to modest winner — and improved `Triangle` from 0.78x to ~0.88x
+  (still a regression, smaller). Cost: small dips (2-13%) on traces already winning under
+  plain bypass, since recheck occasionally forces a real probe fill even when bypass was
+  already correct. Net positive despite that cost.
+- **Bypass at 2x THD_DOA, 6 suites**: see table row above.
+
+Next step: build the PC temporal-behavior bucketing analysis (job 1410346, `doa_bucket`,
+reprocessing the same raw counter-trace CSVs with a new awk pass — classifies each PC by
+reset *position* in its own timeline, not just count: always-DoA / early-only / late-only /
+oscillating-throughout).
 
 ---
 
