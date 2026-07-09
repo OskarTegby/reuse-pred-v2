@@ -640,6 +640,27 @@ per-PC summary (`n_addr, always_doa, has_reset, doa_total`) at `end_phase`, gate
 Next step: pull the per-suite `always_doa`/`has_reset` address split for dpc3/gms/ml/qmm,
 extending the gap/ligra numbers above to all 6 suites.
 
+**Gap noted**: Google is a 7th suite in project scope (Mazumdar explicitly excluded from
+new experiments) and has been missing from every analysis this session — skipped early on
+for its nested per-site directory structure (`Google_Traces_v2/{site}/{site}_NNNN.champsim.gz`)
+and never revisited. Confirmed 4 site traces exist (arizona/charlie/merced/tahoe, `_0000`),
+added to the recheck experiment below at THD_DOA=4 (per `docs/SPEEDUP_SUMMARY.md`). Not yet
+backfilled into the earlier bypass-2x-threshold or address-summary experiments.
+
+## Bypass recheck, expanded to all 6 non-MAZ suites (2026-07-09)
+
+Same `BYPASS_RECHECK_MODE=backoff` config validated on Ligra (+1.26%), now testing
+gap/gms/dpc3/ml/google (4 traces each, `byp1x` + `byp1x+recheck`, since we don't have a
+plain-bypass-without-recheck baseline for these yet) and qmm (recheck only, full 13-trace
+set, reusing the existing `B_base` plain-bypass baseline).
+
+| Launch | Cluster dir | Purpose | Status |
+|---|---|---|---|
+| 2026-07-09 ~16:05 | `doa_random_qmm/RC_{suite}_*` (53 jobs, jids 1410521-1410573) | gap/gms/dpc3/ml/google: byp1x + byp1x+recheck (8 jobs each suite). qmm: recheck only (13 jobs). Submitted via `submit_recheck_allsuites.sh` (ad hoc, scratchpad only) | submitted, running |
+
+Next step: geomean recheck vs byp1x per suite (qmm vs existing `B_base`), see if the
+Ligra-style recovery pattern generalizes.
+
 ---
 
 ## Still Pending / Not Yet Submitted
