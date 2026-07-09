@@ -612,10 +612,13 @@ arms (48 jobs, jids listed in the cancel command) once caught; kept base+2x only
   already correct. Net positive despite that cost.
 - **Bypass at 2x THD_DOA, 6 suites**: see table row above.
 
-Next step: build the PC temporal-behavior bucketing analysis (job 1410346, `doa_bucket`,
-reprocessing the same raw counter-trace CSVs with a new awk pass — classifies each PC by
-reset *position* in its own timeline, not just count: always-DoA / early-only / late-only /
-oscillating-throughout).
+Next step: build the PC temporal-behavior bucketing analysis, reprocessing the same raw
+counter-trace CSVs with a new awk pass — classifies each PC by reset *position* in its own
+timeline, not just count: always-DoA / early-only / late-only / oscillating-throughout.
+First submitted as job 1410346, a single job looping over all 76 traces sequentially
+(same pattern as the earlier `doa_summarize` job) — cancelled before it started once asked
+why it wasn't parallelized (each trace's pass is fully independent). Resubmitted as 76
+separate `bkt_<trace>` jobs (jids 1410347-1410422) via `submit_bucket_parallel.sh`.
 
 ---
 
