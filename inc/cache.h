@@ -155,6 +155,11 @@ public:
       unmap_[k] = value;
   }
 
+  // On an alive eviction, subtract doa_decay_ from the score (floored at 0)
+  // instead of hard-resetting it to zero. Default (max int64) makes the
+  // subtraction always floor at 0, i.e. unchanged hard-reset behavior.
+  void set_doa_decay(int64_t d) { doa_decay_ = d; }
+
   // Call on each bypass fire for a key. If the key has bypassed bypass_pc_reset_period_
   // times without receiving an eviction update, its score is zeroed so it must
   // re-earn its DoA classification (breaks per-PC lock-in).
@@ -448,7 +453,16 @@ public:
   // Update the history table with one eviction observation: a DoA eviction
   // increments the key's score by 1; any other (accessed) eviction resets it
   // to 0.
-  void update(uint64_t key, liveness_class evict_class, int64_t thd_doa = 0) {
+  // On a DoA eviction: +1 by default (System A, flat, ins_class-independent).
+  // With DOA_SURPRISE_WEIGHT on (System B): +1 if the entry was already
+  // guided as DoA at fill time (self-confirming, low information), +2 if it
+  // was not (surprising -- we thought it was alive/unguided and it died
+  // anyway). Matches the "surprising evidence carries more weight" rule from
+  // the old scoring-mode work.
+  void set_doa_surprise_weight(bool b) { doa_surprise_weight_ = b; }
+
+  void update(uint64_t key, liveness_class evict_class, int64_t thd_doa = 0,
+              liveness_class ins_class = liveness_class::alive) {
     if (!unbounded_ && cap_ == 0 && buf_cap_ == 0) return;
     key = hk_(key);
     seen_pcs_.insert(key);
@@ -495,6 +509,9 @@ public:
       if (!was_doa && is_doa) ++stats_.trans_alive_doa;
       else if (was_doa && !is_doa) ++stats_.trans_doa_alive;
     };
+    const int64_t doa_inc = !doa_surprise_weight_
+                                ? 1
+                                : (ins_class == liveness_class::doa ? 1 : 2);
     if (unbounded_) {
       bypass_since_update_[key] = 0;  // eviction feedback arrived: no longer locked in
       // Allocate only on a DoA eviction: an alive eviction of an untracked key
@@ -506,7 +523,9 @@ public:
         it = unmap_.emplace(key, 0).first;
       }
       const int64_t old_s = it->second;
-      it->second = (evict_class == liveness_class::doa) ? old_s + 1 : 0;
+      it->second = (evict_class == liveness_class::doa)
+                        ? old_s + doa_inc
+                        : std::max<int64_t>(0, old_s - doa_decay_);
       record_transition(old_s, it->second);
       // Periodic reset: break DoA lock-in by zeroing all scores every N updates.
       if (reset_period_ > 0 && update_count_ % reset_period_ == 0) {
@@ -519,7 +538,9 @@ public:
     for (auto& e : entries_) {
       if (e.valid && e.key == key) {
         const int64_t old_s = e.score;
-        e.score = (evict_class == liveness_class::doa) ? old_s + 1 : 0;
+        e.score = (evict_class == liveness_class::doa)
+                      ? old_s + doa_inc
+                      : std::max<int64_t>(0, old_s - doa_decay_);
         record_transition(old_s, e.score);
         on_hit(e, evict_class);
         return;
@@ -640,6 +661,8 @@ private:
   unsigned hash_bits_ = 0;  // >0 → hash keys into this many bits (faithful Mazumdar)
   int doa_default_pct_ = 0;  // DOA_DEFAULT_PCT: % of never-seen keys defaulted to DoA
   int doa_force_pct_   = 0;  // DOA_FORCE_PCT: % of fills whose persistent score is forced up
+  int64_t doa_decay_ = std::numeric_limits<int64_t>::max();  // DOA_DECAY: subtract on alive eviction (default: hard reset)
+  bool doa_surprise_weight_ = false;  // DOA_SURPRISE_WEIGHT: +2 surprising / +1 confirming (default: flat +1)
 
   static uint64_t mix64_(uint64_t x) {
     x ^= x >> 33; x *= 0xff51afd7ed558ccdULL; x ^= x >> 33;

@@ -304,7 +304,7 @@ void CACHE::update_eviction_counters(const BLOCK& victim, liveness_class evict_l
     if (do_update) {
       HistTable& tbl = ::g_use_merged_hist ? ::g_merged_repl_hist : repl_hist_pc;
       const int64_t old_score = (doa_trace_enable_ && !warmup) ? tbl.get_score(repl_key) : 0;
-      tbl.update(repl_key, evict_lv, thd_doa);
+      tbl.update(repl_key, evict_lv, thd_doa, victim.ins_class);
       if (doa_trace_enable_ && !warmup) {
         const int64_t new_score = tbl.get_score(repl_key);
         doa_trace_file_ << current_cycle << ',' << victim.ip << ',' << (victim.address >> OFFSET_BITS) << ','
@@ -482,6 +482,10 @@ void CACHE::load_predictor_settings()
     const uint64_t dfp = getenv_uint64("DOA_FORCE_PCT", 0);
     if (dfp > 0)
       repl_hist_pc.set_doa_force_pct(static_cast<int>(dfp));
+    if (const char* v = std::getenv("DOA_DECAY"); v && *v)
+      repl_hist_pc.set_doa_decay(std::stoll(v));
+    if (const char* v = std::getenv("DOA_SURPRISE_WEIGHT"); v && std::stoull(v))
+      repl_hist_pc.set_doa_surprise_weight(true);
   }
   if (const char* v = std::getenv("MID_PROMOTE"); v && std::stoull(v))
     mid_promote = true;
