@@ -675,6 +675,296 @@ all 7 suites at full trace counts.
 
 ---
 
+## Data-quality finding: SRRIP-Live/SRRIP column in FINDINGS.md is contaminated (2026-07-10)
+
+FINDINGS.md's cross-policy table (`LRU-Live/LRU`, `SRRIP-Live/SRRIP`, `IPV-Live/IPV`) cites
+`bypass_allsuites_20260610_2312/*/repl_only` as the SRRIP-Live/SRRIP source. That directory
+carries a `DO_NOT_USE.txt`: it ran `champsim_srrip_live_hrp` (not `champsim_srrip_live`), the
+binary already flagged as a ~4% contaminated baseline. `lru_live_vs_base_*` and
+`ipv_live_vs_base_*` (the other two columns) are clean, dedicated directories — only SRRIP-Live
+was sourced from the contaminated one.
+
+Recomputed SRRIP-Live/SRRIP from `*_thd_rebaseline_20260605_2316` (clean, per-suite established
+θ, unweighted geomean — directional, not final):
+
+| suite | LRU-Live/LRU | SRRIP-Live/SRRIP (FINDINGS, contaminated) | SRRIP-Live/SRRIP (clean recompute) |
+|---|---|---|---|
+| dpc3  | +4.80% | +2.25% | +2.11% |
+| gap   | +3.82% | +2.05% | +4.03% |
+| gms   | +0.38% | +1.28% | +0.04% |
+| ligra | +2.95% | +1.53% | **−3.41%** |
+| ml    | +2.37% | **+8.80%** | +1.75% |
+| qmm   | +1.40% | +0.99% | **−0.29%** |
+
+The "SRRIP-Live wins big on ML" headline (the strongest counter-example to the room-for-error
+theory) shrinks from +8.80% to +1.75%, and LRU-Live now wins 5/6 suites (was 4/6). Ligra and
+QMM flip sign entirely. **TODO: regenerate the full three-way table from a clean,
+SimPoint-weighted, matching-config source before using it in the paper or in further analysis.**
+
+## DOA_DECAY: soft decay instead of hard reset on alive eviction (2026-07-10)
+
+Added `DOA_DECAY=<N>` (`inc/cache.h`/`src/cache.cc`): on an alive eviction, subtract N from the
+score (floored at 0) instead of resetting to 0. Unset/default behaves identically to the
+existing hard reset (sentinel = `int64_t max`, subtraction always floors to 0). Zero cost when
+off. Built locally, no errors; local smoke test inconclusive (only local trace, pagerank, has
+zero alive evictions in the tested window). Tests the hypothesis that if resets are rare (this
+session's addr-summary finding), soft decay should show ~no benefit over hard reset. Not yet
+run on cluster — pending scope confirmation (which θ_decay values, which suites).
+
+## Full-suite DoA counter-sequence stats (2026-07-10)
+
+Extends `doa_sequence.awk` (mean score, max score, mean/max peak-value-before-reset,
+mean/max run-length between resets, per PC) from the earlier 76-trace sample
+(`doa_trace_debug/`, uniform θ=6) to every trace of every suite, each at its own established
+θ (gap=1, ligra=1, gms=4, ml=16, qmm=4, dpc3=8, google=4) — the actual production operating
+point, not an arbitrary fixed value.
+
+**Bug found + fixed before launch:** `scripts/submit/run_cs.sh` never `cd`s into the per-trace
+`RUN_DIR` (it only redirects stdout/stderr there); `champsim_lru_live_doatrace` writes
+`doa_counter_trace_{LLC,cpu0_STLB}.csv` to a fixed relative filename in its CWD. Run via
+`run_cs.sh`'s shared `-wd`, parallel array tasks would clobber each other's CSVs. Wrote
+`scripts/submit/run_cs_doatrace.sh`: resolves binary/trace to absolute paths, `cd`s into the
+per-trace `RUN_DIR` before invoking the binary. Smoke-tested on 2 gap traces (jid 1410595,
+held competing not-yet-started queued arrays via `qhold` so it would schedule next) — confirmed
+distinct per-trace CSVs (142815 vs 142809 lines), nothing leaked to the shared root.
+
+| Launch | Cluster dir | Purpose | Status |
+|---|---|---|---|
+| 2026-07-10 00:21 | `results/doa_seq_full_20260710_0021/{suite}` (7 array jobs, jids 1410596-1410602, 251 tasks total) | All traces, all 7 suites, per-suite established θ, `champsim_lru_live_doatrace`, `DOA_COUNTER_TRACE=1`, `BHIST_MODE=pc`, `LRU_LIVE_DOA_INS=2n3`, 50M/100M. Submitted via `submit_doa_seq_full.sh` (ad hoc, scratchpad only) | submitted, running |
+
+Next step once complete: run `doa_sequence.awk` remotely on each trace's `doa_counter_trace_LLC.csv`
+(raw CSVs are multi-GB at full scale — post-process in place, only pull back the compact
+per-PC stat CSVs), aggregate per suite.
+
+## LRU-Live cushion causal test (2026-07-10)
+
+Direct, within-policy test of whether LRU-Live's edge over SRRIP-Live comes from its
+graduated insertion cushion (room for a misclassified block to prove itself via a hit
+before eviction), rather than comparing across policies (too many confounds at once).
+Same binary (`champsim_lru_live`), same suite, same established θ — only
+`LRU_LIVE_DOA_INS` changes: `2n3` (cushioned, DoA inserted at position 10/16) vs `lru`
+(no cushion, DoA inserted at LRU end, same recovery window as SRRIP's ins@3). Plain
+`champsim_lru` baseline rerun fresh in the same launch for self-consistent provenance
+(avoids repeating the SRRIP-Live contamination mistake above). Prediction: if the theory
+holds, `cfgB` (lru)'s edge over baseline should be much smaller than `cfgA` (2n3)'s, and
+may regress on some suites — converging toward SRRIP-Live's observed fragility.
+
+| Launch | Cluster dir | Purpose | Status |
+|---|---|---|---|
+| 2026-07-10 00:42 | `results/cushion_test_20260710_0042/{base,cfgA,cfgB}/{suite}` (21 array jobs, jids 1410603-1410623, 753 tasks total) | All traces, all 7 suites, per-suite established θ. Submitted via `submit_cushion_test.sh` (ad hoc, scratchpad only) | submitted, running |
+
+`DOA_DECAY` deferred initially — cluster time prioritized for the cushion test above;
+launched after. Not part of the counter-stats collection (that's purely observational),
+it's a separate mechanism experiment testing whether the "resets are rare" finding has
+an actionable consequence.
+
+## DOA_DECAY test (2026-07-10)
+
+Subtract a fixed amount from the score on an alive eviction (soft decay) instead of
+hard-resetting to 0. Prediction, per the addr-summary finding (resets are rare, 0.08-8.36%
+of addresses): should show ~no benefit, since there's little to smooth over. Reviewed the
+implementation before launch (inc/cache.h/src/cache.cc): allocate-only-on-DoA preserved
+(decay only applies to already-tracked keys), sentinel default (`int64_t max`) gives
+byte-identical behavior to the old hard reset, both bounded/unbounded paths updated
+consistently, `REPL_HIST_MERGED` path untouched (irrelevant here, not used in this test).
+Local `champsim_lru_live` binary rebuilt today (contains `DOA_DECAY`) and transferred to
+Castillo via the double-SSH `cat` pipe (scp fails through the abdet jump host) — confirmed
+same size + `strings` match on the remote copy before launch; verified no in-flight
+`cushion_test` tasks were disrupted by the overwrite (all still `qw` at the time).
+
+`DOA_DECAY ∈ {1, 2}`, fixed (not θ-scaled, to avoid gap's θ=1 producing a degenerate
+θ/2=0 decay that would never actually reset), vs `base` (established config, decay unset).
+
+| Launch | Cluster dir | Purpose | Status |
+|---|---|---|---|
+| 2026-07-10 00:47 | `results/doa_decay_20260710_0047/{base,decay1,decay2}/{suite}` (21 array jobs, jids 1410624-1410644, 753 tasks total) | All traces, all 7 suites, per-suite established θ. Submitted via `submit_doa_decay.sh` (ad hoc, scratchpad only) | **cancelled — wrong θ, see below** |
+
+## Threshold-provenance bug: `doa_seq_full`/`cushion_test`/`doa_decay` used stale θ from the old scoring system (2026-07-10)
+
+The "established per-suite THD_DOA" (gap=1, ligra=1, gms=4, ml=16, qmm=4, dpc3=8, google=4)
+used for all three launches above traces to two bad sources: (1) `docs/SPEEDUP_SUMMARY.md`,
+cited in JOBS.md as the source for Ligra's θ=1, doesn't contain "THD_DOA" at all — it
+documents `MID_THD=1` for the old 3-way `ipv_live` system, a different parameter on a
+different policy; (2) the other candidate source, `results/lru_live_thd_duel_20260627`,
+ran under `scoring_mode=5` — the old weighted kDelta system — which commit `6b344a582826`
+("remove mostly-dead classification from all liveness policies", **2026-07-08 17:40**)
+deleted entirely. `SCORING_MODE` is not read anywhere in current `inc/cache.h`/`src/cache.cc`.
+No θ sweep exists in `docs/JOBS.md` after that commit — every "established THD_DOA" citation
+since just repeats the same numbers with no new sweep behind them.
+
+**Fix — derived the conversion from the actual `scoring_mode==5` code** (`git show
+38f82fc1c241:inc/cache.h`, the commit that introduced the June 27 sweep): a DoA eviction from
+a fresh/MA-state PC added `dd=5` to the doa counter (dropping to 3 only once already past the
+MD band, which barely activates — consistent with this session's "MD contributes nothing"
+finding); an alive eviction reset both counters to 0, same category as the current hard reset.
+So old θ and new (flat, +1-per-DoA-eviction) θ measure the same thing — consecutive DoA
+evictions needed to cross — off by that factor: **new θ = ceil(old θ / 5)**. Regrouped the
+existing `lru_live_thd_duel_20260627` sweep's IPC-vs-θ data (θ∈{2,4,8,16,20,25,30,35,40}) by
+this conversion and took the real argmax on the correctly-scaled grid — no new simulation
+needed for the correction itself.
+
+| suite | old (wrong) θ | corrected θ |
+|---|---|---|
+| dpc3   | 8  | **1** |
+| gap    | 1  | 1 |
+| gms    | 4  | **6** |
+| google | 4  | **6** |
+| ligra  | 1  | 1 |
+| ml     | 16 | **6** |
+| qmm    | 4  | **2** |
+
+4 of 7 suites change (dpc3 and ml substantially). gap and ligra happen to already be correct.
+Cancelled `doa_seq_full` (1410596-1410602), `cushion_test` (1410603-1410623), `doa_decay`
+(1410624-1410644) — none had started producing usable data at wrong θ — and relaunched all
+three with the corrected table:
+
+| Launch | Cluster dir | Status |
+|---|---|---|
+| 2026-07-10 01:00 | `results/doa_seq_full_20260710_0100/{suite}` (jids 1410645-1410651, 251 tasks) | submitted, running |
+| 2026-07-10 01:00 | `results/cushion_test_20260710_0100/{base,cfgA,cfgB}/{suite}` (jids 1410652-1410672, 753 tasks) | submitted, running |
+| 2026-07-10 01:00 | `results/doa_decay_20260710_0100/{base,decay1,decay2}/{suite}` (jids 1410673-1410693, 753 tasks) | submitted, running |
+
+**Resolved**: also affected — `recheck_allsuites_20260709_2219` (same stale θ table), and the
+"clean" SRRIP-Live/SRRIP recompute from the contamination fix above (`*_thd_rebaseline_20260605_2316`
+predates the flat-scoring change too — its `run_info.txt` shows `mid_thd`, not `thd_doa` — so
+picking the "established" `thd{N}` subdirectory per suite there was also at the wrong θ for
+dpc3/gms/ml/qmm). Cancelled `recheck_allsuites`'s remaining tail (1410589-1410594) and relaunched
+the full 3-arm study fresh (not just the unfinished suites — ml/qmm/gms had already completed
+under the wrong θ too). For the SRRIP-Live/SRRIP comparison: `results/baselines/srrip` is
+reusable as-is (SRRIP has no threshold, untouched by this bug) — only the SRRIP-Live arm needed
+a fresh run.
+
+| Launch | Cluster dir | Purpose | Status |
+|---|---|---|---|
+| 2026-07-10 01:05 | `results/recheck_allsuites_20260710_0105/{base,byp1x,recheck}/{suite}` (21 array jobs, jids 1410694-1410714, 753 tasks) | Full clean rerun, corrected θ, all 7 suites | submitted, running |
+| 2026-07-10 01:05 | `results/srrip_live_clean_20260710_0105/{suite}` (7 array jobs, jids 1410715-1410721, 251 tasks) | `champsim_srrip_live` only (baseline reused from `results/baselines/srrip`), corrected θ, all 7 suites | submitted, running |
+
+Not relaunched (lower priority, already-conclusive directional findings, holding unless asked):
+`DOA_FORCE_PCT`/`DOA_DEFAULT_PCT` on QMM (ran at θ=4, should be 2) and the "bypass at 2x
+THD_DOA" 6-suite result (dpc3/gms/ml/qmm at wrong θ).
+
+## All five overnight studies complete; results consolidated (2026-07-10/11)
+
+`doa_seq_full`, `cushion_test`, `doa_decay`, `recheck_allsuites`, `srrip_live_clean` all finished
+overnight (~24h). Findings written up in full at the private Claude Artifact
+(`https://claude.ai/code/artifact/e5c78688-178f-4e57-979a-53277895298f`, not shared/public —
+this is unpublished research). Headlines:
+
+- **Counter sequence**: confirms the DoA counter is a streak, not a confidence score — average
+  held score sits 2-4 orders of magnitude above θ everywhere (e.g. dpc3 ~79,000 vs θ=1).
+- **Cushion causal test**: mixed, 3-of-7 confirm room-for-error / 4-of-7 contradict (gap, ml,
+  qmm, google favor the *no-cushion* config bigger); doesn't correlate with reset rate or
+  peak-before-reset.
+- **Bypass-recheck**: small aggregate hides a bimodal per-trace effect (ligra PageRank +90.21%,
+  most other traces slightly negative — a consistent "probe tax" paid everywhere, earned back
+  only where bypass is a real, sizeable mistake).
+- **DOA_DECAY**: prediction ("resets are rare, so softening shouldn't matter") refuted on 4 of 7
+  suites, moving up to ±2.4% in both directions.
+- **SRRIP-Live clean rerun**: confounded — accidentally used the already-known-degenerate default
+  `SRRIP_DOA_INS_RRPV=2` (same insertion as plain SRRIP), so it mostly re-confirms that finding
+  rather than testing anything new.
+
+## SRRIP-Live ins@3 rerun (2026-07-10 23:11)
+
+Follow-up to the confound above: `SRRIP_DOA_INS_RRPV=3` (immediate-eviction candidate, the
+config FINDINGS.md documents as the only one that "produces meaningful gains"), corrected θ,
+all 7 suites. Baseline reused from `results/baselines/srrip`.
+
+| Launch | Cluster dir | Status |
+|---|---|---|
+| 2026-07-10 23:11 | `results/srrip_live_ins3_20260710_2311/{suite}` (7 array jobs, jids 1410722-1410728, 251 tasks) | submitted, running |
+
+## Closing out remaining θ-bug loose ends + gap/ligra addr-summary at real θ (2026-07-10 23:32)
+
+Three more relaunches, all ready-to-go with existing binaries/knobs, no new code:
+
+1. **`DOA_DEFAULT_PCT`/`DOA_FORCE_PCT` on QMM, corrected θ=2** (was 4), full 45-trace count
+   (was a 13-trace sample). Both decoupled from bypass per the earlier fix. Prediction:
+   still refuted (random-insertion mechanisms don't help), just at the right operating point.
+2. **Bypass at 2x THD_DOA, corrected θ**, dpc3/gms/ml/qmm only (gap/ligra already had the
+   right θ, not rerun). base vs byp2x, full trace counts.
+3. **`DOA_ADDR_SUMMARY`, gap+ligra, corrected θ=1** — replaces the earlier `doa_addrsum_debug`
+   sample, which used a uniform θ=6 for all suites (never the real operating point for any of
+   them). Supports the open "what do PageRank/Triangle/cc-13 have in common" question at the
+   threshold actually in production use.
+
+| Launch | Cluster dir | Status |
+|---|---|---|
+| 2026-07-10 23:32 | `results/dfp_ddp_qmm_clean_20260710_2332/{base,ddp25,ddp50,dfp25,dfp50}` (5 array jobs, jids 1410729-1410733, 225 tasks) | submitted, running |
+| 2026-07-10 23:32 | `results/bypass2x_clean_20260710_2332/{base,byp2x}/{gms,ml,qmm,dpc3}` (8 array jobs, jids 1410734-1410741, 364 tasks) | submitted, running |
+| 2026-07-10 23:32 | `results/addrsum_gap_ligra_clean_20260710_2332/{gap,ligra}` (2 array jobs, jids 1410742-1410743, 26 tasks) | submitted, running |
+
+Not started: a configurable LRU-Live insertion depth (`LRU_LIVE_DOA_INS` currently only supports
+the fixed presets `2n3`/`lru`/`bypass`) to properly sweep the room-for-error question with more
+than two endpoints. Needs a code change, held until reviewed together rather than run unattended.
+
+## Results: SRRIP-Live ins@3 + the three closing reruns (2026-07-11)
+
+**SRRIP-Live ins@3 vs SRRIP, corrected θ** — the clean room-for-error test the ins@2 rerun
+couldn't be: LRU-Live/LRU (cfgA) beats SRRIP-Live(ins@3)/SRRIP on **all 7 suites**. Ligra is the
+sharpest case — ins@3 actually regresses there (−3.46%, matching the documented ins@3-punishes-reuse
+finding), while LRU-Live's cushioned insertion avoids that regression and still gets +3.49%. This
+resolves the open room-for-error question decisively (see the artifact, §06).
+
+**DOA_DEFAULT_PCT/DOA_FORCE_PCT on QMM, θ=2** — still refuted, similar magnitude to the original
+wrong-θ run (ddp25 −1.80%, ddp50 −4.39%, dfp25 −1.52%, dfp50 −4.24%).
+
+**Bypass at 2x THD_DOA, corrected θ** — direction holds on all 4 suites but magnitude shifts
+meaningfully for dpc3 (+12.99%→+7.61%) and ml (+0.32%→+1.75%); gms/qmm close to unchanged.
+
+**DOA_ADDR_SUMMARY, gap+ligra at real θ=1** — checked whether PageRank/Triangle/cc-13 (the big
+bypass-recheck winners) share an elevated per-address reset rate. Partial confirmation: PageRank
+(4.25%) and Triangle (2.56%) do sit at the high end of ligra's reset-rate distribution (most
+traces ~0.00%), but it's not a clean predictor — Components-Shortcut (22000M) has the highest
+reset rate of all (9.66%) yet only a modest recheck gain, while two other traces with non-trivial
+reset rates (0.84–1.29%) still show recheck as a net loss.
+
+Full write-up updated in place at the same Claude Artifact URL (private, not shared) referenced
+above.
+
+## New scoring system: surprise-weighted DoA counter (2026-07-11/12)
+
+Added `DOA_SURPRISE_WEIGHT=1` (`inc/cache.h`/`src/cache.cc`): on a DoA eviction, `+2` if the
+entry was NOT already guided as DoA at fill time (surprising — high information), `+1` if it
+was (self-confirming — low information), vs the current System A's flat `+1` regardless of
+`ins_class`. Matches the "surprising evidence carries more weight" rule that won empirically in
+the old scoring-mode work (5/3/1 beat 1/3/5). `victim.ins_class` (already tracked per-`BLOCK`)
+threaded through to `HistTable::update()`'s new 4th parameter; default unchanged when the env
+var is unset. Reviewed both bounded/unbounded code paths; smoke-tested locally (pagerank trace)
+— confirmed the code path engages (small but real IPC shift, 0.226867→0.226839) even with zero
+resets, since a key's very first DoA eviction is always "surprising" regardless of reset history.
+
+**No exact threshold-conversion factor exists between System A and System B** (unlike the old
+scoring-system fix, which had one fixed `δ=5`): System B's increment is +1 or +2 depending on the
+confirming/surprising mix, which varies by suite and PC. Testing System B at established θ,
+1.5×, and 2× brackets it instead of assuming one number; low-θ suites (gap/ligra/dpc3, θ=1)
+collapse 1.5×/2× to the same integer, so those get 2 distinct thresholds tested, not 3.
+
+**All under Redwood Cove per this request** — built `champsim_{lru,srrip,lru_live,srrip_live}_redwoodcove`
+locally from `champsim_config_redwoodcove.json` (never built on the cluster), transferred via
+the double-SSH `cat` pipe, smoke-tested (confirms different LLC geometry: 4096 sets vs default's
+2048). A complete Redwood Cove LRU baseline already existed from the June arch-rerun work
+(`arch_rerun_zen4_redwoodcove_20260702_2100/redwoodcove/lru`, all 7 suites) — reused as-is
+since plain LRU doesn't depend on the scoring system.
+
+| Launch | Cluster dir | Purpose | Status |
+|---|---|---|---|
+| 2026-07-11 22:40 | `results/scoring_ab_redwoodcove_20260711_2240/{sysA,sysB_1x,sysB_15x,sysB_2x}/{suite}` (25 array jobs, jids 1410744-1410768, 883 tasks) | System A vs System B, `champsim_lru_live_redwoodcove`, all 7 suites, full trace counts | submitted, running |
+
+Next steps once complete (per the user's plan): pick the winning (system, θ) combination per
+suite → proper threshold sweep for the winner under Redwood Cove → size study → per-PC vs
+per-address indexing comparison, all under Redwood Cove.
+
+## Planned follow-up: victim cache for SRRIP-Live misprediction detection
+
+Contingent on confirming (via the above) that LRU-Live's edge over SRRIP-Live really does come
+from misprediction-detection ability (graduated stack lets a wrongly-classified block prove
+itself via a hit before eviction), not some other suite-specific effect: prototype a small
+victim cache that catches blocks evicted by SRRIP-Live's more conservative insertion/promotion,
+giving SRRIP-Live an analogous recovery path. Not started — gated on the causal check above.
+
+---
+
 ## Still Pending / Not Yet Submitted
 
 - **All suites — hist_size sweep** (`sweep_hist_size.sh`): large pHIST×bHIST grid with LRU/LFU/hashed; not yet submitted for any suite
