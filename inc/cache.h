@@ -19,6 +19,7 @@
 
 #include <array>
 #include <bitset>
+#include <cmath>
 #include <numeric>
 #include <cassert>
 #include <cstdlib>
@@ -155,6 +156,29 @@ public:
       unmap_[k] = value;
   }
 
+  // Adaptive per-key threshold (unbounded path only): instead of one fixed
+  // thd_doa for the whole table, each key gets its own effective threshold
+  // derived from an EWMA of the run-lengths it has actually shown at past
+  // breaks (alive evictions), scaled by a margin:
+  //   theta_key = max(theta_min_, round(ewma_runlen * theta_margin_))
+  // margin > 1 = demand more evidence than the key's typical streak length
+  // (conservative); margin < 1 = commit sooner (aggressive); margin = 1 =
+  // commit right at "as likely to run longer as not". EWMA bootstraps from
+  // the suite's fixed thd_doa so behavior matches the non-adaptive system
+  // exactly until a key's first break.
+  void set_adaptive_theta(bool b) { adaptive_theta_ = b; }
+  void set_theta_margin(double m) { theta_margin_ = m; }
+  void set_theta_alpha(double a) { theta_alpha_ = a; }
+  void set_theta_min(int64_t m) { theta_min_ = m; }
+
+  int64_t effective_theta(uint64_t key, int64_t thd_doa_default) const {
+    if (!adaptive_theta_) return thd_doa_default;
+    const uint64_t k = hk_(key);
+    auto it = theta_ewma_.find(k);
+    const double ewma = (it != theta_ewma_.end()) ? it->second : static_cast<double>(thd_doa_default);
+    return std::max(theta_min_, static_cast<int64_t>(std::llround(ewma * theta_margin_)));
+  }
+
   // Call on each bypass fire for a key. If the key has bypassed bypass_pc_reset_period_
   // times without receiving an eviction update, its score is zeroed so it must
   // re-earn its DoA classification (breaks per-PC lock-in).
@@ -242,10 +266,12 @@ public:
   // Classify a key against thd_doa, consulting main table then promotion
   // buffer. Tracks which structure resolved the classification in stats.
   liveness_class classify(uint64_t key, uint64_t thd_doa) const {
+    const uint64_t raw_key = key;
     key = hk_(key);
     if (unbounded_) {
       auto it = unmap_.find(key);
-      if (it != unmap_.end() && it->second >= (int64_t)thd_doa) return liveness_class::doa;
+      const int64_t eff_thd = adaptive_theta_ ? effective_theta(raw_key, (int64_t)thd_doa) : (int64_t)thd_doa;
+      if (it != unmap_.end() && it->second >= eff_thd) return liveness_class::doa;
       if (it == unmap_.end() && doa_default_(key)) return liveness_class::doa;
       return liveness_class::alive;
     }
@@ -506,6 +532,15 @@ public:
         it = unmap_.emplace(key, 0).first;
       }
       const int64_t old_s = it->second;
+      if (adaptive_theta_ && evict_class != liveness_class::doa && old_s > 0) {
+        // A real streak just broke (old_s > 0): fold its length into this
+        // key's EWMA of typical run-length-at-break. Bootstrap from thd_doa
+        // on the first break so behavior matches the non-adaptive system
+        // until a key has actually shown one.
+        double& ewma = theta_ewma_[key];
+        if (ewma <= 0.0) ewma = static_cast<double>(thd_doa > 0 ? thd_doa : old_s);
+        ewma = theta_alpha_ * static_cast<double>(old_s) + (1.0 - theta_alpha_) * ewma;
+      }
       it->second = (evict_class == liveness_class::doa) ? old_s + 1 : 0;
       record_transition(old_s, it->second);
       // Periodic reset: break DoA lock-in by zeroing all scores every N updates.
@@ -640,6 +675,11 @@ private:
   unsigned hash_bits_ = 0;  // >0 → hash keys into this many bits (faithful Mazumdar)
   int doa_default_pct_ = 0;  // DOA_DEFAULT_PCT: % of never-seen keys defaulted to DoA
   int doa_force_pct_   = 0;  // DOA_FORCE_PCT: % of fills whose persistent score is forced up
+  bool adaptive_theta_ = false;                          // ADAPTIVE_THETA: per-key learned threshold
+  double theta_margin_ = 1.0;                             // ADAPTIVE_THETA_MARGIN
+  double theta_alpha_  = 0.25;                            // ADAPTIVE_THETA_ALPHA (EWMA decay rate)
+  int64_t theta_min_   = 1;                               // ADAPTIVE_THETA_MIN (floor)
+  std::unordered_map<uint64_t, double> theta_ewma_;  // per-key EWMA of run-length at break
 
   static uint64_t mix64_(uint64_t x) {
     x ^= x >> 33; x *= 0xff51afd7ed558ccdULL; x ^= x >> 33;

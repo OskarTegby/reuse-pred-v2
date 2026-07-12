@@ -482,6 +482,15 @@ void CACHE::load_predictor_settings()
     const uint64_t dfp = getenv_uint64("DOA_FORCE_PCT", 0);
     if (dfp > 0)
       repl_hist_pc.set_doa_force_pct(static_cast<int>(dfp));
+    if (const char* v = std::getenv("ADAPTIVE_THETA"); v && std::stoull(v)) {
+      repl_hist_pc.set_adaptive_theta(true);
+      if (const char* m = std::getenv("ADAPTIVE_THETA_MARGIN"); m && *m)
+        repl_hist_pc.set_theta_margin(std::stod(m));
+      if (const char* a = std::getenv("ADAPTIVE_THETA_ALPHA"); a && *a)
+        repl_hist_pc.set_theta_alpha(std::stod(a));
+      if (const char* mn = std::getenv("ADAPTIVE_THETA_MIN"); mn && *mn)
+        repl_hist_pc.set_theta_min(std::stoll(mn));
+    }
   }
   if (const char* v = std::getenv("MID_PROMOTE"); v && std::stoull(v))
     mid_promote = true;
