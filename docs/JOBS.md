@@ -962,6 +962,52 @@ from misprediction-detection ability (graduated stack lets a wrongly-classified 
 itself via a hit before eviction), not some other suite-specific effect: prototype a small
 victim cache that catches blocks evicted by SRRIP-Live's more conservative insertion/promotion,
 giving SRRIP-Live an analogous recovery path. Not started — gated on the causal check above.
+Unblocked now that `srrip_live_ins3` gave a clean confirmation (§ SRRIP-Live ins@3 rerun).
+
+## Branch split: doa-surprise-weight-scoring vs adaptive-doa-threshold (2026-07-11/12)
+
+Per the user's request, split into two independent feature branches off `main` rather than
+stacking new work on an unvalidated branch: `doa-surprise-weight-scoring` (DOA_DECAY +
+DOA_SURPRISE_WEIGHT, System A/B comparison running under Redwood Cove) stays parked, unmerged,
+pending its own results. `adaptive-doa-threshold` branched fresh off `main` (not off the scoring
+branch) for the online-threshold mechanism, so the two efforts can be judged and merged
+independently.
+
+## Adaptive per-key DoA threshold (2026-07-12)
+
+Design (worked through conversationally, not the growth-only ratchet first proposed — that
+version reacts to the *worst* mistake seen, not to how *often* mistakes happen relative to
+successes, so it doesn't actually embrace "commit where we're more likely right than wrong,
+weighted by the cost of being wrong"): each key gets its own `theta_key`, derived from an EWMA
+of the run-length observed at every break (not just "mistakes"), scaled by a margin:
+
+    theta_key = max(theta_min, round(ewma_runlen_at_break * margin))
+
+`margin=1` commits right where a streak is as likely to run longer as not; `margin>1` is more
+conservative (demand more evidence), `margin<1` more aggressive. EWMA bootstraps from the
+suite's established `THD_DOA`, so behavior is identical to the non-adaptive system until a key's
+first break — zero cost when `ADAPTIVE_THETA` is unset. Unbounded path only (all established
+configs use `REPL_HIST_LLC_CAP=0`, so the bounded/hashed table wasn't touched). Illustrated with
+a hand-verified 11-event example before writing any code (see the streak-mechanism artifact).
+
+Rebuilt local binaries after finding `config.sh`/`_configuration.mk` had been left registered to
+a different config file (`champsim_config.json`, which only produces `champsim_verify`) from an
+earlier Redwood Cove detour — the actual source for the plain `champsim_lru_live` and friends is
+`champsim_maz_policies.json`. Re-ran `config.sh champsim_maz_policies.json` + `make static` to
+restore the full binary set with the new code included; confirmed via `strings` before
+transferring to Castillo.
+
+Smoke-tested locally (same limitation as `DOA_DECAY`'s smoke test — the only local trace,
+pagerank, has zero alive evictions, so the mechanism can't engage; confirms the no-op path
+matches baseline exactly, doesn't validate the adaptive path itself). Real validation needs the
+cluster run. Baseline reused from `doa_decay_20260710_0100/base` (same established config,
+features off there, so behaviorally identical to plain).
+
+| Launch | Cluster dir | Purpose | Status |
+|---|---|---|---|
+| 2026-07-12 00:42 | `results/adaptive_theta_20260712_0042/{m0p5,m1p0,m1p5,m2p0}/{suite}` (28 array jobs, jids 1410769-1410796, 1,004 tasks) | `ADAPTIVE_THETA_MARGIN` swept over {0.5, 1.0, 1.5, 2.0}, all 7 suites, full trace counts, established θ as bootstrap | submitted, running |
+
+Code committed on `adaptive-doa-threshold` (branched off `main`, independent of the scoring-system branch).
 
 ---
 
