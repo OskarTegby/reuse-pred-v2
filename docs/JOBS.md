@@ -1037,6 +1037,10 @@ identical regardless of the new code.
 | Launch | Cluster dir | Purpose | Status |
 |---|---|---|---|
 | 2026-07-13 12:25 | `results/lru_live_alllevels_20260713_1225/{stlb,l2c,l1d,l1i,itlb,dtlb}/{suite}` (42 array jobs, jids 1410832-1410873, 1,506 tasks) | `SRRIP_LIVE_TARGET` swept over all 6 non-LLC levels, established θ per suite, all 7 suites, full trace counts | submitted, running |
+| 2026-07-13 12:27 | `results/lru_live_alllevels_both_20260713_1227/{suite}` (7 array jobs, jids 1410874-1410880, 251 tasks) | `SRRIP_LIVE_TARGET=both` (LLC+STLB jointly guided, per the user's explicit request -- everything else stays isolated one level at a time), same config | submitted, running |
+
+Full level coverage for this study: LLC alone (existing established result, reused) + STLB, L2C,
+L1D, L1I, ITLB, DTLB each isolated + LLC+STLB jointly. No other combinations.
 
 ---
 
