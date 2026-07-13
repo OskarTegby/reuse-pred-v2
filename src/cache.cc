@@ -483,6 +483,13 @@ void CACHE::load_predictor_settings()
     if (dfp > 0)
       repl_hist_pc.set_doa_force_pct(static_cast<int>(dfp));
   }
+  if (const char* v = std::getenv("DOA_HYBRID"); v && std::stoull(v)) {
+    repl_hist_pc.set_doa_hybrid(true);
+    if (const char* k = std::getenv("DOA_HYBRID_K"))
+      repl_hist_pc.set_hybrid_k(std::stod(k));
+    if (const char* d = std::getenv("DOA_HYBRID_DECAY"))
+      repl_hist_pc.set_hybrid_decay(std::stoll(d));
+  }
   if (const char* v = std::getenv("MID_PROMOTE"); v && std::stoull(v))
     mid_promote = true;
 

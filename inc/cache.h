@@ -19,6 +19,7 @@
 
 #include <array>
 #include <bitset>
+#include <cmath>
 #include <numeric>
 #include <cassert>
 #include <cstdlib>
@@ -154,6 +155,16 @@ public:
     if ((mix64_(k ^ 0x9E3779B97F4A7C15ULL) % 100) < static_cast<uint64_t>(doa_force_pct_))
       unmap_[k] = value;
   }
+
+  // On an alive eviction (a streak breaking), decide reset vs decay from how
+  // far the streak had run past thd_doa: if the score at break (R) is within
+  // K*thd_doa of the threshold, treat it as a near-miss and only subtract
+  // hybrid_decay_ (floored at 0); if R blew past K*thd_doa, treat it as a
+  // confident correction and hard-reset to 0. K is swept like thd_doa itself
+  // (a fixed, suite-tuned constant) -- R is what actually varies per key/suite.
+  void set_doa_hybrid(bool b) { doa_hybrid_ = b; }
+  void set_hybrid_k(double k) { hybrid_k_ = k; }
+  void set_hybrid_decay(int64_t d) { hybrid_decay_ = d; }
 
   // Call on each bypass fire for a key. If the key has bypassed bypass_pc_reset_period_
   // times without receiving an eviction update, its score is zeroed so it must
@@ -495,6 +506,12 @@ public:
       if (!was_doa && is_doa) ++stats_.trans_alive_doa;
       else if (was_doa && !is_doa) ++stats_.trans_doa_alive;
     };
+    // Reset-vs-decay decision on a break: R = old_s (the run just ended).
+    auto break_score = [&](int64_t old_s) -> int64_t {
+      if (!doa_hybrid_ || old_s <= 0) return 0;
+      const int64_t k_thd = static_cast<int64_t>(std::llround(hybrid_k_ * static_cast<double>(thd_doa)));
+      return (old_s <= k_thd) ? std::max<int64_t>(0, old_s - hybrid_decay_) : 0;
+    };
     if (unbounded_) {
       bypass_since_update_[key] = 0;  // eviction feedback arrived: no longer locked in
       // Allocate only on a DoA eviction: an alive eviction of an untracked key
@@ -506,7 +523,7 @@ public:
         it = unmap_.emplace(key, 0).first;
       }
       const int64_t old_s = it->second;
-      it->second = (evict_class == liveness_class::doa) ? old_s + 1 : 0;
+      it->second = (evict_class == liveness_class::doa) ? old_s + 1 : break_score(old_s);
       record_transition(old_s, it->second);
       // Periodic reset: break DoA lock-in by zeroing all scores every N updates.
       if (reset_period_ > 0 && update_count_ % reset_period_ == 0) {
@@ -519,7 +536,7 @@ public:
     for (auto& e : entries_) {
       if (e.valid && e.key == key) {
         const int64_t old_s = e.score;
-        e.score = (evict_class == liveness_class::doa) ? old_s + 1 : 0;
+        e.score = (evict_class == liveness_class::doa) ? old_s + 1 : break_score(old_s);
         record_transition(old_s, e.score);
         on_hit(e, evict_class);
         return;
@@ -640,6 +657,9 @@ private:
   unsigned hash_bits_ = 0;  // >0 → hash keys into this many bits (faithful Mazumdar)
   int doa_default_pct_ = 0;  // DOA_DEFAULT_PCT: % of never-seen keys defaulted to DoA
   int doa_force_pct_   = 0;  // DOA_FORCE_PCT: % of fills whose persistent score is forced up
+  bool doa_hybrid_      = false;  // DOA_HYBRID: reset-vs-decay by streak length at break
+  double hybrid_k_      = 16.0;   // DOA_HYBRID_K: near-miss cutoff, as a multiple of thd_doa
+  int64_t hybrid_decay_ = 1;      // DOA_HYBRID_DECAY: amount subtracted on a near-miss break
 
   static uint64_t mix64_(uint64_t x) {
     x ^= x >> 33; x *= 0xff51afd7ed558ccdULL; x ^= x >> 33;
