@@ -1050,11 +1050,12 @@ bool CACHE::try_hit(const PACKET& handle_pkt)
     // liveness signals on writeback hits: neither the Accessed bit (which
     // distinguishes DoA from reused blocks) nor last_hit_cycle (which drives
     // the mostly-dead vs mostly-alive halflife split). This keeps the liveness
-    // classification based on genuine reads only. Both fields are used solely
-    // by the LLC/STLB liveness mechanism.
+    // classification based on genuine reads only. Set at every cache/TLB
+    // level: it both feeds ground-truth DoA reporting everywhere and is the
+    // eviction-feedback signal (evict_lv) for whichever level is the active
+    // guidance target.
     if (handle_pkt.type != WRITE) {
-      if (NAME == "cpu0_STLB" || NAME == "LLC")
-        way->accessed = true;
+      way->accessed = true;
       way->last_hit_cycle = current_cycle;
     }
 
