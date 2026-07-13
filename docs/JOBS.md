@@ -1035,10 +1035,34 @@ exactly.
 
 | Launch | Cluster dir | Purpose | Status |
 |---|---|---|---|
-| 2026-07-13 01:23 | `results/hybrid_k_sweep_20260713_0123/k{5,8,12,16,25}/{suite}` (35 array jobs, jids 1410797-1410831, 1,015 tasks) | `DOA_HYBRID_K` swept over {5, 8, 12, 16, 25} (brackets the ~7/~25 cutoffs found earlier), `DOA_HYBRID_DECAY=1` fixed, all 7 suites, full trace counts, established θ | submitted, running |
+| 2026-07-13 01:23 | `results/hybrid_k_sweep_20260713_0123/k{5,8,12,16,25}/{suite}` (35 array jobs, jids 1410797-1410831, 1,255 tasks) | `DOA_HYBRID_K` swept over {5, 8, 12, 16, 25} (brackets the ~7/~25 cutoffs found earlier), `DOA_HYBRID_DECAY=1` fixed, all 7 suites, full trace counts, established θ | finished; all 1,255/1,255 tasks completed, all matched 1:1 against baseline |
 
 Baseline reused from `results/doa_decay_20260710_0100/base/{suite}` (established config, no
 hybrid/decay/adaptive features on).
+
+### Results (SimPoint-weighted geomean IPC speedup vs. hard-reset baseline)
+
+| K | gap | ligra | gms | ml | qmm | dpc3 | google | **overall** |
+|---|---|---|---|---|---|---|---|---|
+| 5  | +0.59% | -0.01% | +0.05% | -0.09% | +0.27% | -0.11% | +0.51% | **+0.17%** |
+| 8  | +0.80% | +0.02% | +0.08% | -0.10% | +0.29% | -0.16% | +0.72% | **+0.24%** |
+| 12 | +0.96% | +0.06% | +0.07% | -0.11% | +0.34% | -0.15% | +0.78% | **+0.28%** |
+| 16 | +1.05% | +0.26% | +0.12% | -0.15% | +0.37% | -0.16% | +0.83% | **+0.33%** |
+| 25 | +1.18% | +0.35% | +0.14% | -0.21% | +0.38% | -0.18% | +0.92% | **+0.37%** |
+
+Monotonically increasing with K across the whole tested range — no peak found yet, so K=25
+isn't necessarily the ceiling.
+
+For context, the flat "always decay, never reset" version (`decay1`/`decay2` arms of the same
+base experiment, no K/reset condition at all) gets crushed on ligra (-2.38%) while still gaining
+on gap/google (+1.9%/+1.3%), netting only +0.11-0.14% overall. The hybrid's K=25 arm keeps
+almost all of that gap/google gain (+1.18%/+0.92%) while turning ligra's -2.38% loss into
++0.35% — i.e. the reset-vs-decay split is doing exactly the job it was designed for: gap/google
+apparently break on genuine near-misses (worth a partial correction), ligra breaks on confident
+overruns (need a hard reset, which flat decay was denying them).
+
+ml and dpc3 stay small-but-consistently negative (-0.1% to -0.2%) at every K, unaffected by the
+K value — whatever's costing there isn't near-miss/overrun related.
 
 ---
 
