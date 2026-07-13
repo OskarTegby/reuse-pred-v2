@@ -1005,9 +1005,40 @@ features off there, so behaviorally identical to plain).
 
 | Launch | Cluster dir | Purpose | Status |
 |---|---|---|---|
-| 2026-07-12 00:42 | `results/adaptive_theta_20260712_0042/{m0p5,m1p0,m1p5,m2p0}/{suite}` (28 array jobs, jids 1410769-1410796, 1,004 tasks) | `ADAPTIVE_THETA_MARGIN` swept over {0.5, 1.0, 1.5, 2.0}, all 7 suites, full trace counts, established θ as bootstrap | submitted, running |
+| 2026-07-12 00:42 | `results/adaptive_theta_20260712_0042/{m0p5,m1p0,m1p5,m2p0}/{suite}` (28 array jobs, jids 1410769-1410796, 1,004 tasks) | `ADAPTIVE_THETA_MARGIN` swept over {0.5, 1.0, 1.5, 2.0}, all 7 suites, full trace counts, established θ as bootstrap | finished; underperformed the fixed-θ baseline on every suite at every margin (dpc3's m1.5/m2.0 arms incomplete, 84/95 and 27/95 traces, ran out of 24h wall-clock — a data-quality gap, not a code error) |
 
-Code committed on `adaptive-doa-threshold` (branched off `main`, independent of the scoring-system branch).
+Code committed on `adaptive-doa-threshold` (branched off `main`, independent of the scoring-system branch). Learned EWMA-based per-key threshold is now a ruled-out approach; parked, not merged.
+
+## Reset-vs-decay hybrid, K-sweep (2026-07-13)
+
+Follow-on to `DOA_DECAY`'s peak-before-reset/θ-ratio finding (clean 7/7 sign split at cutoff
+~10: below ~7 favors decay, above ~25 favors reset). Rather than a global on/off flag per suite,
+decide per break from the actual observed streak length:
+
+    R = score at the alive eviction that just broke the streak
+    if R <= K * thd_doa: decay by D (default 1, floored at 0)
+    else:                hard reset to 0
+
+`K` is a single fixed constant, swept like `thd_doa` itself (not learned online) — the design
+question of whether this is "workload-governed" was resolved by noting `R` is what naturally
+varies per key/suite even under one fixed `K`, mirroring how a single global `thd_doa` already
+produces very different per-suite outcomes. Making `K` itself adaptive/learned would reuse the
+exact EWMA mechanism that just failed for `ADAPTIVE_THETA`, so it's deliberately left fixed and
+swept instead. `D=1` fixed per the earlier `DOA_DECAY` result.
+
+Built on a fresh branch `doa-hybrid-decay-reset` off `main` (not stacked on either unmerged
+mechanism branch). Verified with a standalone unit test instantiating `HistTable` directly
+(local pagerank trace has zero alive-eviction breaks with `old_score>0`, so it can't exercise
+this path) — confirmed: small break (R below K·θ) decays without dropping below θ, large break
+(R above K·θ) hard resets, and `DOA_HYBRID` unset reproduces the old hard-reset-always behavior
+exactly.
+
+| Launch | Cluster dir | Purpose | Status |
+|---|---|---|---|
+| 2026-07-13 01:23 | `results/hybrid_k_sweep_20260713_0123/k{5,8,12,16,25}/{suite}` (35 array jobs, jids 1410797-1410831, 1,015 tasks) | `DOA_HYBRID_K` swept over {5, 8, 12, 16, 25} (brackets the ~7/~25 cutoffs found earlier), `DOA_HYBRID_DECAY=1` fixed, all 7 suites, full trace counts, established θ | submitted, running |
+
+Baseline reused from `results/doa_decay_20260710_0100/base/{suite}` (established config, no
+hybrid/decay/adaptive features on).
 
 ---
 
