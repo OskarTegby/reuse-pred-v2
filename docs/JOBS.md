@@ -1009,6 +1009,35 @@ features off there, so behaviorally identical to plain).
 
 Code committed on `adaptive-doa-threshold` (branched off `main`, independent of the scoring-system branch).
 
+## LRU-Live guidance at every cache/TLB level (2026-07-13)
+
+Liveness guidance (`repl_hist_pc` feedback loop + `classify_block_liveness`) was hardcoded to
+only ever run for `NAME == "LLC" || NAME == "cpu0_STLB"`, both in the eviction-feedback gate
+(`cache.cc`) and in `lru_live.cc`'s `SRRIP_LIVE_TARGET`-based `use_liveness` selection (which only
+recognized `llc`/`stlb`/`both`). L1I, L1D, L2C, ITLB, DTLB never got real guidance -- their
+`repl_hist_pc` tables stayed empty and `classify_block_liveness` always fell through to the
+default. Generalized both gates to all 7 cache/TLB levels (`cpu0_L1I`, `cpu0_L1D`, `cpu0_L2C`,
+`cpu0_ITLB`, `cpu0_DTLB` added alongside `LLC`/`cpu0_STLB`), and extended `SRRIP_LIVE_TARGET` to
+accept `l2c`/`l1d`/`l1i`/`itlb`/`dtlb` (kept the existing, if oddly-named, shared env var rather
+than introducing a new one).
+
+Design: **isolate each level** (per the user's choice) -- only the target level gets `lru_live`;
+every other level, including LLC, reverts to plain-LRU-equivalent behavior. Built one binary,
+`champsim_lru_live_alllevels_redwoodcove`, with `lru_live` wired at every level simultaneously;
+`SRRIP_LIVE_TARGET` picks exactly one active level per run at runtime rather than needing 6
+separate binaries. Verified via `SRRIP_LIVE_TARGET={llc,l2c,l1d,l1i,itlb,dtlb,stlb}` smoke tests
+on the local pagerank trace: for every target, exactly that level's `Activation rate` reads 100%
+and every other level's reads 0%.
+
+Built on a fresh branch `lru-live-full-hierarchy` off `main`. Baseline reused from the June
+arch-rerun's plain-LRU Redwood Cove run (`arch_rerun_zen4_redwoodcove_20260702_2100/redwoodcove/lru`,
+all 7 suites) -- plain `lru` replacement never reads `repl_hist_pc`, so it's behaviorally
+identical regardless of the new code.
+
+| Launch | Cluster dir | Purpose | Status |
+|---|---|---|---|
+| 2026-07-13 12:25 | `results/lru_live_alllevels_20260713_1225/{stlb,l2c,l1d,l1i,itlb,dtlb}/{suite}` (42 array jobs, jids 1410832-1410873, 1,506 tasks) | `SRRIP_LIVE_TARGET` swept over all 6 non-LLC levels, established θ per suite, all 7 suites, full trace counts | submitted, running |
+
 ---
 
 ## Still Pending / Not Yet Submitted
