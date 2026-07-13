@@ -245,8 +245,13 @@ void CACHE::update_replacement_state(uint32_t triggering_cpu, uint32_t set, uint
     const char* target_env = std::getenv("SRRIP_LIVE_TARGET");
     if (target_env && target_env[0] != '\0') {
         std::string t(target_env);
-        if      (t == "llc"  && NAME == "LLC")        use_liveness = true;
-        else if (t == "stlb" && NAME == "cpu0_STLB")  use_liveness = true;
+        if      (t == "llc"  && NAME == "LLC")         use_liveness = true;
+        else if (t == "stlb" && NAME == "cpu0_STLB")   use_liveness = true;
+        else if (t == "l2c"  && NAME == "cpu0_L2C")    use_liveness = true;
+        else if (t == "l1d"  && NAME == "cpu0_L1D")    use_liveness = true;
+        else if (t == "l1i"  && NAME == "cpu0_L1I")    use_liveness = true;
+        else if (t == "itlb" && NAME == "cpu0_ITLB")   use_liveness = true;
+        else if (t == "dtlb" && NAME == "cpu0_DTLB")   use_liveness = true;
         else if (t == "both" && (NAME == "LLC" || NAME == "cpu0_STLB")) use_liveness = true;
     } else {
         if (NAME == "LLC") use_liveness = true;

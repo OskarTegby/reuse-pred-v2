@@ -279,7 +279,13 @@ void CACHE::update_eviction_counters(const BLOCK& victim, liveness_class evict_l
   }
 
   // Replacement-guidance history: delegated to HistTable (bounded or unbounded).
-  if (NAME == "LLC" || NAME == "cpu0_STLB") {
+  // Gate covers every cache/TLB level so any of them can be the guided level
+  // under SRRIP_LIVE_TARGET; a level not selected as the target still runs
+  // this bookkeeping (harmless -- its own replacement module, e.g. plain
+  // lru.cc, never reads repl_hist_pc) but keeps the classifier populated
+  // in case that level's target is selected in a later env-var combination.
+  if (NAME == "LLC" || NAME == "cpu0_STLB" || NAME == "cpu0_L2C" || NAME == "cpu0_L1D" ||
+      NAME == "cpu0_L1I" || NAME == "cpu0_ITLB" || NAME == "cpu0_DTLB") {
     bool do_update = true;
     uint64_t repl_key = 0;
     if (stlb_llc_prop_ && NAME == "LLC") {
