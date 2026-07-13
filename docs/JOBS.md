@@ -1042,6 +1042,44 @@ identical regardless of the new code.
 Full level coverage for this study: LLC alone (existing established result, reused) + STLB, L2C,
 L1D, L1I, ITLB, DTLB each isolated + LLC+STLB jointly. No other combinations.
 
+### Bug found: `accessed` bit hardcoded to LLC/STLB only (2026-07-13)
+
+While pulling ground-truth DoA stats to answer "how many DoA blocks exist at each level that we
+could potentially cover," found `way->accessed` (the bit that both drives the reported DoA rate
+and *is* the eviction-feedback signal, `evict_lv = way->accessed ? alive : doa`) was hardcoded in
+`src/cache.cc`'s hit handler to only ever fire for `NAME == "cpu0_STLB" || "LLC"`. Every other
+level's blocks stayed permanently `accessed=false`, so their reported DoA rate was a meaningless
+100.00% by construction -- confirmed by an implausible exact ceiling across L1I/L1D/L2C/ITLB/DTLB,
+every suite, no exceptions. Worse: this made the 5 broken targets of the just-launched isolation
+sweep (`lru_live_alllevels_20260713_1225`, jids 1410833-1410837/1410839-1410843/.../1410869-1410873,
+35 arrays) meaningless -- they were feeding an always-DoA signal into the guidance mechanism
+regardless of real reuse, not testing liveness guidance at all. STLB and the LLC+STLB `both` arm
+were unaffected (STLB was already correctly wired).
+
+Fixed by setting `way->accessed = true` unconditionally on any non-writeback hit (removed the
+NAME check). Rebuilt, verified locally: per-level DoA rates now vary by level/trace instead of
+being pegged at the ceiling (e.g. DTLB dropped from 100.00% to 0.00% on the smoke-test trace).
+Cancelled the 35 broken arrays and relaunched them with the fixed binary; STLB and `both` were
+left running undisturbed throughout.
+
+| Launch | Cluster dir | Purpose | Status |
+|---|---|---|---|
+| 2026-07-13 12:35 | `results/lru_live_alllevels_fixed_20260713_1235/{l2c,l1d,l1i,itlb,dtlb}/{suite}` (35 array jobs, jids 1410881-1410915, 1,255 tasks) | Relaunch of the 5 broken targets with the `accessed`-bit fix, same config | submitted, running |
+
+### Hierarchy-wide DoA census (2026-07-13)
+
+Answers the original question directly: plain LRU at every level (no guidance anywhere), all 7
+suites, ground-truth ("ROI"-style) DoA rate per level via the now-fixed `accessed` bit. Uses a
+freshly rebuilt `champsim_lru_redwoodcove_fixed` (distinct name from the existing
+`champsim_lru_redwoodcove` to avoid confusing this run with the June arch-rerun baseline, whose
+non-LLC/STLB DoA numbers are retroactively known to be meaningless from the bug above -- its LLC
+and STLB numbers, and its IPC for every level, are unaffected and still valid, since plain `lru`
+replacement never reads the `accessed` bit for eviction decisions, only for reporting).
+
+| Launch | Cluster dir | Purpose | Status |
+|---|---|---|---|
+| 2026-07-13 12:35 | `results/hierarchy_doa_census_20260713_1235/{suite}` (7 array jobs, jids 1410916-1410922, 251 tasks) | Ground-truth DoA rate per level (L1I/L1D/L2C/ITLB/DTLB/STLB/LLC), plain LRU, all 7 suites | submitted, running |
+
 ---
 
 ## Still Pending / Not Yet Submitted
