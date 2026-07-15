@@ -1090,3 +1090,42 @@ replacement never reads the `accessed` bit for eviction decisions, only for repo
 - **srrip_live_bypass for new suites** (GAP, GMS, Ligra, ML): not yet submitted
 
 Note: Mazumdar traces are NOT run for new experiments.
+
+## LLC bypass-shadow (victim cache) — corrected rerun (2026-07-15)
+
+The existing "neutral, no size trend" finding (§5 in `docs/FINDINGS.md`,
+`shadow_allsuites_20260613_0928`) turned out to be measured on stale infrastructure:
+its `run_info.txt` shows `binary=champsim_srrip_live_hrp_shadow`, `mid_thd=1` — the
+old 3-way MOSTLY_DEAD/MOSTLY_ALIVE/DOA `MID_THD` classification system, which was
+deleted entirely in commit `6b344a582826` ("remove mostly-dead classification from
+all liveness policies", 2026-07-08). It also predates the 2026-07-10 established-θ
+correction. The "victim cache does essentially nothing" conclusion was drawn on a
+scoring system that no longer exists — not a real measurement of the current
+bypass+shadow mechanism. User flagged this from memory ("I remember it giving
+better performance than that") and was right to be suspicious.
+
+**Corrected rerun**: `champsim_lru_redwoodcove_bypass` (plain LRU replacement,
+freshly built from current `main`/`lru-live-full-hierarchy` source — bypass/shadow
+logic in `cache.cc` is independent of replacement policy, so this isolates the
+effect cleanly, matching the established "bypass-only" methodology). Redwood Cove
+architecture (per user's choice — the old run predated Redwood Cove and was almost
+certainly on the default/Mazumdar arch, but user opted to test under the
+architecture this session's work is centered on rather than match the old arch).
+All 7 suites incl. `google` (didn't exist when the original ran), full trace
+counts, corrected per-suite established θ (dpc3=1, gap=1, gms=6, google=6, ligra=1,
+ml=6, qmm=2), `BHIST_MODE=pc`. Smoke-tested on `gap/bc-0` (short warmup/sim) before
+launch — confirmed `LLC LIVENESS_BYPASSES` and `LLC LIVENESS_BYPASS_SHADOW_HITS`
+both populate correctly.
+
+Arms per suite: `bypass_noshadow` (bypass on, no shadow) + `shadow{4,8,16,32,64,128,256}`
+(shadow sizes both above and below the old sweep's 8–64 range, since that range
+showed no trend and the user specifically recalled 32 as optimal). `base` (no
+bypass at all) reused as-is from
+`results/arch_rerun_zen4_redwoodcove_20260702_2100/redwoodcove/lru` — plain LRU
+never reads `LIVENESS_BYPASS`-gated code, so it's byte-identical regardless of
+build date. Submitted via `scripts/submit/sweep_bypass_shadow_redwoodcove.sh`
+(kept, not scratchpad-only).
+
+| Launch | Cluster dir | Purpose | Status |
+|---|---|---|---|
+| 2026-07-15 00:34 | `results/bypass_shadow_redwoodcove_20260715_0034/{suite}/{bypass_noshadow,shadow4,shadow8,shadow16,shadow32,shadow64,shadow128,shadow256}` (56 array jobs, jids 1410923-1410978, 2008 tasks) | LLC bypass-shadow size sweep, corrected θ and scoring system, all 7 suites, full trace counts | submitted, running |
