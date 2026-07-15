@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-#
+
 # Black-box scenario runner for the liveness replacement policies. A scenario
 # is <policy>_<condition>_<trace>; see README for what each axis covers and
 # why these particular traces were picked.
@@ -7,10 +7,6 @@
 #   Usage: run_scenario.py <scenario>            # run + compare
 #          GENERATE=1 run_scenario.py <scenario> # write reference output
 #          run_scenario.py --list                # print every scenario name
-#
-# Kept Python-3.3-compatible (no f-strings, no pathlib, no subprocess.run)
-# because that is the interpreter available on the cluster (Castillo) where
-# the full-size runs execute.
 
 import os
 import sys

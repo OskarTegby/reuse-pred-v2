@@ -1,6 +1,3 @@
-# Kept Python-3.3-compatible (no f-strings, no pathlib) to match
-# run_scenario.py, which runs under the cluster's Python 3.3.
-
 import os
 import re
 
@@ -27,19 +24,13 @@ TRACE_PATHS = {
 
 WALLCLOCK_RE = re.compile(r" \(Simulation time: \d+ hr \d+ min \d+ sec\)")
 
-# Named env fragments a scenario can merge together (later fragments in a
-# scenario's list override earlier ones).
 STATIC_FRAGMENTS = {
     "base": {"THD_DOA": "6", "BHIST_MODE": "pc", "SRRIP_LIVE_TARGET": "llc"},
     "addr": {"REPL_HIST_MODE": "addr", "REPL_HIST_LLC_CAP": "4096", "REPL_HIST_REPL": "lfu_doa"},
     "ipv_vec": {"IPV_DOA": "0:1:2:2:3"},
-    # SRRIP/IPV express bypass by disabling the in-cache insert; LRU-Live
-    # instead uses LRU_LIVE_DOA_INS=bypass (see SCENARIO_MATRIX below).
     "bypass_override": {"SRRIP_LIVE_TARGET": "none", "LIVENESS_BYPASS": "1"},
 }
 
-# A lookup table instead of per-policy code, so scenario resolution never
-# needs to branch on policy.
 SCENARIO_MATRIX = {
     "lru": {
         "base":   ("champsim_lru", []),

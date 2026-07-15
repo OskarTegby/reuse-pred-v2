@@ -1,6 +1,3 @@
-# Generic file/process helpers -- no knowledge of scenarios, policies, or
-# ChampSim. Kept Python-3.3-compatible like the rest of this test runner.
-
 import difflib
 import os
 import shutil
@@ -37,8 +34,6 @@ def env_flag(name):
 def stream_subprocess_to_file(cmd, env, out_path, transform_line=None):
     proc = subprocess.Popen(cmd, env=env, stdout=subprocess.PIPE,
                              stderr=subprocess.STDOUT, universal_newlines=True, bufsize=1)
-    # Line-buffered with an immediate flush (not buffered until exit) so a
-    # caller polling `out_path` mid-run sees progress as it happens.
     with open(out_path, "w") as out:
         for line in proc.stdout:
             out.write(transform_line(line) if transform_line else line)

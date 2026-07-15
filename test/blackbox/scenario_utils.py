@@ -1,9 +1,3 @@
-# Logic for interpreting the data in scenario.py: the scenario naming
-# scheme, the SCENARIO_MATRIX/STATIC_FRAGMENTS lookup, and resolving a
-# scenario name to what's needed to run it. Has scenario/policy
-# knowledge, so it can't live in file_utils.py; it's logic, not data,
-# so it can't live in scenario.py either.
-
 import os
 import sys
 
