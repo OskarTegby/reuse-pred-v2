@@ -54,12 +54,12 @@ def run_scenario(scen):
 
 
 def main(argv):
-    if len(argv) > 1 and argv[1] == "--list":
-        print("\n".join(list_scenarios()))
-        return 0
     if len(argv) < 2:
         sys.stderr.write("usage: run_scenario.py <policy>_<condition>_<trace>  (or --list)\n")
         return 2
+    if argv[1] == "--list":
+        print("\n".join(list_scenarios()))
+        return 0
     return run_scenario(argv[1])
 
 
