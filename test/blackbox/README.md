@@ -32,7 +32,7 @@ nondeterministic line (the wall-clock `Simulation time` suffix), and byte-diffs
 the **entire** report against `expected/<scenario>.out`.
 
 `run_scenario.py --list` enumerates all scenarios. `CMakeLists.txt`,
-`blackbox_validation.py`, and `blackbox_run_cluster.sh` all call it to get their
+`blackbox_validation.py`, and `blackbox_run_cluster.py` all call it to get their
 lists, rather than defining the matrix a second time.
 
 ## Why the full-report reference is enough
@@ -71,8 +71,8 @@ traces are usually absent, so most cells skip; the authoritative run is on the
 cluster, where all traces and binaries exist:
 
 ```sh
-bash scripts/submit/blackbox_run_cluster.sh            # verify against expected/
-bash scripts/submit/blackbox_run_cluster.sh generate   # regenerate expected/ + commit
+python3 scripts/submit/blackbox_run_cluster.py            # verify against expected/
+python3 scripts/submit/blackbox_run_cluster.py generate   # regenerate expected/ + commit
 ```
 
 That driver holds queued jobs, submits the full suite, and then either copies the
@@ -118,7 +118,7 @@ The run ends when every scenario is `FULL_PASS`/`FAIL`; the final report require
 ## Regenerating reference outputs
 
 After an **intentional** behavior change, review the diff, then regenerate on the
-cluster (`blackbox_run_cluster.sh generate`) and commit the updated
+cluster (`blackbox_run_cluster.py generate`) and commit the updated
 `expected/*.out` together with the code change so the reference update is
 reviewable alongside what caused it.
 
