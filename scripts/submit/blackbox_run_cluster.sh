@@ -25,7 +25,7 @@ ABDET=otegby@abdet.inf.um.es
 ROOT=/home/users/otegby/ChampSim-dev
 EXPECTED_DIR="$REPO/test/blackbox/expected"
 LOCAL_OUT_DIR="$REPO/test/blackbox/test_outputs_cluster"
-CHECK="$REPO/test/blackbox/check_progress.sh"
+CHECK="$REPO/test/blackbox/check_progress.py"
 POLL_INTERVAL=30
 STUCK_TIMEOUT=900   # seconds of no output progress before a *running* bb job is
                    # treated as hung and cancelled, so the verify loop can finish.
@@ -171,7 +171,7 @@ while true; do
     download_partials
     np=0; nr=0; ns=0; nx=0; nf=0; nz=0
     for scen in "${SCENARIOS[@]}"; do
-        st=$(bash "$CHECK" "$LOCAL_OUT_DIR/${scen}.out" "$EXPECTED_DIR/${scen}.out")
+        st=$(python3 "$CHECK" "$LOCAL_OUT_DIR/${scen}.out" "$EXPECTED_DIR/${scen}.out")
         # Watchdog: a job that has started (has output) but whose output has not
         # advanced for STUCK_TIMEOUT is hung -- cancel it so the verify loop can
         # finish. PENDING jobs (just waiting for a slot) are left alone.
@@ -232,7 +232,7 @@ echo "  BLACK-BOX RESULTS (cluster / full)  "
 echo "══════════════════════════════════════"
 pass=0; fail=0
 for scen in "${SCENARIOS[@]}"; do
-    st=$(bash "$CHECK" "$LOCAL_OUT_DIR/${scen}.out" "$EXPECTED_DIR/${scen}.out")
+    st=$(python3 "$CHECK" "$LOCAL_OUT_DIR/${scen}.out" "$EXPECTED_DIR/${scen}.out")
     case "$st" in
         FULL_PASS) printf "  %-32s PASS\n" "$scen"; pass=$((pass+1));;
         FAIL)      printf "  %-32s FAIL\n" "$scen"; fail=$((fail+1));;

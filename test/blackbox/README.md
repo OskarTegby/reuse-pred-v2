@@ -94,7 +94,7 @@ on the first mismatching line.
 
 In verify mode the driver does not wait for jobs to finish before judging them.
 Each poll it pulls the partial outputs and classifies every scenario against its
-reference with `check_progress.sh`:
+reference with `check_progress.py`:
 
 | State | Meaning |
 |---|---|
@@ -110,7 +110,7 @@ failure, caught the moment it appears rather than after the full run. On `FAIL`
 the driver prints the diff and cancels the doomed job (`qdel bb_<scenario>`). The
 soft-pass milestone is the heartbeat at 70,000,000 total instructions — 50M
 warmup plus 20M of the 100M simulation. It is a single tunable constant
-(`SOFT_MILESTONE` in `check_progress.sh`); lowering it surfaces the soft pass
+(`SOFT_MILESTONE` in `check_progress.py`); lowering it surfaces the soft pass
 sooner (each 10M earlier ~ one heartbeat).
 The run ends when every scenario is `FULL_PASS`/`FAIL`; the final report requires
 `FULL_PASS` for all.
