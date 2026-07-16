@@ -64,14 +64,12 @@ Legend: **[CURRENT]** actively maintained · **[HISTORICAL]** point-in-time, may
 
 ---
 
-## `experiments/` — per-experiment records (chronological lab notebook)
+## `experiments/` — archived
 
-| file | status | what it is |
-|------|--------|------------|
-| `EXPERIMENTS.md` | REFERENCE | overview/index of the numbered experiments |
-| `RESULTS_SUMMARY.md` | REFERENCE | cross-experiment results (the QMM history-table design progression to +14.94%) |
-| `001_clean_baseline/` … `005_doa_lfu_and_buffer/` | REFERENCE | one dir per experiment: README + analysis. Notably `003_hist_repl` (LFU>SRRIP>LRU), `004_lfu_ablation_and_sizes`, `005_doa_lfu_and_buffer` |
-| `EXP0xx_*_PLAN.md`, `EXP013_014_IMPLEMENTATION.md` | HISTORICAL | plans for later experiments |
+Removed from the active tree (superseded early-project experiment records,
+last touched 2026-05-30, tied to the since-removed `MID_THD`/`SCORING_MODE`
+mechanisms). Recoverable from the `archive/pre-redwoodcove-scripts` branch
+or from `blackbox-refactor`'s history before this removal.
 
 ---
 
@@ -84,14 +82,18 @@ Legend: **[CURRENT]** actively maintained · **[HISTORICAL]** point-in-time, may
 
 ---
 
-## `results/plots/` and `ideas/` and `tracer/`
+## `results/plots/` and `tracer/`
 
 | file | status | what it is |
 |------|--------|------------|
 | `results/plots/PLOT_DATA.md` | REFERENCE | data behind the plots |
-| `ideas/PLAN.md`, `ideas/001_*`, `ideas/002_*` | HISTORICAL | idea proposals (some now implemented, e.g. PFQ bhist indexing) |
 | `tracer/README.md`, `tracer/*/README.md` | REFERENCE | trace-generation tooling (Pin, CVP converter) |
 | `README.md` (repo root) | REFERENCE | ChampSim project README (upstream + our additions) |
+
+`ideas/` — archived (superseded design brainstorms, e.g. the original
+PC-indexed bypass predictor idea now implemented differently as
+`repl_hist_pc`/`BHIST_MODE=pc`). Recoverable from
+`archive/pre-redwoodcove-scripts` or `blackbox-refactor`'s prior history.
 
 ---
 
@@ -99,7 +101,7 @@ Legend: **[CURRENT]** actively maintained · **[HISTORICAL]** point-in-time, may
 
 1. **`notes/experiment_tracker.md`** — what's running now and what each experiment tests.
 2. **`docs/FINDINGS.md`** — the conclusions (what we found). **`docs/EVIDENCE.md`** — why they cohere (scoring enabler × per-PC multiplier; the Mazumdar→ours morph; what's ruled out).
-3. **`experiments/RESULTS_SUMMARY.md`** + the `00x_*/` dirs — the detailed history behind the design choices.
+3. ~~`experiments/RESULTS_SUMMARY.md` + the `00x_*/` dirs~~ — archived (see above); the detailed early-design history they held is recoverable from `archive/pre-redwoodcove-scripts` if needed.
 4. **`docs/RESEARCH_METHODOLOGY.md`** — how to extend the work without repeating past mistakes.
 5. **`results/paper/main.tex`** + `DATA_SOURCES.md` / `DATA_PROVENANCE.md` — the writeup and how to reproduce each figure.
 
