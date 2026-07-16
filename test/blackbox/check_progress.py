@@ -8,38 +8,50 @@ SOFT_MILESTONE = 70_000_000
 HEARTBEAT_RE = re.compile(r"^Heartbeat CPU 0 instructions: (\d+)")
 
 
-def classify(actual_path, expected_path):
+def read_lines(path):
     try:
-        with open(expected_path) as f:
-            expected_lines = f.readlines()
+        with open(path) as f:
+            return f.readlines()
     except FileNotFoundError:
+        return None
+
+
+def count_complete_lines(path):
+    with open(path, "rb") as f:
+        return f.read().count(b"\n")
+
+
+def max_heartbeat_instructions(lines):
+    maxhb = 0
+    for line in lines:
+        m = HEARTBEAT_RE.match(line)
+        if m:
+            maxhb = max(maxhb, int(m.group(1)))
+    return maxhb
+
+
+def classify(actual_path, expected_path):
+    expected_lines = read_lines(expected_path)
+    if expected_lines is None:
         return "NO-REFERENCE"
 
-    try:
-        with open(actual_path) as f:
-            actual_lines = f.readlines()
-    except FileNotFoundError:
-        return "PENDING"
+    actual_lines = read_lines(actual_path)
     if not actual_lines:
         return "PENDING"
 
     if actual_lines == expected_lines:
         return "FULL_PASS"
 
-    with open(actual_path, "rb") as f:
-        k = f.read().count(b"\n")
+    k = count_complete_lines(actual_path)
     if k == 0:
         return "PENDING"
 
     if actual_lines[:k] != expected_lines[:k]:
         return "FAIL"
 
-    maxhb = 0
-    for line in actual_lines:
-        m = HEARTBEAT_RE.match(line)
-        if m:
-            maxhb = max(maxhb, int(m.group(1)))
-    return "SOFT_PASS" if maxhb >= SOFT_MILESTONE else "RUNNING"
+    if max_heartbeat_instructions(actual_lines) >= SOFT_MILESTONE:
+        return "SOFT_PASS"
+    return "RUNNING"
 
 
 def main(argv):
