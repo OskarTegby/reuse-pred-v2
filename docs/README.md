@@ -6,7 +6,7 @@ per-experiment records) stay next to what they describe; the cross-cutting
 research/methodology/planning docs are collected here in `docs/`.
 
 **Start here, by goal:**
-- *What is the current state — what's running, what's next?* → `notes/experiment_tracker.md` (the live single source of truth)
+- *What is the current state — what's running, what's next?* → `docs/JOBS.md` (the live single source of truth)
 - *What did we find?* → `docs/FINDINGS.md` (the conclusions catalog)
 - *Why are the findings coherent / where does the performance come from?* → `docs/EVIDENCE.md` (controlled ablations + the Mazumdar→ours morph)
 - *How do we run experiments / avoid past mistakes?* → `docs/RESEARCH_METHODOLOGY.md`
@@ -28,8 +28,8 @@ Legend: **[CURRENT]** actively maintained · **[HISTORICAL]** point-in-time, may
 | `RESEARCH_NARRATIVE.md` | REFERENCE | the research story/arc — the claim and how the experiments build it |
 | `RESEARCH_WORKFLOW.md` | REFERENCE | day-to-day workflow (build locally, transfer binary, submit on cluster) |
 | `ROADMAP.md` | CURRENT | phase plan (replacement → bypass → STLB → propagation → sampling → writing) |
-| `EXPERIMENT_INDEX.md` | HISTORICAL | older master index of phases/experiments; superseded for live status by `notes/experiment_tracker.md` |
-| `JOBS.md` | HISTORICAL | early cluster job tracking |
+| `EXPERIMENT_INDEX.md` | HISTORICAL | older master index of phases/experiments; superseded for live status by `docs/JOBS.md` |
+| `JOBS.md` | **CURRENT — primary** | the live ledger: every cluster job, what it tests, status, what landed. Read this first for "what's going on now." (`notes/experiment_tracker.md`, formerly labeled primary here, was archived — stale since 2026-06-21, superseded by this file in practice.) |
 | `ERRORS_LOG.md` | REFERENCE | log of bugs/pitfalls hit (e.g. scoring-mode clobber, env-var expansion) |
 | `SPEEDUP_SUMMARY.md` | HISTORICAL | key speedup numbers — **vs LRU, pre-May-26 config**; for current numbers use `PERFORMANCE_ATTRIBUTION.md` (vs SRRIP) |
 | `PLOT_GENERATION_GUIDE.md` | REFERENCE | how to (re)generate the figures |
@@ -40,12 +40,14 @@ Legend: **[CURRENT]** actively maintained · **[HISTORICAL]** point-in-time, may
 
 ---
 
-## `notes/` — live working notes
+## `notes/` — archived
 
-| file | status | what it is |
-|------|--------|------------|
-| `notes/experiment_tracker.md` | **CURRENT — primary** | the live ledger: every experiment, what it tests, job IDs, status, what landed. Read this first for "what's going on now." |
-| `notes/scoring_design.md` | REFERENCE | design of the liveness scoring modes (the SCORING_MODE=5 3-class system) |
+Removed from the active tree (`experiment_tracker.md` stale since creation
+on 2026-06-21, superseded in practice by `docs/JOBS.md`; `scoring_design.md`
+documented the `SCORING_MODE` 3-class system, confirmed dead code — not
+read anywhere in current `cache.cc`, same lineage as the already-archived
+`sweep_scoring_*`/`test_mode5_*`/`test_scoring_*` scripts). Recoverable from
+git history before this removal.
 
 ---
 
