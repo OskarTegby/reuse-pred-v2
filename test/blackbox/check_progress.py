@@ -39,17 +39,23 @@ def prefix_status(actual_path, actual_lines, expected_lines):
     return None
 
 
+def actual_status(actual_path, expected_lines):
+    actual_lines = read_lines(actual_path)
+    if not actual_lines:
+        return actual_lines, "PENDING"
+    if actual_lines == expected_lines:
+        return actual_lines, "FULL_PASS"
+    return actual_lines, None
+
+
 def classify(actual_path, expected_path):
     expected_lines = read_lines(expected_path)
     if expected_lines is None:
         return "NO-REFERENCE"
 
-    actual_lines = read_lines(actual_path)
-    if not actual_lines:
-        return "PENDING"
-
-    if actual_lines == expected_lines:
-        return "FULL_PASS"
+    actual_lines, result = actual_status(actual_path, expected_lines)
+    if result is not None:
+        return result
 
     result = prefix_status(actual_path, actual_lines, expected_lines)
     if result is not None:
