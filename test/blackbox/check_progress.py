@@ -30,6 +30,15 @@ def max_heartbeat_instructions(lines):
     return maxhb
 
 
+def prefix_status(actual_path, actual_lines, expected_lines):
+    k = count_complete_lines(actual_path)
+    if k == 0:
+        return "PENDING"
+    if actual_lines[:k] != expected_lines[:k]:
+        return "FAIL"
+    return None
+
+
 def classify(actual_path, expected_path):
     expected_lines = read_lines(expected_path)
     if expected_lines is None:
@@ -42,12 +51,9 @@ def classify(actual_path, expected_path):
     if actual_lines == expected_lines:
         return "FULL_PASS"
 
-    k = count_complete_lines(actual_path)
-    if k == 0:
-        return "PENDING"
-
-    if actual_lines[:k] != expected_lines[:k]:
-        return "FAIL"
+    result = prefix_status(actual_path, actual_lines, expected_lines)
+    if result is not None:
+        return result
 
     if max_heartbeat_instructions(actual_lines) >= SOFT_MILESTONE:
         return "SOFT_PASS"
