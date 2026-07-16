@@ -123,7 +123,7 @@ rm -f "$LOCAL_OUT_DIR"/*.out
 
 # ── 2. Submit bb_ jobs ────────────────────────────────────────────────────
 echo "[$(date +%T)] Submitting black-box jobs..."
-submit_out=$(ca "bash $ROOT/scripts/submit/blackbox_validation.sh 2>&1")
+submit_out=$(ca "python3 $ROOT/scripts/submit/blackbox_validation.py 2>&1")
 bb_ids=$(echo "$submit_out" | grep -oP '(?<=job )\d+' | tr '\n' '|')
 bb_ids="${bb_ids%|}"
 n_bb=$(echo "$submit_out" | grep -c 'has been submitted')

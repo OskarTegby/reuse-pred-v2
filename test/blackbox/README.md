@@ -32,7 +32,7 @@ nondeterministic line (the wall-clock `Simulation time` suffix), and byte-diffs
 the **entire** report against `expected/<scenario>.out`.
 
 `run_scenario.py --list` enumerates all scenarios. `CMakeLists.txt`,
-`blackbox_validation.sh`, and `blackbox_run_cluster.sh` all call it to get their
+`blackbox_validation.py`, and `blackbox_run_cluster.sh` all call it to get their
 lists, rather than defining the matrix a second time.
 
 ## Why the full-report reference is enough
