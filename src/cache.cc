@@ -37,87 +37,11 @@ extern "C" void ipv_live_reset_phase_stats(CACHE*) __attribute__((weak));
 
 namespace {
 
-struct PCSubsetTracker {
-  std::unordered_set<uint64_t> llc_pcs, stlb_pcs;
-  bool enabled = false;
-  ~PCSubsetTracker() {
-    if (!enabled || (llc_pcs.empty() && stlb_pcs.empty()))
-      return;
-    const uint64_t n_llc  = static_cast<uint64_t>(llc_pcs.size());
-    const uint64_t n_stlb = static_cast<uint64_t>(stlb_pcs.size());
-    uint64_t in_both = 0;
-    for (auto ip : llc_pcs)
-      if (stlb_pcs.count(ip)) ++in_both;
-    const uint64_t llc_only = n_llc - in_both;
-    std::printf("\n=== PC subset analysis (REPL_HIST_PC_SUBSET) ===\n");
-    std::printf("  STLB unique PCs  : %lu\n", n_stlb);
-    std::printf("  LLC  unique PCs  : %lu\n", n_llc);
-    std::printf("  LLC ∩ STLB       : %lu\n", in_both);
-    std::printf("  LLC ⊆ STLB       : %s  (%.1f%% of LLC PCs appear in STLB)\n",
-                llc_only == 0 ? "YES" : "NO",
-                n_llc ? 100.0 * in_both / n_llc : 0.0);
-    if (llc_only > 0)
-      std::printf("  LLC-only PCs     : %lu  <-- these should not exist\n", llc_only);
-  }
-};
-PCSubsetTracker g_pc_subset;
-
 HistTable g_merged_repl_hist;
 bool      g_merged_hist_ready = false;
 bool      g_use_merged_hist   = false;
 
 } // namespace
-
-uint64_t CACHE::fold_xor(uint64_t val, unsigned bits) const
-{
-  uint64_t result = 0;
-  const uint64_t mask = (1ULL << bits) - 1;
-  for (int i = 0; i < 32 / static_cast<int>(bits); ++i, val >>= bits)
-    result ^= (val & mask);
-  return result;
-}
-
-bool CACHE::dppred_shadow_lookup(const PACKET& handle_pkt)
-{
-  const auto vpn = handle_pkt.address >> OFFSET_BITS;
-  auto it = std::find_if(shadow_table.begin(), shadow_table.end(),
-                         [vpn](const auto& e) { return std::get<0>(e) == vpn; });
-  if (it == shadow_table.end())
-    return false;
-
-  phist.reset(std::get<2>(*it));
-  const auto stored_data = std::get<1>(*it);
-  shadow_table.erase(it);
-
-  auto copy{handle_pkt};
-  copy.data = stored_data;
-  for (auto ret : copy.to_return)
-    ret->return_data(copy);
-
-  PACKET fill_pkt = handle_pkt;
-  fill_pkt.data = stored_data;
-  fill_pkt.to_return = {};
-  handle_fill(fill_pkt);
-
-  return true;
-}
-
-bool CACHE::dppred_bypass(const PACKET& fill_mshr)
-{
-  if (phist.get_score(fill_mshr.ip) <= (int64_t)pconf_thd)
-    return false;
-
-  if (pfq.size() >= pfq_cap)
-    pfq.pop_front();
-  pfq.push_back({fill_mshr.data >> LOG2_PAGE_SIZE, fill_mshr.ip});
-
-  if (shadow_table.size() >= st_size)
-    shadow_table.pop_front();
-  shadow_table.push_back({fill_mshr.address >> OFFSET_BITS, fill_mshr.data, fill_mshr.ip});
-
-  sim_stats.back().llt_bypasses++;
-  return true;
-}
 
 void CACHE::shadow_record_bypass(uint64_t block_addr, uint64_t pc, uint64_t data)
 {
@@ -155,109 +79,22 @@ bool CACHE::liveness_bypass_shadow_hit(const PACKET& handle_pkt)
   return false;
 }
 
-bool CACHE::cbpred_bypass(const PACKET& fill_mshr)
-{
-  if (cbpred_access_pc_) {
-    const uint64_t key = cbpred_key_addr_ ? (fill_mshr.address >> OFFSET_BITS) : fill_mshr.ip;
-    const uint64_t conf = (uint64_t)std::max(int64_t{0}, bhist_flat.get_score(key));
-    if (conf <= bconf_thd)
-      return false;
-    sim_stats.back().llc_bypasses++;
-    return true;
-  }
-  const auto pfn    = fill_mshr.address >> LOG2_PAGE_SIZE;
-  const auto pfq_it = std::find_if(pfq.begin(), pfq.end(),
-                                   [pfn](const auto& e){ return e.first == pfn; });
-  const bool in_pfq = pfq_it != pfq.end();
-
-  if (pfq_ema_mode) {
-    pfq_ema_val = pfq_ema_alpha * (in_pfq ? 1.0 : 0.0) + (1.0 - pfq_ema_alpha) * pfq_ema_val;
-    pfq_gate    = (pfq_ema_val >= pfq_ema_thd);
-  }
-
-  const uint64_t block_addr = fill_mshr.address >> OFFSET_BITS;
-  uint64_t confidence;
-  uint64_t dp_pc = 0;
-  if (cbpred_pc_only_) {
-    if (!in_pfq) return false;
-    dp_pc = pfq_it->second;
-    confidence = (uint64_t)std::max(int64_t{0}, bhist_flat.get_score(dp_pc));
-    record_characterization(dp_pc, block_addr);
-  } else if (use_pc_bhist) {
-    if (!in_pfq) return false;
-    dp_pc = pfq_it->second;
-    confidence = bhist_pc.get(dp_pc, block_addr);
-    record_characterization(dp_pc, block_addr);
-  } else {
-    if (pfq_gate && !in_pfq) return false;
-    confidence = (uint64_t)std::max(int64_t{0}, bhist_flat.get_score(block_addr));
-    record_characterization(0, block_addr);
-  }
-
-  if (confidence <= bconf_thd)
-    return false;
-
-  sim_stats.back().llc_bypasses++;
-  if (!use_pc_bhist && !in_pfq)
-    sim_stats.back().cbpred_nogate_bypasses++;
-  return true;
-}
-
 void CACHE::update_eviction_counters(const BLOCK& victim, liveness_class evict_lv)
 {
-  const liveness_class bypass_lv = victim.accessed ? liveness_class::alive : liveness_class::doa;
-  if (dppred && NAME == "cpu0_STLB")
-    phist.update(victim.ip, bypass_lv);
-  else if (cbpred && NAME == "LLC") {
-    if (cbpred_access_pc_) {
-      const uint64_t key = cbpred_key_addr_ ? (victim.address >> OFFSET_BITS) : victim.ip;
-      bhist_flat.update(key, evict_lv, thd_doa);
-    } else if (cbpred_pc_only_) {
-      if (victim.dp) bhist_flat.update(victim.dp_pc, bypass_lv);
-    } else if (use_pc_bhist) {
-      if (victim.dp) bhist_pc.update(victim.dp_pc, victim.address >> OFFSET_BITS, bypass_lv);
-    } else if (victim.dp || !pfq_gate) {
-      bhist_flat.update(victim.address >> OFFSET_BITS, bypass_lv);
-    }
-  }
-
   if (NAME == "LLC" || NAME == "cpu0_STLB") {
-    bool do_update = true;
-    uint64_t repl_key = 0;
-    if (stlb_llc_prop_ && NAME == "LLC") {
-      const uint64_t own_key = repl_hist_use_addr ? (victim.address >> OFFSET_BITS) : victim.ip;
-      if (prop_ownpc_) {
-        if (victim.prop_pc != 0) repl_key = own_key;
-        else                     do_update = false;
-      } else if (victim.prop_pc != 0) {
-        repl_key = victim.prop_pc;
-      } else if (prop_hybrid_) {
-        repl_key = own_key;
-      } else {
-        do_update = false;
-      }
-    } else {
-      repl_key = repl_hist_use_addr
-          ? ((NAME == "LLC") ? (victim.address >> OFFSET_BITS) : victim.address)
-          : victim.ip;
+    const uint64_t repl_key = repl_hist_use_addr
+        ? ((NAME == "LLC") ? (victim.address >> OFFSET_BITS) : victim.address)
+        : victim.ip;
+    HistTable& tbl = ::g_use_merged_hist ? ::g_merged_repl_hist : repl_hist_pc;
+    const int64_t old_score = (doa_trace_enable_ && !warmup) ? tbl.get_score(repl_key) : 0;
+    tbl.update(repl_key, evict_lv, thd_doa);
+    if (doa_trace_enable_ && !warmup) {
+      const int64_t new_score = tbl.get_score(repl_key);
+      doa_trace_file_ << current_cycle << ',' << victim.ip << ',' << (victim.address >> OFFSET_BITS) << ','
+                       << (evict_lv == liveness_class::doa ? 1 : 0) << ',' << old_score << ',' << new_score << '\n';
     }
-    if (do_update) {
-      HistTable& tbl = ::g_use_merged_hist ? ::g_merged_repl_hist : repl_hist_pc;
-      const int64_t old_score = (doa_trace_enable_ && !warmup) ? tbl.get_score(repl_key) : 0;
-      tbl.update(repl_key, evict_lv, thd_doa);
-      if (doa_trace_enable_ && !warmup) {
-        const int64_t new_score = tbl.get_score(repl_key);
-        doa_trace_file_ << current_cycle << ',' << victim.ip << ',' << (victim.address >> OFFSET_BITS) << ','
-                         << (evict_lv == liveness_class::doa ? 1 : 0) << ',' << old_score << ',' << new_score << '\n';
-      }
-      if (doa_addr_summary_enable_ && !warmup)
-        record_doa_addr_summary(victim.ip, victim.address >> OFFSET_BITS, evict_lv);
-    }
-
-    if (::g_pc_subset.enabled && victim.ip != 0) {
-      if (NAME == "LLC")       ::g_pc_subset.llc_pcs.insert(victim.ip);
-      else                     ::g_pc_subset.stlb_pcs.insert(victim.ip);
-    }
+    if (doa_addr_summary_enable_ && !warmup)
+      record_doa_addr_summary(victim.ip, victim.address >> OFFSET_BITS, evict_lv);
   }
 }
 
@@ -267,72 +104,6 @@ void CACHE::load_predictor_settings()
     const char* val = std::getenv(var);
     return val ? static_cast<uint64_t>(std::stoull(val)) : fallback;
   };
-  auto getenv_double = [](const char* var, double fallback) -> double {
-    const char* val = std::getenv(var);
-    return val ? std::stod(val) : fallback;
-  };
-
-  if (const char* v = std::getenv("DPPRED"); v && std::stoull(v))
-    dppred = true;
-  if (const char* v = std::getenv("CBPRED"); v && std::stoull(v))
-    cbpred = true;
-
-  pconf_thd = getenv_uint64("PCONF_THD", pconf_thd);
-  bconf_thd = getenv_uint64("BCONF_THD", bconf_thd);
-  st_size   = getenv_uint64("ST_SIZE",   st_size);
-  pfq_cap   = getenv_uint64("PFQ_CAP",   pfq_cap);
-
-  {
-    auto parse_policy = [](const char* v) -> HistTable::Policy {
-      if (!v) return HistTable::Policy::LRU;
-      if (std::string_view(v) == "lfu")     return HistTable::Policy::LFU;
-      if (std::string_view(v) == "lfu_doa") return HistTable::Policy::LFU_DOA;
-      if (std::string_view(v) == "srrip")   return HistTable::Policy::SRRIP;
-      return HistTable::Policy::LRU;
-    };
-    const char* hist_repl  = std::getenv("HIST_REPL");
-    const char* phist_repl = std::getenv("PHIST_REPL") ? std::getenv("PHIST_REPL") : hist_repl;
-    const char* bhist_repl = std::getenv("BHIST_REPL") ? std::getenv("BHIST_REPL") : hist_repl;
-
-    const bool maz_unbounded = getenv_uint64("MAZ_UNBOUNDED", 0) != 0;
-    auto log2_floor = [](uint64_t n) { unsigned b = 0; while (n > 1) { n >>= 1; ++b; } return b; };
-
-    const uint64_t pw        = getenv_uint64("PHIST_WAYS",    1024);
-    const uint64_t phist_buf = getenv_uint64("PHIST_BUF_CAP",    0);
-    phist = maz_unbounded ? HistTable() : HistTable(pw, parse_policy(phist_repl), phist_buf);
-    if (!maz_unbounded && getenv_uint64("PHIST_HASH", 0))
-      phist.set_hash(log2_floor(pw));
-
-    if (const char* v = std::getenv("BHIST_MODE"); v && std::string_view(v) == "pc") {
-      use_pc_bhist = true;
-      const uint64_t bpc_ways   = getenv_uint64("BHIST_PC_WAYS",   256);
-      const uint64_t baddr_ways = getenv_uint64("BHIST_ADDR_WAYS",  16);
-      const uint64_t baddr_buf  = getenv_uint64("BHIST_ADDR_BUF",    0);
-      bhist_pc = PCPartitionedTable(bpc_ways, baddr_ways, baddr_buf);
-    } else {
-      use_pc_bhist = false;
-      const uint64_t bw      = getenv_uint64("BHIST_WAYS",    4096);
-      const uint64_t buf_cap = getenv_uint64("BHIST_BUF_CAP",    0);
-      bhist_flat = maz_unbounded ? HistTable() : HistTable(bw, parse_policy(bhist_repl), buf_cap);
-      if (!maz_unbounded && getenv_uint64("BHIST_HASH", 0))
-        bhist_flat.set_hash(log2_floor(bw));
-      if (const char* m = std::getenv("BHIST_MODE"); m && std::string_view(m) == "pconly")
-        cbpred_pc_only_ = true;
-    }
-  }
-  if (const char* v = std::getenv("CBPRED_KEY"); v) {
-    const std::string_view k(v);
-    if      (k == "access_pc")  cbpred_access_pc_ = true;
-    else if (k == "block_addr") { cbpred_access_pc_ = true; cbpred_key_addr_ = true; }
-  }
-
-  if (const char* v = std::getenv("CBPRED_NO_PFQ"); v && std::stoull(v))
-    pfq_gate = false;
-  if (const char* v = std::getenv("PFQ_EMA"); v && std::stoull(v))
-    pfq_ema_mode = true;
-
-  pfq_ema_alpha = getenv_double("PFQ_EMA_ALPHA", pfq_ema_alpha);
-  pfq_ema_thd   = getenv_double("PFQ_EMA_THD", 10.0) / 100.0;
 
   const char* level_doa  = (NAME == "LLC")      ? std::getenv("LLC_THD_DOA")
                          : (NAME == "cpu0_STLB") ? std::getenv("STLB_THD_DOA")
@@ -380,22 +151,6 @@ void CACHE::load_predictor_settings()
     if (dfp > 0)
       repl_hist_pc.set_doa_force_pct(static_cast<int>(dfp));
   }
-  if (const char* v = std::getenv("MID_PROMOTE"); v && std::stoull(v))
-    mid_promote = true;
-
-  if (const char* v = std::getenv("REPL_GUIDANCE"); v && std::stoull(v))
-    repl_guidance_enable = true;
-  repl_guidance_thd = getenv_uint64("REPL_GUIDANCE_THD", 0);
-
-  if (const char* v = std::getenv("LIVENESS_CHAR"); v && std::stoull(v))
-    liveness_char_enable = true;
-
-  if (const char* v = std::getenv("CHARACTERIZATION"); v && std::stoull(v))
-    characterization_enable = true;
-
-  if (const char* v = std::getenv("REPL_HIST_PC_SUBSET"); v && std::stoull(v))
-    ::g_pc_subset.enabled = true;
-
   if (const char* v = std::getenv("REPL_HIST_MODE"); v && std::string_view(v) == "addr")
     repl_hist_use_addr = true;
   auto apply_recheck = [&](HistTable& tbl) {
@@ -414,26 +169,12 @@ void CACHE::load_predictor_settings()
     if (const char* v = std::getenv("LIVENESS_BYPASS"); v && std::stoull(v))
       liveness_bypass = true;
     bypass_thd = getenv_uint64("BYPASS_THD", thd_doa);
-    if (const char* v = std::getenv("BYPASS_DUEL"); v && std::stoull(v)) {
-      bypass_duel_enable_ = true;
-      bypass_duel_ns_   = static_cast<int>(getenv_uint64("BYPASS_DUEL_N_SAMPLERS", 32));
-      bypass_duel_hyst_ = static_cast<int64_t>(getenv_uint64("BYPASS_DUEL_HYST", 0));
-    }
     if (const uint64_t rp = getenv_uint64("BYPASS_RESET_PERIOD", 0); rp > 0)
       repl_hist_pc.set_reset_period(rp);
-    bypass_fire_reset_period_ = getenv_uint64("BYPASS_FIRE_RESET_PERIOD", 0);
     if (const uint64_t rp = getenv_uint64("BYPASS_PC_RESET_PERIOD", 0); rp > 0)
       repl_hist_pc.set_bypass_pc_reset(rp);
     apply_recheck(repl_hist_pc);
     bypass_shadow_cap_ = getenv_uint64("LLC_BYPASS_SHADOW_SIZE", getenv_uint64("BYPASS_SHADOW_SIZE", 0));
-    if (const char* v = std::getenv("STLB_LLC_PROP"); v && std::stoull(v))
-      stlb_llc_prop_ = true;
-    if (const char* v = std::getenv("STLB_LLC_PROP_HYBRID"); v && std::stoull(v))
-      prop_hybrid_ = true;
-    if (const char* v = std::getenv("STLB_LLC_PROP_OWNPC"); v && std::stoull(v))
-      prop_ownpc_ = true;
-    if (const char* v = std::getenv("PROP_GATE"); v && std::string_view(v) == "pc")
-      prop_gate_pc_ = true;
   }
   if (NAME == "cpu0_STLB") {
     if (const char* v = std::getenv("STLB_LIVENESS_BYPASS"); v && std::stoull(v))
@@ -442,14 +183,6 @@ void CACHE::load_predictor_settings()
     if (const uint64_t rp = getenv_uint64("BYPASS_PC_RESET_PERIOD", 0); rp > 0)
       repl_hist_pc.set_bypass_pc_reset(rp);
     apply_recheck(repl_hist_pc);
-    if (const char* v = std::getenv("STLB_LLC_PROP"); v && std::stoull(v))
-      stlb_llc_prop_ = true;
-    if (const char* v = std::getenv("STLB_LLC_PROP_HYBRID"); v && std::stoull(v))
-      prop_hybrid_ = true;
-    if (const char* v = std::getenv("STLB_LLC_PROP_OWNPC"); v && std::stoull(v))
-      prop_ownpc_ = true;
-    if (const char* v = std::getenv("PROP_GATE"); v && std::string_view(v) == "pc")
-      prop_gate_pc_ = true;
     bypass_shadow_cap_ = getenv_uint64("STLB_BYPASS_SHADOW_SIZE", getenv_uint64("BYPASS_SHADOW_SIZE", 0));
   }
 
@@ -464,21 +197,6 @@ void CACHE::load_predictor_settings()
   }
 }
 
-uint64_t CACHE::get_repl_guidance_score(uint64_t block_address, uint64_t dp_pc) const
-{
-  if (!repl_guidance_enable)
-    return 0;
-
-  uint64_t dead_count = 0;
-  if (use_pc_bhist) {
-    dead_count = bhist_pc.get(dp_pc, block_address);
-  } else {
-    dead_count = (uint64_t)std::max(int64_t{0}, bhist_flat.get_score(block_address));
-  }
-
-  return dead_count;
-}
-
 liveness_class CACHE::classify_block_liveness(uint64_t block_address, uint64_t pc) const
 {
   const uint64_t key = repl_hist_use_addr
@@ -487,83 +205,6 @@ liveness_class CACHE::classify_block_liveness(uint64_t block_address, uint64_t p
   if (::g_use_merged_hist)
     return ::g_merged_repl_hist.classify(key, thd_doa);
   return repl_hist_pc.classify(key, thd_doa);
-}
-
-void CACHE::record_characterization(uint64_t dp_pc, uint64_t block_address)
-{
-  if (!characterization_enable)
-    return;
-  pc_to_addrs[dp_pc].insert(block_address);
-}
-
-void CACHE::print_characterization_stats() const
-{
-  if (!characterization_enable || pc_to_addrs.empty())
-    return;
-
-  uint64_t total_pcs = pc_to_addrs.size();
-  uint64_t total_pairs = 0;
-  uint64_t min_addrs = UINT64_MAX;
-  uint64_t max_addrs = 0;
-  double sum_addrs = 0.0;
-
-  for (const auto& [pc, addrs] : pc_to_addrs) {
-    uint64_t addr_count = addrs.size();
-    total_pairs += addr_count;
-    min_addrs = std::min(min_addrs, addr_count);
-    max_addrs = std::max(max_addrs, addr_count);
-    sum_addrs += addr_count;
-  }
-
-  double avg_addrs = sum_addrs / total_pcs;
-  std::cout << "\n[CHARACTERIZATION] Unbounded (PC, address) demand:\n"
-            << "  Unique PCs: " << total_pcs << "\n"
-            << "  Total (PC, address) pairs: " << total_pairs << "\n"
-            << "  Avg addresses per PC: " << avg_addrs << "\n"
-            << "  Min/Max addresses per PC: " << min_addrs << " / " << max_addrs << "\n"
-            << "  Recommended fixed budget: " << total_pairs << " entries or ~" << (uint64_t)std::ceil(avg_addrs)
-            << " per-PC with " << total_pcs << " PCs\n";
-}
-
-void CACHE::record_liveness_char(uint64_t pc, uint64_t install_cycle,
-                                   uint64_t last_hit_cycle, uint64_t evict_cycle,
-                                   bool accessed)
-{
-  auto& entry = pc_liveness_char[pc];
-  entry.total++;
-  if (!accessed) {
-    entry.doa++;
-    return;
-  }
-  const uint64_t lifetime     = evict_cycle - install_cycle;
-  const uint64_t time_til_end = evict_cycle - last_hit_cycle;
-  if (lifetime == 0 || time_til_end <= lifetime / 2)
-    entry.mostly_alive++;
-  else
-    entry.mostly_dead++;
-}
-
-void CACHE::print_liveness_char() const
-{
-  if (!liveness_char_enable)
-    return;
-
-  if (!roi_stats.empty()) {
-    const char* rv = std::getenv("RECENCY_VERSION");
-    const int ver = (rv && (rv[0] == '1' || rv[0] == '3')) ? (rv[0] - '0') : 2;
-    const auto& r = roi_stats.back().recency_state;
-    printf("%s RECENCY_STATE v=%d dead=%lu mid_lru=%lu mid_mru=%lu live=%lu\n", NAME.c_str(), ver, r[0], r[1], r[2], r[3]);
-  }
-
-  if (pc_liveness_char.empty())
-    return;
-
-  printf("%s LIVENESS_CHAR BEGIN\n", NAME.c_str());
-  for (const auto& [pc, e] : pc_liveness_char) {
-    printf("  PC=0x%016lx total=%lu doa=%lu mostly_dead=%lu mostly_alive=%lu\n",
-           pc, e.total, e.doa, e.mostly_dead, e.mostly_alive);
-  }
-  printf("%s LIVENESS_CHAR END\n", NAME.c_str());
 }
 
 void CACHE::record_doa_addr_summary(uint64_t pc, uint64_t addr, liveness_class evict_lv)
@@ -608,71 +249,20 @@ bool CACHE::handle_fill(const PACKET& fill_mshr)
   if (way == set_end) {
     way = std::next(set_begin, impl_find_victim(fill_mshr.cpu, fill_mshr.instr_id, get_set_index(fill_mshr.address), &*set_begin, fill_mshr.ip,
                                                 fill_mshr.address, fill_mshr.type));
-
-    if (repl_guidance_enable) {
-      auto best_victim = way;
-      uint64_t best_score = get_repl_guidance_score(best_victim->address, best_victim->dp_pc);
-
-      for (auto it = set_begin; it != set_end; ++it) {
-        if (!it->valid)
-          continue;
-        uint64_t score = get_repl_guidance_score(it->address, it->dp_pc);
-        if (score > best_score) {
-          best_victim = it;
-          best_score = score;
-        }
-      }
-
-      way = best_victim;
-    }
-  }
-
-  bool bduel_use_b = false;
-  if (bypass_duel_enable_ && NAME == "LLC" && fill_mshr.type != WRITE) {
-    const uint32_t fill_set = get_set_index(fill_mshr.address);
-    const int step = bypass_duel_ns_ > 0
-                     ? static_cast<int>(NUM_SET) / bypass_duel_ns_ : 0;
-    const bool is_a = (step > 0 && static_cast<int>(fill_set) % step == 0);
-    const bool is_b = (step > 0 && static_cast<int>(fill_set) % step == step / 2);
-    if (is_a) bypass_duel_lat_a_ += static_cast<int64_t>(last_fill_latency);
-    if (is_b) bypass_duel_lat_b_ += static_cast<int64_t>(last_fill_latency);
-    const bool b_wins = (bypass_duel_lat_a_ - bypass_duel_lat_b_ > bypass_duel_hyst_);
-    bduel_use_b = is_b || (!is_a && step > 0 && b_wins);
   }
 
   bool predictor_bypassed = false;
   if (way != set_end && way->valid) {
-    uint64_t bypass_key = repl_hist_use_addr
+    const uint64_t bypass_key = repl_hist_use_addr
         ? (fill_mshr.address >> OFFSET_BITS) : fill_mshr.ip;
-    bool prop_ok = true;
-    if (stlb_llc_prop_ && NAME == "LLC") {
-      if (prop_gate_pc_) {
-        if (!stlb_dead_pcs.count(fill_mshr.ip) && !prop_hybrid_)
-          prop_ok = false;
-      } else {
-        const auto pfn = fill_mshr.address >> LOG2_PAGE_SIZE;
-        const auto mit = prop_map.find(pfn);
-        if (mit != prop_map.end()) {
-          if (!prop_ownpc_) bypass_key = mit->second;
-        } else if (!prop_hybrid_) {
-          prop_ok = false;
-        }
-      }
-    }
     const bool lv_doa = liveness_bypass && NAME == "LLC"
-        && fill_mshr.type != TRANSLATION && prop_ok
+        && fill_mshr.type != TRANSLATION
         && repl_hist_pc.classify(bypass_key, bypass_thd) == liveness_class::doa;
     const bool lv_probe  = lv_doa && repl_hist_pc.should_probe(bypass_key);
-    const bool lv_bypass = lv_doa && !lv_probe
-        && (!bypass_duel_enable_ || bduel_use_b);
-    if (bypass_duel_enable_ && lv_doa && !lv_probe && !bduel_use_b)
-      sim_stats.back().bypass_duel_suppressed++;
+    const bool lv_bypass = lv_doa && !lv_probe;
     if (lv_probe) sim_stats.back().liveness_probes++;
     if (lv_bypass) {
       sim_stats.back().liveness_bypasses++;
-      if (bypass_fire_reset_period_ > 0 &&
-          ++bypass_fire_count_ % bypass_fire_reset_period_ == 0)
-        repl_hist_pc.reset_scores();
       repl_hist_pc.record_bypass(bypass_key);
       shadow_record_bypass(fill_mshr.address >> OFFSET_BITS, fill_mshr.ip, fill_mshr.data);
     }
@@ -686,16 +276,9 @@ bool CACHE::handle_fill(const PACKET& fill_mshr)
       sim_stats.back().liveness_bypasses++;
       repl_hist_pc.record_bypass(fill_mshr.ip);
       shadow_record_bypass(fill_mshr.address >> OFFSET_BITS, fill_mshr.ip, fill_mshr.data);
-      if (stlb_llc_prop_) {
-        prop_map[fill_mshr.data >> LOG2_PAGE_SIZE] = fill_mshr.ip;
-        stlb_dead_pcs.insert(fill_mshr.ip);
-      }
     }
 
-    const bool bypassed =
-      (dppred && NAME == "cpu0_STLB" && dppred_bypass(fill_mshr)) ||
-      (cbpred && NAME == "LLC" && fill_mshr.type != TRANSLATION && cbpred_bypass(fill_mshr)) ||
-      lv_bypass || stlb_lv_bypass;
+    const bool bypassed = lv_bypass || stlb_lv_bypass;
 
     if (bypassed) {
       predictor_bypassed = true;
@@ -751,11 +334,6 @@ bool CACHE::handle_fill(const PACKET& fill_mshr)
 
       if (way->valid) {
         sim_stats.back().evictions++;
-        if (liveness_char_enable) {
-          record_liveness_char(way->ip, way->install_cycle, way->last_hit_cycle,
-                               current_cycle, way->accessed);
-          sim_stats.back().recency_state[way->eviction_state]++;
-        }
         if (!way->accessed) {
           sim_stats.back().doa++;
           if (NAME == "LLC" && stlb_block_ptr != nullptr) {
@@ -776,24 +354,6 @@ bool CACHE::handle_fill(const PACKET& fill_mshr)
       way->prefetch = fill_mshr.prefetch_from_this;
       way->dirty = (fill_mshr.type == WRITE);
       way->accessed = false;
-      {
-        const auto pfn_fill = fill_mshr.address >> LOG2_PAGE_SIZE;
-        const auto pit = std::find_if(pfq.begin(), pfq.end(),
-                                      [pfn_fill](const auto& e){ return e.first == pfn_fill; });
-        way->dp    = cbpred && NAME == "LLC" && fill_mshr.type != TRANSLATION && pit != pfq.end();
-        way->dp_pc = way->dp ? pit->second : 0;
-        if (way->dp)
-          sim_stats.back().pfq_hits++;
-        way->prop_pc = 0;
-        if (stlb_llc_prop_ && NAME == "LLC" && fill_mshr.type != TRANSLATION) {
-          if (prop_gate_pc_) {
-            if (stlb_dead_pcs.count(fill_mshr.ip)) way->prop_pc = fill_mshr.ip;
-          } else {
-            const auto mit = prop_map.find(pfn_fill);
-            if (mit != prop_map.end()) way->prop_pc = mit->second;
-          }
-        }
-      }
       way->address = fill_mshr.address;
       way->v_address = fill_mshr.v_address;
       way->data = fill_mshr.data;
@@ -805,7 +365,6 @@ bool CACHE::handle_fill(const PACKET& fill_mshr)
             ? (fill_mshr.address >> OFFSET_BITS) : fill_mshr.ip;
         repl_hist_pc.maybe_force_doa(force_key, static_cast<int64_t>(thd_doa));
       }
-      way->ins_class = classify_block_liveness(fill_mshr.address, fill_mshr.ip);
 
       metadata_thru =
           impl_prefetcher_cache_fill(pkt_address, get_set_index(fill_mshr.address), way_idx, fill_mshr.type == PREFETCH, evicting_address, metadata_thru);
@@ -937,9 +496,6 @@ bool CACHE::handle_miss(const PACKET& handle_pkt)
       mshr_entry->to_return = std::move(to_return);
     }
   } else {
-    if (dppred && NAME == "cpu0_STLB" && dppred_shadow_lookup(handle_pkt))
-      return true;
-
     if (liveness_bypass_shadow_hit(handle_pkt))
       return true;
 
@@ -1233,8 +789,6 @@ void CACHE::begin_phase()
   roi_stats.back().name = NAME;
   sim_stats.back().name = NAME;
 
-  phist.reset_stats();
-  bhist_flat.reset_stats();
   repl_hist_pc.reset_stats();
   g_merged_repl_hist.reset_stats();
 
@@ -1244,8 +798,6 @@ void CACHE::begin_phase()
     srrip_live_reset_phase_stats(this);
   if (ipv_live_reset_phase_stats)
     ipv_live_reset_phase_stats(this);
-
-  pc_liveness_char.clear();
 }
 
 void CACHE::end_phase(unsigned finished_cpu)
@@ -1263,37 +815,15 @@ void CACHE::end_phase(unsigned finished_cpu)
 
   roi_stats.back().total_miss_latency = sim_stats.back().total_miss_latency;
 
-  roi_stats.back().llt_bypasses            = sim_stats.back().llt_bypasses;
-  roi_stats.back().llc_bypasses            = sim_stats.back().llc_bypasses;
-  roi_stats.back().pfq_hits                = sim_stats.back().pfq_hits;
-  roi_stats.back().cbpred_nogate_bypasses  = sim_stats.back().cbpred_nogate_bypasses;
   roi_stats.back().liveness_bypasses       = sim_stats.back().liveness_bypasses;
   roi_stats.back().liveness_probes         = sim_stats.back().liveness_probes;
   roi_stats.back().liveness_bypass_shadow_hits = sim_stats.back().liveness_bypass_shadow_hits;
-  roi_stats.back().bypass_duel_suppressed  = sim_stats.back().bypass_duel_suppressed;
 
   roi_stats.back().evictions    = sim_stats.back().evictions;
   roi_stats.back().doa          = sim_stats.back().doa;
   roi_stats.back().doa_stlb_found    = sim_stats.back().doa_stlb_found;
   roi_stats.back().doa_stlb_also_doa = sim_stats.back().doa_stlb_also_doa;
-  for (int i = 0; i < 4; ++i)
-    roi_stats.back().recency_state[i] = sim_stats.back().recency_state[i];
 
-  {
-    const auto& ps = phist.get_stats();
-    roi_stats.back().phist_queries       = ps.queries;
-    roi_stats.back().phist_table_hits    = ps.table_hits;
-    roi_stats.back().phist_promotions    = ps.promotions;
-    roi_stats.back().phist_promoted_hits = ps.promoted_hits;
-    const auto& bs = bhist_flat.get_stats();
-    roi_stats.back().bhist_queries       = bs.queries;
-    roi_stats.back().bhist_table_hits    = bs.table_hits;
-    roi_stats.back().bhist_promotions    = bs.promotions;
-    roi_stats.back().bhist_promoted_hits = bs.promoted_hits;
-  }
-
-  print_characterization_stats();
-  print_liveness_char();
   print_doa_addr_summary();
 }
 

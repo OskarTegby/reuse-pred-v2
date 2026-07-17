@@ -743,144 +743,6 @@ private:
   }
 };
 
-class PCPartitionedTable {
-public:
-  PCPartitionedTable() = default;
-  PCPartitionedTable(uint64_t pc_ways, uint64_t addr_ways, uint64_t addr_buf_cap = 0)
-    : addr_ways_(addr_ways), addr_buf_cap_(addr_buf_cap), entries_(pc_ways)
-  {
-    for (auto& e : entries_) {
-      e.addrs.resize(addr_ways);
-      e.buf.resize(addr_buf_cap);
-    }
-  }
-
-  uint64_t get(uint64_t pc, uint64_t addr) const {
-    for (const auto& e : entries_) {
-      if (!e.valid || e.pc != pc) continue;
-      for (const auto& a : e.addrs)
-        if (a.valid && a.addr == addr) return a.count;
-      return 0;
-    }
-    return 0;
-  }
-
-  void update(uint64_t pc, uint64_t addr, liveness_class lv) {
-    PCEntry* pe = nullptr;
-    for (auto& e : entries_)
-      if (e.valid && e.pc == pc) { pe = &e; break; }
-    if (!pe) {
-      pe = &evict_pc();
-      pe->pc    = pc;
-      pe->valid = true;
-      pe->freq  = 0;
-      for (auto& a : pe->addrs) a = AddrEntry{};
-      for (auto& b : pe->buf)   b = BufEntry{};
-    }
-    if (lv == liveness_class::doa) pe->freq++;
-
-    for (auto& a : pe->addrs) {
-      if (a.valid && a.addr == addr) {
-        if (lv == liveness_class::doa) { a.count = std::min(a.count + 1, MAX_COUNTER); a.freq++; }
-        else                           { a.count = 0; }
-        return;
-      }
-    }
-
-    if (addr_buf_cap_ > 0) {
-      for (auto& b : pe->buf) {
-        if (b.valid && b.addr == addr) {
-          if (lv == liveness_class::doa) {
-            b.dead_count++;
-            if (b.dead_count > addr_lfu_victim_freq(*pe)) {
-              auto& slot  = evict_addr(*pe);
-              slot.addr   = b.addr;
-              slot.count  = b.dead_count;
-              slot.freq   = b.dead_count;
-              slot.valid  = true;
-              b = BufEntry{};
-            }
-          } else {
-            b.dead_count = 0;
-          }
-          return;
-        }
-      }
-      if (lv == liveness_class::doa) {
-        auto& bslot      = buf_victim(*pe);
-        bslot.addr       = addr;
-        bslot.dead_count = 1;
-        bslot.ts         = ++buf_clock_;
-        bslot.valid      = true;
-      }
-      return;
-    }
-
-    if (lv == liveness_class::doa) {
-      auto& slot = evict_addr(*pe);
-      slot.addr  = addr;
-      slot.count = 1;
-      slot.freq  = 1;
-      slot.valid = true;
-    }
-  }
-
-private:
-  static constexpr uint64_t MAX_COUNTER = 16;
-
-  struct AddrEntry {
-    uint64_t addr        = 0;
-    uint64_t count       = 0;
-    uint64_t freq        = 0;
-    bool     valid       = false;
-  };
-  struct BufEntry {
-    uint64_t addr       = 0;
-    uint64_t dead_count = 0;
-    uint64_t ts         = 0;
-    bool     valid      = false;
-  };
-  struct PCEntry {
-    uint64_t pc    = 0;
-    uint64_t freq  = 0;
-    bool     valid = false;
-    std::vector<AddrEntry> addrs;
-    std::vector<BufEntry>  buf;
-  };
-
-  uint64_t addr_ways_    = 0;
-  uint64_t addr_buf_cap_ = 0;
-  uint64_t buf_clock_    = 0;
-  std::vector<PCEntry> entries_;
-
-  PCEntry& evict_pc() {
-    for (auto& e : entries_) if (!e.valid) return e;
-    return *std::min_element(entries_.begin(), entries_.end(),
-      [](const PCEntry& a, const PCEntry& b){ return a.freq < b.freq; });
-  }
-
-  uint64_t addr_lfu_victim_freq(const PCEntry& pe) const {
-    uint64_t min_f = UINT64_MAX;
-    for (const auto& a : pe.addrs) {
-      if (!a.valid) return 0;
-      min_f = std::min(min_f, a.freq);
-    }
-    return min_f;
-  }
-
-  AddrEntry& evict_addr(PCEntry& pe) {
-    for (auto& a : pe.addrs) if (!a.valid) return a;
-    return *std::min_element(pe.addrs.begin(), pe.addrs.end(),
-      [](const AddrEntry& a, const AddrEntry& b){ return a.freq < b.freq; });
-  }
-
-  BufEntry& buf_victim(PCEntry& pe) {
-    for (auto& b : pe.buf) if (!b.valid) return b;
-    return *std::min_element(pe.buf.begin(), pe.buf.end(),
-      [](const BufEntry& a, const BufEntry& b){ return a.ts < b.ts; });
-  }
-};
-
 struct cache_stats {
   std::string name;
   // prefetch stats
@@ -895,29 +757,14 @@ struct cache_stats {
 
   uint64_t total_miss_latency = 0;
 
-  uint64_t llt_bypasses = 0;
-  uint64_t llc_bypasses = 0;
-  uint64_t pfq_hits = 0;
-  uint64_t cbpred_nogate_bypasses = 0;
   uint64_t liveness_bypasses = 0;
   uint64_t liveness_probes   = 0;
   uint64_t liveness_bypass_shadow_hits = 0;
-  uint64_t bypass_duel_suppressed = 0;
 
   uint64_t evictions    = 0;
   uint64_t doa          = 0;
-  uint64_t recency_state[4] = {};
   uint64_t doa_stlb_found    = 0;
   uint64_t doa_stlb_also_doa = 0;
-
-  uint64_t phist_queries       = 0;
-  uint64_t phist_table_hits    = 0;
-  uint64_t phist_promotions    = 0;
-  uint64_t phist_promoted_hits = 0;
-  uint64_t bhist_queries       = 0;
-  uint64_t bhist_table_hits    = 0;
-  uint64_t bhist_promotions    = 0;
-  uint64_t bhist_promoted_hits = 0;
 };
 
 struct cache_queue_stats {
@@ -956,9 +803,6 @@ class CACHE : public champsim::operable, public MemoryRequestConsumer, public Me
     bool prefetch = false;
     bool dirty = false;
     bool accessed = false;
-    bool dp = false;
-    uint64_t dp_pc = 0;
-    uint64_t prop_pc = 0;
 
     uint64_t address = 0;
     uint64_t v_address = 0;
@@ -969,8 +813,6 @@ class CACHE : public champsim::operable, public MemoryRequestConsumer, public Me
 
     uint64_t install_cycle   = 0;
     uint64_t last_hit_cycle  = 0;
-    liveness_class ins_class = liveness_class::alive;
-    uint8_t eviction_state = 0;
   };
   using set_type = std::vector<BLOCK>;
 
@@ -978,42 +820,15 @@ class CACHE : public champsim::operable, public MemoryRequestConsumer, public Me
   std::pair<set_type::const_iterator, set_type::const_iterator> get_set_span(uint64_t address) const;
   std::size_t get_set_index(uint64_t address) const;
 
-  // ── dpPred-cbPred predictor ──────────────────────────────────────────────
-
-  inline static std::deque<std::pair<uint64_t, uint64_t>> pfq{};
-  inline static std::unordered_map<uint64_t, uint64_t> prop_map{};
-  inline static std::unordered_set<uint64_t> stlb_dead_pcs{};
-  inline static uint64_t pfq_cap = 8;
-
   inline static const set_type* stlb_block_ptr = nullptr;
 
-  bool dppred = false;
-  bool cbpred = false;
-  uint64_t pconf_thd = 6;
-  uint64_t bconf_thd = 6;
   uint64_t thd_doa  = 1;
-  bool mid_promote = false;
-  uint64_t st_size = 2;
-
-  HistTable phist;
-  bool use_pc_bhist = false;
-  bool cbpred_pc_only_ = false;
-  bool cbpred_access_pc_ = false;
-  bool cbpred_key_addr_  = false;
-  HistTable          bhist_flat;
-  PCPartitionedTable bhist_pc;
-  std::deque<std::tuple<uint64_t, uint64_t, uint64_t>> shadow_table;
 
   uint64_t bypass_shadow_cap_ = 0;
   std::unordered_map<uint64_t, std::pair<uint64_t, uint64_t>> bypass_shadow_;
   std::deque<uint64_t> bypass_shadow_fifo_;
 
-  bool repl_guidance_enable = false;
-  uint64_t repl_guidance_thd = 0;
-
   uint64_t last_fill_latency = 0;
-
-  uint64_t get_repl_guidance_score(uint64_t block_address, uint64_t dp_pc) const;
 
   HistTable repl_hist_pc;
   bool repl_hist_use_addr{false};
@@ -1024,33 +839,8 @@ class CACHE : public champsim::operable, public MemoryRequestConsumer, public Me
   uint64_t bypass_thd{0};
   bool stlb_liveness_bypass{false};
   uint64_t stlb_bypass_thd{0};
-  bool stlb_llc_prop_{false};
-  bool prop_hybrid_{false};
-  bool prop_ownpc_{false};
-  bool prop_gate_pc_{false};
-  uint64_t bypass_fire_reset_period_{0};
-  uint64_t bypass_fire_count_{0};
-
-  bool     bypass_duel_enable_{false};
-  int      bypass_duel_ns_{0};
-  int64_t  bypass_duel_lat_a_{0};
-  int64_t  bypass_duel_lat_b_{0};
-  int64_t  bypass_duel_hyst_{0};
 
   liveness_class classify_block_liveness(uint64_t block_address, uint64_t pc) const;
-
-  bool characterization_enable = false;
-  std::map<uint64_t, std::set<uint64_t>> pc_to_addrs;
-  void record_characterization(uint64_t dp_pc, uint64_t block_address);
-  void print_characterization_stats() const;
-
-  struct PCLivenessEntry { uint64_t total = 0, doa = 0, mostly_dead = 0, mostly_alive = 0; };
-  bool liveness_char_enable = false;
-  std::unordered_map<uint64_t, PCLivenessEntry> pc_liveness_char;
-  void record_liveness_char(uint64_t pc, uint64_t install_cycle,
-                            uint64_t last_hit_cycle, uint64_t evict_cycle,
-                            bool accessed);
-  void print_liveness_char() const;
 
   struct AddrCounterEntry { int64_t score = 0; bool ever_reset = false; };
   bool doa_addr_summary_enable_ = false;
@@ -1059,24 +849,9 @@ class CACHE : public champsim::operable, public MemoryRequestConsumer, public Me
   void record_doa_addr_summary(uint64_t pc, uint64_t addr, liveness_class evict_lv);
   void print_doa_addr_summary() const;
 
-  bool pfq_gate = true;
-  bool pfq_ema_mode = false;
-  double pfq_ema_val = 1.0;
-  double pfq_ema_alpha = 1.0 / 1024.0;
-  double pfq_ema_thd = 0.10;
-
-  static constexpr unsigned  VPN_BITS    = 4;
-  static constexpr unsigned  PC_BITS     = 6;
-  static constexpr unsigned  BHT_BITS    = 12;
-  static constexpr uint64_t  MAX_COUNTER = 16;
-
-  uint64_t fold_xor(uint64_t val, unsigned bits) const;
   void load_predictor_settings();
-  bool dppred_shadow_lookup(const PACKET& handle_pkt);
-  bool dppred_bypass(const PACKET& fill_mshr);
   void shadow_record_bypass(uint64_t block_addr, uint64_t pc, uint64_t data);
   bool liveness_bypass_shadow_hit(const PACKET& handle_pkt);
-  bool cbpred_bypass(const PACKET& fill_mshr);
   void update_eviction_counters(const BLOCK& victim, liveness_class lv);
 
 public:
