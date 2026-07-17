@@ -4,9 +4,8 @@
 from the liveness-replacement-policy work, kept so a suspicious code change
 can be checked by hand (`diff` a fresh run against the matching file here).
 There is deliberately no test runner, CMake integration, or CI wiring around
-these — that infrastructure (`test/blackbox/`) was removed on 2026-07-16
-because maintaining it was costing more time than it saved. This directory is
-just the goldens plus the information needed to reproduce a run.
+these: This directory just contains the reference results and the information
+needed to reproduce a run.
 
 ## Scenario naming
 
@@ -24,14 +23,18 @@ conditions × 4 traces = 60 files.
 
 ## Traces
 
-| key | path |
-|---|---|
-| `pr` | `trace-files/ligra/ligra_PageRank.com-lj.ungraph.gcc_6.3.0_O3.drop_51000M.length_250M.champsimtrace.xz` |
-| `cactus` | `<dpc3 shared mount>/607.cactuBSSN_s-3477B.champsimtrace.xz` |
-| `bwaves` | `<dpc3 shared mount>/603.bwaves_s-891B.champsimtrace.xz` |
-| `qmm` | `trace-files/QMM/srv_12.champsimtrace.xz` |
+The four traces aren't interchangeable — each is picked for a specific reason,
+since the mechanisms here only show up when the workload actually triggers
+them:
 
-`<dpc3 shared mount>` was `/home/users/shared/traces/dpc3_traces` on Castillo.
+| key | path | why this one |
+|---|---|---|
+| `pr` | `trace-files/ligra/ligra_PageRank.com-lj.ungraph.gcc_6.3.0_O3.drop_51000M.length_250M.champsimtrace.xz` | Graph workload where dead-on-arrival blocks are common — exercises LLC bypass and the aggressive duel arm. |
+| `cactus` | `<dpc3 shared mount>/607.cactuBSSN_s-3477B.champsimtrace.xz` | Many distinct PCs keep the history table genuinely active (not just idle), and its temporal-reuse pattern is where the gentle, non-bypass arm wins — the counterweight to `pr`. |
+| `bwaves` | `<dpc3 shared mount>/603.bwaves_s-891B.champsimtrace.xz` | Streaming access pattern where LLC bypass has its largest impact; also ~4x faster to simulate than the lbm trace originally used for this role, same coverage. |
+| `qmm` | `trace-files/QMM/srv_12.champsimtrace.xz` | Many-PC workload structurally different from `cactus` — guards against the history-table behavior being an artifact of one trace's specific PC distribution. |
+
+`<dpc3 shared mount>` is `/home/users/shared/traces/dpc3_traces` on Castillo.
 
 ## Run settings
 
@@ -61,46 +64,25 @@ everything else is deterministic given the same binary + trace.
 | srrip | duel | `champsim_srrip_live` | `base` fragment + `SRRIP_DOA_INS_RRPV=2 SRRIP_DOA_HIT_RRPV=2 SRRIP_DOA_INS_RRPV_B=3 SRRIP_DOA_HIT_RRPV_B=0 DUEL_N_SAMPLERS=32` |
 | srrip | addr | `champsim_srrip_live` | `base` fragment + `addr` fragment |
 | ipv | base | `champsim_ipv` | (none) |
-| ipv | fixed | `champsim_ipv_live` | `base` fragment + `IPV_DOA=0:1:2:2:3` |
-| ipv | bypass | `champsim_ipv_live` | `base` fragment + `SRRIP_LIVE_TARGET=none LIVENESS_BYPASS=1` + `IPV_DOA=0:1:2:2:3` |
-| ipv | duel | `champsim_ipv_live` | `base` fragment + `DUEL_N_CONFIGS=2 DUEL_N_SAMPLERS=32 IPV_DOA_0=0:1:2:2:2 IPV_DOA_1=0:1:2:2:3 DUEL_METRIC=latency` |
-| ipv | addr | `champsim_ipv_live` | `base` fragment + `IPV_DOA=0:1:2:2:3` + `addr` fragment |
+| ipv | fixed | `champsim_ipv_live` | `base` fragment |
+| ipv | bypass | `champsim_ipv_live` | `SRRIP_LIVE_TARGET=none LIVENESS_BYPASS=1` |
+| ipv | duel | `champsim_ipv_live` | `base` fragment + `DUEL_N_CONFIGS=2 DUEL_N_SAMPLERS=32 DUEL_METRIC=latency` |
+| ipv | addr | `champsim_ipv_live` | `base` fragment + `addr` fragment |
 
 `base` fragment = `THD_DOA=6 BHIST_MODE=pc SRRIP_LIVE_TARGET=llc`. `addr`
 fragment = `REPL_HIST_MODE=addr REPL_HIST_LLC_CAP=4096 REPL_HIST_REPL=lfu_doa`.
 
+### IPV mechanism
+
+`champsim_ipv`/`champsim_ipv_live` implement IPV as a **full k-way
+permutation** (Jimenez, MICRO 2013): each LLC set is a strict order/rank
+permutation over all `NUM_WAY` positions, like real LRU. Default vector: 
+Jimenez's WI-GIPPR (16-way), resampled for Redwood Cove's 12-way LLC; 
+DoA defaults to that vector floor-clamped at `floor(2*NUM_WAY/3)`, 
+same ratio `lru_live.cc` uses.
+
 ## Provenance
 
-Generated on commit **`f4b985ea553b0a608bc93906a3834e585fa592bd`**
-(2026-07-08, "test: update expected outputs from cluster full runs" — on
-`main` at the time, later inherited by `blackbox-refactor`), built from
-**`champsim_maz_policies.json`** (LLC 2048 sets × 16 ways, L2C 2048×16) — not
-`champsim_config.json`. That config file was itself archived in
-`60284871dd6a` ("archive everything non-Redwood-Cove"); its exact content at
-generation time is still recoverable with:
+Generated on commit **`0ebb15cfac7730dbad71cf7590f42156fc54c36d`**
+(2026-07-17) from the current `champsim_config.json` (Redwood Cove).
 
-```sh
-git show f4b985ea553b:champsim_maz_policies.json
-```
-
-## Known caveats — read before diffing
-
-1. **Not reproducible from the current `champsim_config.json`.** That file
-   now only builds the Redwood Cove architecture (LLC 4096×12) and defines
-   just 4 executables (`champsim_lru`, `champsim_srrip`, `champsim_lru_live`,
-   `champsim_srrip_live` — no `ipv`/`ipv_live` at all). None of these 60
-   references can be regenerated from today's default build; you'd need to
-   resurrect `champsim_maz_policies.json` from history first (see above) and
-   build against that.
-
-2. **One statistic is known-stale as of one day after generation.** Commit
-   `984706a8eebf` (2026-07-09, "feat: allocate history-table entries only on
-   DoA evictions") changed the liveness history table so an alive eviction of
-   an untracked key no longer allocates a zero entry or records a
-   transition. Any non-`base` (i.e. `*_live`) scenario run against current
-   `inc/cache.h`/`src/cache.cc` can show a diff confined to the
-   transition/entry-count statistic from this change alone — that is a real,
-   expected difference from this one commit, not a regression. `base`
-   scenarios (no history table involved) are unaffected. If you need a clean
-   diff against current behavior, regenerate first (`GENERATE=1` against the
-   reconstructed binaries, matching the invocation above).
