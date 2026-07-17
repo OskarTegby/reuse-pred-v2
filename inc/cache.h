@@ -850,9 +850,18 @@ class CACHE : public champsim::operable, public MemoryRequestConsumer, public Me
   void print_doa_addr_summary() const;
 
   void load_predictor_settings();
+  void configure_thd_doa();
+  void configure_repl_hist_table();
+  void configure_doa_diagnostics();
+  void apply_bypass_recheck(HistTable& tbl);
+  void configure_bypass_llc();
+  void configure_bypass_stlb();
+  void configure_merged_hist();
   void shadow_record_bypass(uint64_t block_addr, uint64_t pc, uint64_t data);
   bool liveness_bypass_shadow_hit(const PACKET& handle_pkt);
   void update_eviction_counters(const BLOCK& victim, liveness_class lv);
+  void record_doa_stlb_corr(const BLOCK& victim);
+  bool evaluate_liveness_bypass(uint64_t key, uint64_t level_thd, bool enabled);
 
 public:
   struct NonTranslatingQueues : public champsim::operable {

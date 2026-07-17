@@ -41,6 +41,12 @@ HistTable g_merged_repl_hist;
 bool      g_merged_hist_ready = false;
 bool      g_use_merged_hist   = false;
 
+uint64_t getenv_uint64(const char* var, uint64_t fallback)
+{
+  const char* val = std::getenv(var);
+  return val ? static_cast<uint64_t>(std::stoull(val)) : fallback;
+}
+
 } // namespace
 
 void CACHE::shadow_record_bypass(uint64_t block_addr, uint64_t pc, uint64_t data)
@@ -98,44 +104,61 @@ void CACHE::update_eviction_counters(const BLOCK& victim, liveness_class evict_l
   }
 }
 
-void CACHE::load_predictor_settings()
+void CACHE::record_doa_stlb_corr(const BLOCK& victim)
 {
-  auto getenv_uint64 = [](const char* var, uint64_t fallback) -> uint64_t {
-    const char* val = std::getenv(var);
-    return val ? static_cast<uint64_t>(std::stoull(val)) : fallback;
-  };
+  if (NAME != "LLC" || stlb_block_ptr == nullptr) return;
+  const uint64_t vpn = victim.v_address >> LOG2_PAGE_SIZE;
+  for (const auto& sb : *stlb_block_ptr) {
+    if (sb.valid && (sb.v_address >> LOG2_PAGE_SIZE) == vpn) {
+      sim_stats.back().doa_stlb_found++;
+      if (!sb.accessed)
+        sim_stats.back().doa_stlb_also_doa++;
+      break;
+    }
+  }
+}
 
+void CACHE::configure_thd_doa()
+{
   const char* level_doa  = (NAME == "LLC")      ? std::getenv("LLC_THD_DOA")
                          : (NAME == "cpu0_STLB") ? std::getenv("STLB_THD_DOA")
                          : nullptr;
   thd_doa  = (level_doa  && *level_doa)  ? std::stoull(level_doa)  : getenv_uint64("THD_DOA",  1);
+}
 
-  {
-    const uint64_t rh_cap = (NAME == "LLC")
-        ? getenv_uint64("REPL_HIST_LLC_CAP",  0)
-        : getenv_uint64("REPL_HIST_STLB_CAP", 0);
-    if (rh_cap > 0) {
-      const uint64_t rh_buf    = getenv_uint64("REPL_HIST_BUF_CAP", 0);
-      const char* rh_repl      = std::getenv("REPL_HIST_REPL");
-      auto parse_rh_policy     = [](const char* v) -> HistTable::Policy {
-        if (!v) return HistTable::Policy::LRU;
-        if (std::string_view(v) == "lfu")     return HistTable::Policy::LFU;
-        if (std::string_view(v) == "lfu_doa") return HistTable::Policy::LFU_DOA;
-        if (std::string_view(v) == "srrip")   return HistTable::Policy::SRRIP;
-        return HistTable::Policy::LRU;
-      };
-      repl_hist_pc = HistTable(rh_cap, parse_rh_policy(rh_repl), rh_buf);
-      const uint64_t rh_hash = getenv_uint64("REPL_HIST_HASH_BITS", 0);
-      if (rh_hash > 0)
-        repl_hist_pc.set_hash(static_cast<unsigned>(rh_hash));
-      const uint64_t rh_ckpt = getenv_uint64("REPL_HIST_CHECKPOINT", 0);
-      if (rh_ckpt > 0)
-        repl_hist_pc.set_checkpoint(rh_ckpt, NAME);
-    } else if ((NAME == "LLC"       && std::getenv("REPL_HIST_LLC_CAP")) ||
-               (NAME == "cpu0_STLB" && std::getenv("REPL_HIST_STLB_CAP"))) {
-      repl_hist_pc = HistTable(0, HistTable::Policy::LRU, 0, 0);
-    }
+void CACHE::configure_repl_hist_table()
+{
+  const uint64_t rh_cap = (NAME == "LLC")
+      ? getenv_uint64("REPL_HIST_LLC_CAP",  0)
+      : getenv_uint64("REPL_HIST_STLB_CAP", 0);
+  if (rh_cap > 0) {
+    const uint64_t rh_buf    = getenv_uint64("REPL_HIST_BUF_CAP", 0);
+    const char* rh_repl      = std::getenv("REPL_HIST_REPL");
+    auto parse_rh_policy     = [](const char* v) -> HistTable::Policy {
+      if (!v) return HistTable::Policy::LRU;
+      if (std::string_view(v) == "lfu")     return HistTable::Policy::LFU;
+      if (std::string_view(v) == "lfu_doa") return HistTable::Policy::LFU_DOA;
+      if (std::string_view(v) == "srrip")   return HistTable::Policy::SRRIP;
+      return HistTable::Policy::LRU;
+    };
+    repl_hist_pc = HistTable(rh_cap, parse_rh_policy(rh_repl), rh_buf);
+    const uint64_t rh_hash = getenv_uint64("REPL_HIST_HASH_BITS", 0);
+    if (rh_hash > 0)
+      repl_hist_pc.set_hash(static_cast<unsigned>(rh_hash));
+    const uint64_t rh_ckpt = getenv_uint64("REPL_HIST_CHECKPOINT", 0);
+    if (rh_ckpt > 0)
+      repl_hist_pc.set_checkpoint(rh_ckpt, NAME);
+  } else if ((NAME == "LLC"       && std::getenv("REPL_HIST_LLC_CAP")) ||
+             (NAME == "cpu0_STLB" && std::getenv("REPL_HIST_STLB_CAP"))) {
+    repl_hist_pc = HistTable(0, HistTable::Policy::LRU, 0, 0);
   }
+
+  if (const char* v = std::getenv("REPL_HIST_MODE"); v && std::string_view(v) == "addr")
+    repl_hist_use_addr = true;
+}
+
+void CACHE::configure_doa_diagnostics()
+{
   if (const char* v = std::getenv("DOA_COUNTER_TRACE"); v && std::stoull(v) && (NAME == "LLC" || NAME == "cpu0_STLB")) {
     doa_trace_enable_ = true;
     doa_trace_file_.open("doa_counter_trace_" + NAME + ".csv");
@@ -143,49 +166,57 @@ void CACHE::load_predictor_settings()
   }
   if (const char* v = std::getenv("DOA_ADDR_SUMMARY"); v && std::stoull(v) && (NAME == "LLC" || NAME == "cpu0_STLB"))
     doa_addr_summary_enable_ = true;
-  {
-    const uint64_t ddp = getenv_uint64("DOA_DEFAULT_PCT", 0);
-    if (ddp > 0)
-      repl_hist_pc.set_doa_default_pct(static_cast<int>(ddp));
-    const uint64_t dfp = getenv_uint64("DOA_FORCE_PCT", 0);
-    if (dfp > 0)
-      repl_hist_pc.set_doa_force_pct(static_cast<int>(dfp));
-  }
-  if (const char* v = std::getenv("REPL_HIST_MODE"); v && std::string_view(v) == "addr")
-    repl_hist_use_addr = true;
-  auto apply_recheck = [&](HistTable& tbl) {
-    const char* m = std::getenv("BYPASS_RECHECK_MODE");
-    if (!m) return;
-    const std::string_view sv(m);
-    HistTable::RecheckMode mode = HistTable::RecheckMode::Off;
-    if      (sv == "fixed")   mode = HistTable::RecheckMode::Fixed;
-    else if (sv == "backoff") mode = HistTable::RecheckMode::Backoff;
-    else return;
-    const uint64_t base = getenv_uint64("BYPASS_RECHECK_INTERVAL", 32);
-    const uint64_t cap  = getenv_uint64("BYPASS_RECHECK_CAP",     256);
-    tbl.set_recheck(mode, base, cap);
-  };
-  if (NAME == "LLC") {
-    if (const char* v = std::getenv("LIVENESS_BYPASS"); v && std::stoull(v))
-      liveness_bypass = true;
-    bypass_thd = getenv_uint64("BYPASS_THD", thd_doa);
-    if (const uint64_t rp = getenv_uint64("BYPASS_RESET_PERIOD", 0); rp > 0)
-      repl_hist_pc.set_reset_period(rp);
-    if (const uint64_t rp = getenv_uint64("BYPASS_PC_RESET_PERIOD", 0); rp > 0)
-      repl_hist_pc.set_bypass_pc_reset(rp);
-    apply_recheck(repl_hist_pc);
-    bypass_shadow_cap_ = getenv_uint64("LLC_BYPASS_SHADOW_SIZE", getenv_uint64("BYPASS_SHADOW_SIZE", 0));
-  }
-  if (NAME == "cpu0_STLB") {
-    if (const char* v = std::getenv("STLB_LIVENESS_BYPASS"); v && std::stoull(v))
-      stlb_liveness_bypass = true;
-    stlb_bypass_thd = getenv_uint64("STLB_BYPASS_THD", getenv_uint64("BYPASS_THD", thd_doa));
-    if (const uint64_t rp = getenv_uint64("BYPASS_PC_RESET_PERIOD", 0); rp > 0)
-      repl_hist_pc.set_bypass_pc_reset(rp);
-    apply_recheck(repl_hist_pc);
-    bypass_shadow_cap_ = getenv_uint64("STLB_BYPASS_SHADOW_SIZE", getenv_uint64("BYPASS_SHADOW_SIZE", 0));
-  }
 
+  const uint64_t ddp = getenv_uint64("DOA_DEFAULT_PCT", 0);
+  if (ddp > 0)
+    repl_hist_pc.set_doa_default_pct(static_cast<int>(ddp));
+  const uint64_t dfp = getenv_uint64("DOA_FORCE_PCT", 0);
+  if (dfp > 0)
+    repl_hist_pc.set_doa_force_pct(static_cast<int>(dfp));
+}
+
+void CACHE::apply_bypass_recheck(HistTable& tbl)
+{
+  const char* m = std::getenv("BYPASS_RECHECK_MODE");
+  if (!m) return;
+  const std::string_view sv(m);
+  HistTable::RecheckMode mode = HistTable::RecheckMode::Off;
+  if      (sv == "fixed")   mode = HistTable::RecheckMode::Fixed;
+  else if (sv == "backoff") mode = HistTable::RecheckMode::Backoff;
+  else return;
+  const uint64_t base = getenv_uint64("BYPASS_RECHECK_INTERVAL", 32);
+  const uint64_t cap  = getenv_uint64("BYPASS_RECHECK_CAP",     256);
+  tbl.set_recheck(mode, base, cap);
+}
+
+void CACHE::configure_bypass_llc()
+{
+  if (NAME != "LLC") return;
+  if (const char* v = std::getenv("LIVENESS_BYPASS"); v && std::stoull(v))
+    liveness_bypass = true;
+  bypass_thd = getenv_uint64("BYPASS_THD", thd_doa);
+  if (const uint64_t rp = getenv_uint64("BYPASS_RESET_PERIOD", 0); rp > 0)
+    repl_hist_pc.set_reset_period(rp);
+  if (const uint64_t rp = getenv_uint64("BYPASS_PC_RESET_PERIOD", 0); rp > 0)
+    repl_hist_pc.set_bypass_pc_reset(rp);
+  apply_bypass_recheck(repl_hist_pc);
+  bypass_shadow_cap_ = getenv_uint64("LLC_BYPASS_SHADOW_SIZE", getenv_uint64("BYPASS_SHADOW_SIZE", 0));
+}
+
+void CACHE::configure_bypass_stlb()
+{
+  if (NAME != "cpu0_STLB") return;
+  if (const char* v = std::getenv("STLB_LIVENESS_BYPASS"); v && std::stoull(v))
+    stlb_liveness_bypass = true;
+  stlb_bypass_thd = getenv_uint64("STLB_BYPASS_THD", getenv_uint64("BYPASS_THD", thd_doa));
+  if (const uint64_t rp = getenv_uint64("BYPASS_PC_RESET_PERIOD", 0); rp > 0)
+    repl_hist_pc.set_bypass_pc_reset(rp);
+  apply_bypass_recheck(repl_hist_pc);
+  bypass_shadow_cap_ = getenv_uint64("STLB_BYPASS_SHADOW_SIZE", getenv_uint64("BYPASS_SHADOW_SIZE", 0));
+}
+
+void CACHE::configure_merged_hist()
+{
   if (const char* v = std::getenv("REPL_HIST_MERGED"); v && std::stoull(v)) {
     ::g_use_merged_hist = true;
     if (!::g_merged_hist_ready) {
@@ -195,6 +226,16 @@ void CACHE::load_predictor_settings()
       ::g_merged_hist_ready = true;
     }
   }
+}
+
+void CACHE::load_predictor_settings()
+{
+  configure_thd_doa();
+  configure_repl_hist_table();
+  configure_doa_diagnostics();
+  configure_bypass_llc();
+  configure_bypass_stlb();
+  configure_merged_hist();
 }
 
 liveness_class CACHE::classify_block_liveness(uint64_t block_address, uint64_t pc) const
@@ -237,6 +278,19 @@ void CACHE::print_doa_addr_summary() const
   printf("%s DOA_ADDR_SUMMARY END\n", NAME.c_str());
 }
 
+bool CACHE::evaluate_liveness_bypass(uint64_t key, uint64_t level_thd, bool enabled)
+{
+  const bool lv_doa = enabled && repl_hist_pc.classify(key, level_thd) == liveness_class::doa;
+  const bool lv_probe = lv_doa && repl_hist_pc.should_probe(key);
+  if (lv_probe) sim_stats.back().liveness_probes++;
+  const bool lv_bypass = lv_doa && !lv_probe;
+  if (lv_bypass) {
+    sim_stats.back().liveness_bypasses++;
+    repl_hist_pc.record_bypass(key);
+  }
+  return lv_bypass;
+}
+
 bool CACHE::handle_fill(const PACKET& fill_mshr)
 {
   cpu = fill_mshr.cpu;
@@ -255,32 +309,15 @@ bool CACHE::handle_fill(const PACKET& fill_mshr)
   if (way != set_end && way->valid) {
     const uint64_t bypass_key = repl_hist_use_addr
         ? (fill_mshr.address >> OFFSET_BITS) : fill_mshr.ip;
-    const bool lv_doa = liveness_bypass && NAME == "LLC"
-        && fill_mshr.type != TRANSLATION
-        && repl_hist_pc.classify(bypass_key, bypass_thd) == liveness_class::doa;
-    const bool lv_probe  = lv_doa && repl_hist_pc.should_probe(bypass_key);
-    const bool lv_bypass = lv_doa && !lv_probe;
-    if (lv_probe) sim_stats.back().liveness_probes++;
-    if (lv_bypass) {
-      sim_stats.back().liveness_bypasses++;
-      repl_hist_pc.record_bypass(bypass_key);
-      shadow_record_bypass(fill_mshr.address >> OFFSET_BITS, fill_mshr.ip, fill_mshr.data);
-    }
-
-    const bool stlb_lv_doa = stlb_liveness_bypass && NAME == "cpu0_STLB"
-        && repl_hist_pc.classify(fill_mshr.ip, stlb_bypass_thd) == liveness_class::doa;
-    const bool stlb_lv_probe  = stlb_lv_doa && repl_hist_pc.should_probe(fill_mshr.ip);
-    const bool stlb_lv_bypass = stlb_lv_doa && !stlb_lv_probe;
-    if (stlb_lv_probe) sim_stats.back().liveness_probes++;
-    if (stlb_lv_bypass) {
-      sim_stats.back().liveness_bypasses++;
-      repl_hist_pc.record_bypass(fill_mshr.ip);
-      shadow_record_bypass(fill_mshr.address >> OFFSET_BITS, fill_mshr.ip, fill_mshr.data);
-    }
+    const bool lv_bypass = evaluate_liveness_bypass(bypass_key, bypass_thd,
+        liveness_bypass && NAME == "LLC" && fill_mshr.type != TRANSLATION);
+    const bool stlb_lv_bypass = evaluate_liveness_bypass(fill_mshr.ip, stlb_bypass_thd,
+        stlb_liveness_bypass && NAME == "cpu0_STLB");
 
     const bool bypassed = lv_bypass || stlb_lv_bypass;
 
     if (bypassed) {
+      shadow_record_bypass(fill_mshr.address >> OFFSET_BITS, fill_mshr.ip, fill_mshr.data);
       predictor_bypassed = true;
       way = set_end;
     } else {
@@ -336,17 +373,7 @@ bool CACHE::handle_fill(const PACKET& fill_mshr)
         sim_stats.back().evictions++;
         if (!way->accessed) {
           sim_stats.back().doa++;
-          if (NAME == "LLC" && stlb_block_ptr != nullptr) {
-            const uint64_t vpn = way->v_address >> LOG2_PAGE_SIZE;
-            for (const auto& sb : *stlb_block_ptr) {
-              if (sb.valid && (sb.v_address >> LOG2_PAGE_SIZE) == vpn) {
-                sim_stats.back().doa_stlb_found++;
-                if (!sb.accessed)
-                  sim_stats.back().doa_stlb_also_doa++;
-                break;
-              }
-            }
-          }
+          record_doa_stlb_corr(*way);
         }
       }
 
@@ -419,7 +446,6 @@ bool CACHE::try_hit(const PACKET& handle_pkt)
     uint64_t pf_base_addr = (virtual_prefetch ? handle_pkt.v_address : handle_pkt.address) & ~champsim::bitmask(match_offset_bits ? 0 : OFFSET_BITS);
     metadata_thru = impl_prefetcher_cache_operate(pf_base_addr, handle_pkt.ip, hit, handle_pkt.type, metadata_thru);
   }
-
 
   if (hit) {
     sim_stats.back().hits[handle_pkt.type][handle_pkt.cpu]++;
