@@ -93,38 +93,12 @@ void champsim::plain_printer::print(CACHE::stats_type stats)
         stream << stats.name << " DOA_STLB_CORR: " << stats.doa_stlb_also_doa << " / " << stats.doa_stlb_found
                << " (" << std::fixed << std::setprecision(2) << (100.0 * stats.doa_stlb_also_doa / stats.doa_stlb_found) << "%)" << std::endl;
     }
-    if (stats.llt_bypasses > 0)
-      stream << stats.name << " LLT_BYPASSES: " << stats.llt_bypasses << std::endl;
-    if (stats.llc_bypasses > 0 || stats.pfq_hits > 0) {
-      stream << stats.name << " LLC_BYPASSES: " << stats.llc_bypasses << "  PFQ_HITS: " << stats.pfq_hits;
-      if (stats.cbpred_nogate_bypasses > 0)
-        stream << "  NOGATE_BYPASSES: " << stats.cbpred_nogate_bypasses;
-      stream << std::endl;
-    }
     if (stats.liveness_bypasses > 0)
       stream << stats.name << " LIVENESS_BYPASSES: " << stats.liveness_bypasses << std::endl;
     if (stats.liveness_probes > 0)
       stream << stats.name << " LIVENESS_PROBES: " << stats.liveness_probes << std::endl;
     if (stats.liveness_bypass_shadow_hits > 0)
       stream << stats.name << " LIVENESS_BYPASS_SHADOW_HITS: " << stats.liveness_bypass_shadow_hits << std::endl;
-    if (stats.bypass_duel_suppressed > 0)
-      stream << stats.name << " BYPASS_DUEL_SUPPRESSED: " << stats.bypass_duel_suppressed << std::endl;
-    // History table utilisation (ROI only).
-    auto print_hist = [&](const char* tag, uint64_t q, uint64_t h, uint64_t p, uint64_t ph) {
-      if (q == 0) return;
-      stream << stats.name << " " << tag << "_HIT_RATE: "
-             << std::fixed << std::setprecision(2) << (100.0 * h / q) << "%"
-             << "  QUERIES: " << q << "  HITS: " << h;
-      if (p > 0)
-        stream << "  PROMOTIONS: " << p
-               << "  PROMOTED_HIT_RATE: "
-               << std::setprecision(2) << (100.0 * ph / p) << "%";
-      stream << std::endl;
-    };
-    print_hist("PHIST", stats.phist_queries, stats.phist_table_hits,
-               stats.phist_promotions, stats.phist_promoted_hits);
-    print_hist("BHIST", stats.bhist_queries, stats.bhist_table_hits,
-               stats.bhist_promotions, stats.bhist_promoted_hits);
   }
 }
 

@@ -2,9 +2,8 @@
 //
 // Policy rules (two liveness classes: was the block ever touched before
 // eviction? A third, intermediate "mostly-dead" wall-clock-halflife class was
-// tried and removed; see docs/JOBS.md "Set-dueling MD isolation" for the
-// evidence — no configuration showed it contributing a real, reproducible
-// IPC benefit.)
+// tried and removed — no configuration showed it contributing a real,
+// reproducible IPC benefit.)
 // --------------------------------------
 //   DoA fill:   RRPV = SRRIP_DOA_INS_RRPV  (default 2: moderate, not immediate eviction)
 //   DoA hit:    RRPV = SRRIP_DOA_HIT_RRPV  (default 2: reset to insertion, no reward)
@@ -329,9 +328,5 @@ void CACHE::replacement_final_stats()
          avg_life(1), avg_life(2), avg_life(0));
 
   repl_hist_pc.print_stats(NAME.c_str(), thd_doa);
-  if (bypass_fire_reset_period_ > 0)
-    printf("%s bypass_fire_reset: period=%lu  resets=%lu\n",
-           NAME.c_str(), bypass_fire_reset_period_,
-           bypass_fire_count_ / bypass_fire_reset_period_);
   printf("\n");
 }
