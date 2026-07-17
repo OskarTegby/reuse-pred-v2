@@ -2,9 +2,9 @@
 //
 // Policy rules (two liveness classes: was the block ever touched before
 // eviction? "mostly-dead" — an intermediate, wall-clock-halflife-based third
-// class — was tried and removed; see docs/JOBS.md "Set-dueling MD isolation"
-// for the evidence: no configuration tested showed it contributing a real,
-// reproducible IPC benefit, and it was actively costing IPC on some suites.)
+// class — was tried and removed: no configuration tested showed it
+// contributing a real, reproducible IPC benefit, and it was actively costing
+// IPC on some suites.)
 // --------------------------------------
 //   DoA fill:   position floor(2N/3) from MRU — near eviction end
 //   Alive fill: position 0 (MRU)              — standard LRU
