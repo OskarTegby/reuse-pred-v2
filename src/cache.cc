@@ -37,10 +37,6 @@ extern "C" void ipv_live_reset_phase_stats(CACHE*) __attribute__((weak));
 
 namespace {
 
-HistTable g_merged_repl_hist;
-bool      g_merged_hist_ready = false;
-bool      g_use_merged_hist   = false;
-
 uint64_t getenv_uint64(const char* var, uint64_t fallback)
 {
   const char* val = std::getenv(var);
@@ -91,11 +87,10 @@ void CACHE::update_eviction_counters(const BLOCK& victim, liveness_class evict_l
     const uint64_t repl_key = repl_hist_use_addr
         ? ((NAME == "LLC") ? (victim.address >> OFFSET_BITS) : victim.address)
         : victim.ip;
-    HistTable& tbl = ::g_use_merged_hist ? ::g_merged_repl_hist : repl_hist_pc;
-    const int64_t old_score = (doa_trace_enable_ && !warmup) ? tbl.get_score(repl_key) : 0;
-    tbl.update(repl_key, evict_lv, thd_doa);
+    const int64_t old_score = (doa_trace_enable_ && !warmup) ? repl_hist_pc.get_score(repl_key) : 0;
+    repl_hist_pc.update(repl_key, evict_lv, thd_doa);
     if (doa_trace_enable_ && !warmup) {
-      const int64_t new_score = tbl.get_score(repl_key);
+      const int64_t new_score = repl_hist_pc.get_score(repl_key);
       doa_trace_file_ << current_cycle << ',' << victim.ip << ',' << (victim.address >> OFFSET_BITS) << ','
                        << (evict_lv == liveness_class::doa ? 1 : 0) << ',' << old_score << ',' << new_score << '\n';
     }
@@ -215,19 +210,6 @@ void CACHE::configure_bypass_stlb()
   bypass_shadow_cap_ = getenv_uint64("STLB_BYPASS_SHADOW_SIZE", getenv_uint64("BYPASS_SHADOW_SIZE", 0));
 }
 
-void CACHE::configure_merged_hist()
-{
-  if (const char* v = std::getenv("REPL_HIST_MERGED"); v && std::stoull(v)) {
-    ::g_use_merged_hist = true;
-    if (!::g_merged_hist_ready) {
-      const uint64_t cap = getenv_uint64("REPL_HIST_CAP",     0);
-      const uint64_t buf = getenv_uint64("REPL_HIST_BUF_CAP", 0);
-      ::g_merged_repl_hist = HistTable(cap, HistTable::Policy::LRU, buf, 0);
-      ::g_merged_hist_ready = true;
-    }
-  }
-}
-
 void CACHE::load_predictor_settings()
 {
   configure_thd_doa();
@@ -235,7 +217,6 @@ void CACHE::load_predictor_settings()
   configure_doa_diagnostics();
   configure_bypass_llc();
   configure_bypass_stlb();
-  configure_merged_hist();
 }
 
 liveness_class CACHE::classify_block_liveness(uint64_t block_address, uint64_t pc) const
@@ -243,8 +224,6 @@ liveness_class CACHE::classify_block_liveness(uint64_t block_address, uint64_t p
   const uint64_t key = repl_hist_use_addr
       ? ((NAME == "LLC") ? (block_address >> OFFSET_BITS) : block_address)
       : pc;
-  if (::g_use_merged_hist)
-    return ::g_merged_repl_hist.classify(key, thd_doa);
   return repl_hist_pc.classify(key, thd_doa);
 }
 
@@ -386,7 +365,6 @@ bool CACHE::handle_fill(const PACKET& fill_mshr)
       way->data = fill_mshr.data;
       way->ip = fill_mshr.ip;
       way->install_cycle  = current_cycle;
-      way->last_hit_cycle = current_cycle;
       {
         const uint64_t force_key = repl_hist_use_addr
             ? (fill_mshr.address >> OFFSET_BITS) : fill_mshr.ip;
@@ -464,7 +442,6 @@ bool CACHE::try_hit(const PACKET& handle_pkt)
     if (handle_pkt.type != WRITE) {
       if (NAME == "cpu0_STLB" || NAME == "LLC")
         way->accessed = true;
-      way->last_hit_cycle = current_cycle;
     }
 
     // update prefetch stats and reset prefetch bit
@@ -816,7 +793,6 @@ void CACHE::begin_phase()
   sim_stats.back().name = NAME;
 
   repl_hist_pc.reset_stats();
-  g_merged_repl_hist.reset_stats();
 
   if (lru_live_reset_phase_stats)
     lru_live_reset_phase_stats(this);

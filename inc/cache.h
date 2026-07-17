@@ -812,7 +812,6 @@ class CACHE : public champsim::operable, public MemoryRequestConsumer, public Me
     uint32_t pf_metadata = 0;
 
     uint64_t install_cycle   = 0;
-    uint64_t last_hit_cycle  = 0;
   };
   using set_type = std::vector<BLOCK>;
 
@@ -856,7 +855,6 @@ class CACHE : public champsim::operable, public MemoryRequestConsumer, public Me
   void apply_bypass_recheck(HistTable& tbl);
   void configure_bypass_llc();
   void configure_bypass_stlb();
-  void configure_merged_hist();
   void shadow_record_bypass(uint64_t block_addr, uint64_t pc, uint64_t data);
   bool liveness_bypass_shadow_hit(const PACKET& handle_pkt);
   void update_eviction_counters(const BLOCK& victim, liveness_class lv);
