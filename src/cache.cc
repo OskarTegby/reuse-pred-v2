@@ -602,6 +602,7 @@ bool CACHE::handle_fill(const PACKET& fill_mshr)
 
   last_fill_latency = current_cycle - (fill_mshr.cycle_enqueued + 1);
 
+  // find victim
   auto [set_begin, set_end] = get_set_span(fill_mshr.address);
   auto way = std::find_if_not(set_begin, set_end, [](auto x) { return x.valid; });
   if (way == set_end) {
