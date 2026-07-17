@@ -35,10 +35,6 @@ extern "C" void lru_live_reset_phase_stats(CACHE*) __attribute__((weak));
 extern "C" void srrip_live_reset_phase_stats(CACHE*) __attribute__((weak));
 extern "C" void ipv_live_reset_phase_stats(CACHE*) __attribute__((weak));
 
-// ──────────────────────────────────────────────
-// Shared replacement-history infrastructure
-// ──────────────────────────────────────────────
-
 namespace {
 
 struct PCSubsetTracker {
@@ -71,10 +67,6 @@ bool      g_merged_hist_ready = false;
 bool      g_use_merged_hist   = false;
 
 } // namespace
-
-// ──────────────────────────────────────────────
-// dpPred-cbPred helpers
-// ──────────────────────────────────────────────
 
 uint64_t CACHE::fold_xor(uint64_t val, unsigned bits) const
 {
