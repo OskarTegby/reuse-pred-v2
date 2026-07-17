@@ -41,71 +41,42 @@
 
 enum class liveness_class { doa, alive };
 
-// Bounded history table: per-key DoA-eviction counter with a pluggable
-// replacement policy for its own (capacity-limited) storage. Used for both
-// pHIST (PC-indexed) and bHIST (address-indexed), as well as the replacement
-// policies' own repl_hist_pc/g_merged_repl_hist instances.
-//
-// Scoring is deliberately simple: a DoA eviction increments the key's score
-// by 1; any other (accessed) eviction resets it to 0. An earlier, much more
-// elaborate scheme (9 selectable "scoring modes", a third "mostly-dead"
-// classification tier between DoA and alive, lifespan-EMA adaptive
-// weighting, a TIERED bounded-table eviction policy keyed on that third
-// tier) was tried and removed for the replacement policies — see
-// docs/JOBS.md "Set-dueling MD isolation" for the evidence that the extra
-// machinery wasn't earning its complexity. The prefetch predictor (phist/
-// bhist_flat/bhist_pc) never consumed the 3-way classification either — it
-// only ever reads the raw DoA-tagged score via get_score()/get(), never
-// classify() — so this simplification doesn't change its behavior.
 class HistTable {
 public:
-  // LFU_DOA: freq increments only on DoA evictions — a live eviction
-  // doesn't confirm bypass utility and shouldn't raise eviction priority.
-  // SRRIP: DoA eviction → rrpv=0 (protect); live eviction → rrpv=SRRIP_MAX
-  // (demote immediately; entry becomes next eviction target and re-enters buffer).
   enum class Policy { LRU, LFU, LFU_DOA, SRRIP };
 
   struct Stats {
-    uint64_t queries       = 0;  // total get() calls
-    uint64_t table_hits    = 0;  // get() found the key (value > 0)
-    uint64_t promotions    = 0;  // buffer → main table promotions
-    uint64_t promoted_hits = 0;  // later get() hits on promoted entries
-    // Occupancy
-    bool     main_ever_full = false; // true once victim_slot() found no free slot
-    bool     buf_ever_full  = false; // true once buf_victim() found no free slot
-    // Shadow (victim) buffer: tracks entries fully evicted from the promotion buffer.
-    // When an evicted entry's PC appears again, we know useful history was lost.
-    uint64_t buf_evictions       = 0;  // entries lost from the promotion buffer
-    uint64_t shadow_hits         = 0;  // evicted PCs seen again (before shadow ages out)
-    uint64_t shadow_hit_doa_sum  = 0;  // sum of dead_count at eviction for shadow hits
-    uint64_t shadow_hit_nonzero  = 0;  // shadow hits where dead_count > 0 at eviction
-    // Promotion-buffer flow diagnostics.
-    uint64_t doa_buf_miss            = 0;  // DoA evictions that missed both main table and buffer
-    uint64_t demotions               = 0;  // main-table entries demoted back to the buffer
-    uint64_t second_chance_promotions = 0; // demoted entries that were subsequently re-promoted
-    uint64_t second_chance_evictions  = 0; // demoted entries lost from buffer before re-promotion
-    uint64_t promote_attempts        = 0;  // try_promote() found a valid candidate (dead_count > 0)
-    uint64_t promote_blocked         = 0;  // candidate found but failed dead_count > min_freq threshold
-    uint64_t buf_evict_dc_hist[6]   = {};  // dead_count histogram at buffer eviction (index = min(dc,5))
-    uint64_t buf_promo_dc_hist[6]   = {};  // dead_count histogram at buffer promotion (index = min(dc,5))
-    // Classification source tracking (set by classify()).
-    mutable uint64_t classify_main      = 0;  // found in main table (at or above threshold)
-    mutable uint64_t classify_buf_guided= 0;  // found in promo buffer AND above threshold → DoA (recovered)
-    mutable uint64_t classify_buf_weak  = 0;  // found in promo buffer but below threshold (demoted from main, doa lost)
-    mutable uint64_t classify_warm_miss        = 0;  // not in table or buf, but PC was seen before (fully evicted)
-    mutable uint64_t classify_warm_buf_evicted = 0;  // warm miss where entry was specifically evicted from the promotion buffer
-    mutable uint64_t classify_warm_oracle_hit  = 0;  // warm miss where oracle would have classified correctly (oracle dead_count >= thd_doa)
-    mutable uint64_t classify_warm_aged_out    = 0;  // warm miss where eviction was aging-decisive (eff_freq hit 0 due to aging)
-    mutable uint64_t classify_warm_aged_hitsum = 0;  // sum of hit_count for all aged-out warm misses
-    mutable uint64_t classify_cold_miss        = 0;  // PC never seen before (no history — expected)
-    // Score tier transition counters (only meaningful when thd_doa is non-zero).
-    uint64_t trans_alive_doa = 0;  // score crossed thd_doa upward (alive → DoA)
-    uint64_t trans_doa_alive = 0;  // score dropped below thd_doa (DoA → alive, recovery)
+    uint64_t queries       = 0;
+    uint64_t table_hits    = 0;
+    uint64_t promotions    = 0;
+    uint64_t promoted_hits = 0;
+    bool     main_ever_full = false;
+    bool     buf_ever_full  = false;
+    uint64_t buf_evictions       = 0;
+    uint64_t shadow_hits         = 0;
+    uint64_t shadow_hit_doa_sum  = 0;
+    uint64_t shadow_hit_nonzero  = 0;
+    uint64_t doa_buf_miss            = 0;
+    uint64_t demotions               = 0;
+    uint64_t second_chance_promotions = 0;
+    uint64_t second_chance_evictions  = 0;
+    uint64_t promote_attempts        = 0;
+    uint64_t promote_blocked         = 0;
+    uint64_t buf_evict_dc_hist[6]   = {};
+    uint64_t buf_promo_dc_hist[6]   = {};
+    mutable uint64_t classify_main      = 0;
+    mutable uint64_t classify_buf_guided= 0;
+    mutable uint64_t classify_buf_weak  = 0;
+    mutable uint64_t classify_warm_miss        = 0;
+    mutable uint64_t classify_warm_buf_evicted = 0;
+    mutable uint64_t classify_warm_oracle_hit  = 0;
+    mutable uint64_t classify_warm_aged_out    = 0;
+    mutable uint64_t classify_warm_aged_hitsum = 0;
+    mutable uint64_t classify_cold_miss        = 0;
+    uint64_t trans_alive_doa = 0;
+    uint64_t trans_doa_alive = 0;
   };
 
-  // Default: unbounded mode — backed by an unordered_map, no eviction.
-  // Semantically identical to the old repl_hist_pc unordered_map; used as the
-  // backward-compatible fallback when no capacity limit is configured.
   HistTable() : unbounded_(true) {}
   HistTable(uint64_t cap, Policy pol, uint64_t buf_cap = 0, uint64_t /*shadow_cap*/ = 0)
     : unbounded_(false), cap_(cap), pol_(pol), entries_(cap), buf_cap_(buf_cap), buffer_(buf_cap) {
@@ -115,8 +86,6 @@ public:
     }
   }
 
-  // Hash the key into `bits` bits before indexing (models Mazumdar's finite,
-  // hashed history table). bits==0 → raw key (default, our idealized table).
   void set_hash(unsigned bits) { hash_bits_ = bits; }
 
   void set_checkpoint(uint64_t interval, std::string name) {
@@ -127,26 +96,8 @@ public:
   void set_reset_period(uint64_t period) { reset_period_ = period; }
   void set_bypass_pc_reset(uint64_t period) { bypass_pc_reset_period_ = period; }
 
-  // DOA_DEFAULT_PCT=<0-100>: a deterministic per-key coin flip that makes that
-  // percentage of never-before-seen keys classify as DoA on their very first
-  // fill instead of the default alive/full-insertion treatment (every key
-  // normally gets one free "assume alive" pass before any score evidence
-  // exists). Tests whether removing that free pass helps workloads where a
-  // typical key is seen only once or twice in the whole run (e.g. QMM), where
-  // waiting for score evidence rarely pays off anyway. 0 = off (default).
   void set_doa_default_pct(int pct) { doa_default_pct_ = pct; }
 
-  // DOA_FORCE_PCT=<0-100>: a separate deterministic per-key coin flip (distinct
-  // subset from doa_default_pct_) that, once per fill, force-writes a key's
-  // *persistent* score up to `value` -- unlike set_doa_default_pct (a read-time
-  // override for never-seen keys only), this mutates real state, so it applies
-  // to already-tracked keys too and the effect persists until the normal
-  // update() path resets or changes it. Called once per fill right before
-  // classify_block_liveness(), independent of whether bypass is enabled -- it
-  // affects insertion depth and later hit-time promotion on its own. If bypass
-  // is also enabled, its classify() call reads the same persistent score, so a
-  // forced key can incidentally become bypass-eligible too, but that's not
-  // this mechanism's target. Unbounded table only (no-op when bounded). 0 = off.
   void set_doa_force_pct(int pct) { doa_force_pct_ = pct; }
   void maybe_force_doa(uint64_t key, int64_t value) {
     if (doa_force_pct_ <= 0 || !unbounded_) return;
@@ -155,9 +106,6 @@ public:
       unmap_[k] = value;
   }
 
-  // Call on each bypass fire for a key. If the key has bypassed bypass_pc_reset_period_
-  // times without receiving an eviction update, its score is zeroed so it must
-  // re-earn its DoA classification (breaks per-PC lock-in).
   void record_bypass(uint64_t key) {
     if (bypass_pc_reset_period_ == 0) return;
     auto& cnt = bypass_since_update_[key];
@@ -178,32 +126,18 @@ public:
     else            { for (auto& e : entries_) e.score = 0; }
   }
 
-  // Remove a key's entry entirely (used by the bypass shadow on a confirmed
-  // mistake: the PC must re-earn its DoA classification from scratch).
   void erase_key(uint64_t key) {
     if (unbounded_) { unmap_.erase(key); }
     else { for (auto& e : entries_) if (e.valid && e.key == key) { e.valid = false; break; } }
     bypass_since_update_.erase(key);
   }
 
-  // Periodic bypass recheck (probe): instead of bypassing every DoA fill for a
-  // locked-in PC forever, occasionally let one fill THROUGH so it generates a
-  // fresh eviction observation. If the probe still evicts as DoA, the PC is
-  // confirmed dead; if it shows life (MA/MD), its score decays and bypass stops.
-  //   Off     : disabled — never force a probe (classic always-bypass).
-  //   Fixed   : probe every recheck_base_ bypasses for a PC.
-  //   Backoff : probe every recheck_interval_[key] bypasses; on a DoA probe the
-  //             interval doubles (capped at recheck_cap_), on a non-DoA probe it
-  //             resets to recheck_base_. Frequent early checks, rare late checks.
   enum class RecheckMode { Off, Fixed, Backoff };
   void set_recheck(RecheckMode mode, uint64_t base, uint64_t cap) {
     recheck_mode_ = mode; recheck_base_ = base ? base : 1;
     recheck_cap_  = cap   ? cap  : recheck_base_;
   }
 
-  // Called at fill time when a key has classified as DoA and would be bypassed.
-  // Returns true if this fill should instead be INSERTED as a probe (caller must
-  // not bypass it); false to bypass as usual. Advances the per-key schedule.
   bool should_probe(uint64_t key) {
     if (recheck_mode_ == RecheckMode::Off) return false;
     uint64_t& cnt = recheck_count_[key];
@@ -211,7 +145,7 @@ public:
     if (iv == 0) iv = recheck_base_;
     if (++cnt >= iv) {
       cnt = 0;
-      recheck_probing_[key] = true;  // next eviction for this key is the probe result
+      recheck_probing_[key] = true;
       ++recheck_probes_;
       return true;
     }
@@ -239,8 +173,6 @@ public:
     return 0;
   }
 
-  // Classify a key against thd_doa, consulting main table then promotion
-  // buffer. Tracks which structure resolved the classification in stats.
   liveness_class classify(uint64_t key, uint64_t thd_doa) const {
     key = hk_(key);
     if (unbounded_) {
@@ -249,14 +181,12 @@ public:
       if (it == unmap_.end() && doa_default_(key)) return liveness_class::doa;
       return liveness_class::alive;
     }
-    // 1. Main table.
     for (const auto& e : entries_) {
       if (e.valid && e.key == key) {
         ++stats_.classify_main;
         return e.score >= (int64_t)thd_doa ? liveness_class::doa : liveness_class::alive;
       }
     }
-    // 2. Promotion buffer: interprets dead_count as a score proxy.
     for (const auto& b : buffer_) {
       if (b.valid && b.key == key) {
         if (b.dead_count >= thd_doa) {
@@ -267,7 +197,6 @@ public:
         return liveness_class::alive;
       }
     }
-    // 3. Not found. Warm miss (entry evicted) or cold miss (never seen).
     if (!seen_pcs_.empty() && seen_pcs_.count(key)) {
       ++stats_.classify_warm_miss;
       if (!buf_evicted_pcs_.empty() && buf_evicted_pcs_.count(key))
@@ -295,15 +224,7 @@ public:
     for (auto& e : entries_) e.promoted = false;
   }
 
-  // Print occupancy and shadow-buffer instrumentation to stdout.
-  // thd_doa: used to flag shadow hits where dead_count >= thd_doa — recovered
-  // classification that the bounded table missed.
   void print_stats(const char* prefix, uint64_t thd_doa = 0) const {
-    // TEMPORARY (testing): dump the PCs currently resident in the history table,
-    // sorted by key for determinism. Opt-in via REPL_HIST_DUMP_PCS=1 so normal
-    // runs are unaffected. Lets black-box tests verify which PCs survive under a
-    // realistic cap on many-PC traces (QMM/SPEC), where the eviction policy is
-    // actually exercised.
     if (const char* d = std::getenv("REPL_HIST_DUMP_PCS"); d && d[0] == '1') {
       std::vector<std::pair<uint64_t, int64_t>> dump;
       if (unbounded_) {
@@ -338,7 +259,7 @@ public:
            stats_.buf_ever_full  ? " [was full]" : "");
     const uint64_t classify_total = stats_.classify_main + stats_.classify_buf_guided
                                   + stats_.classify_buf_weak + stats_.classify_warm_miss
-                                  + stats_.classify_cold_miss;  // oracle_hit is a subset of warm_miss, not additive
+                                  + stats_.classify_cold_miss;
     if (classify_total > 0) {
       auto pct_c = [&](uint64_t n){ return classify_total ? 100.0 * n / classify_total : 0.0; };
       printf("%s repl_hist classify  : main=%lu (%.1f%%)  "
@@ -402,7 +323,6 @@ public:
              stats_.doa_buf_miss,
              stats_.promote_attempts, stats_.promote_blocked,
              pct(stats_.promote_blocked, stats_.promote_attempts));
-      // dead_count histograms: where do evicted / promoted entries stand?
       const uint64_t evict_total = std::accumulate(
           stats_.buf_evict_dc_hist, stats_.buf_evict_dc_hist + 6, uint64_t{0});
       const uint64_t promo_total = std::accumulate(
@@ -445,18 +365,12 @@ public:
              prefix, stats_.trans_alive_doa, stats_.trans_doa_alive);
   }
 
-  // Update the history table with one eviction observation: a DoA eviction
-  // increments the key's score by 1; any other (accessed) eviction resets it
-  // to 0.
   void update(uint64_t key, liveness_class evict_class, int64_t thd_doa = 0) {
     if (!unbounded_ && cap_ == 0 && buf_cap_ == 0) return;
     key = hk_(key);
     seen_pcs_.insert(key);
     ++update_count_;
     if (thd_doa > 0) thd_doa_cache_ = thd_doa;
-    // Recheck backoff: if this eviction is the outcome of a forced probe, adjust
-    // the per-key probe interval. DoA → confirmed dead, probe less often (double,
-    // capped). Non-DoA → showed life, reset to the base interval.
     if (recheck_mode_ == RecheckMode::Backoff) {
       auto pit = recheck_probing_.find(key);
       if (pit != recheck_probing_.end() && pit->second) {
@@ -496,10 +410,7 @@ public:
       else if (was_doa && !is_doa) ++stats_.trans_doa_alive;
     };
     if (unbounded_) {
-      bypass_since_update_[key] = 0;  // eviction feedback arrived: no longer locked in
-      // Allocate only on a DoA eviction: an alive eviction of an untracked key
-      // carries no information (its classification is already the default,
-      // alive), so storing a zero entry for it would only waste space.
+      bypass_since_update_[key] = 0;
       auto it = unmap_.find(key);
       if (it == unmap_.end()) {
         if (evict_class != liveness_class::doa) return;
@@ -508,14 +419,12 @@ public:
       const int64_t old_s = it->second;
       it->second = (evict_class == liveness_class::doa) ? old_s + 1 : 0;
       record_transition(old_s, it->second);
-      // Periodic reset: break DoA lock-in by zeroing all scores every N updates.
       if (reset_period_ > 0 && update_count_ % reset_period_ == 0) {
         for (auto& [k, v] : unmap_) v = 0;
       }
       return;
     }
     bypass_since_update_[key] = 0;
-    // 1. Main table hit: apply delta, floor at zero.
     for (auto& e : entries_) {
       if (e.valid && e.key == key) {
         const int64_t old_s = e.score;
@@ -525,7 +434,6 @@ public:
         return;
       }
     }
-    // 2. Promotion buffer: tracks DoA confirmations until threshold is reached.
     if (buf_cap_ > 0) {
       for (auto& b : buffer_) {
         if (b.valid && b.key == key) {
@@ -549,7 +457,7 @@ public:
       }
       if (evict_class == liveness_class::doa) {
         ++stats_.doa_buf_miss;
-        buf_evicted_pcs_.erase(key);  // re-entering the buffer; no longer "evicted"
+        buf_evicted_pcs_.erase(key);
         shadow_map_.erase(key);
         auto& bslot         = buf_victim();
         bslot.key           = key;
@@ -561,7 +469,6 @@ public:
       }
       return;
     }
-    // 3. No buffer: insert new entry on a DoA signal.
     if (evict_class == liveness_class::doa) {
       auto& slot   = victim_slot();
       slot.key     = key;
@@ -582,11 +489,8 @@ private:
   static constexpr uint32_t SRRIP_INS  = 2;
   static constexpr uint32_t SRRIP_MAX  = 3;
   static constexpr uint64_t FREQ_CAP   = 64;
-  // Configurable non-DoA eviction penalty for LFU_DOA (read from HIST_MA_PENALTY env var).
-  // Default -2: each non-DoA eviction subtracts 2 from freq. Use -1 or 0 to reduce/remove penalty.
   int ma_penalty_ = -2;
 
-  // Fold the low 32 bits of val into `bits` bits by XOR (Mazumdar-style hash).
   static uint64_t fold_(uint64_t val, unsigned bits) {
     uint64_t result = 0;
     const uint64_t mask = (1ULL << bits) - 1;
@@ -594,17 +498,16 @@ private:
       result ^= (val & mask);
     return result;
   }
-  // Apply the optional hash to a key (identity when hash_bits_ == 0).
   uint64_t hk_(uint64_t key) const { return hash_bits_ ? fold_(key, hash_bits_) : key; }
 
   struct Entry {
     uint64_t key              = 0;
-    int64_t  score            = 0;  // DoA counter
+    int64_t  score            = 0;
     uint64_t freq             = 0;
     uint64_t ts               = 0;
-    uint64_t last_seen_update = 0;  // update_count_ at last on_hit/on_insert/on_promote
-    uint64_t ma_loss          = 0;  // cumulative freq reduction from non-DoA eviction penalties
-    uint64_t hit_count        = 0;  // number of on_hit() calls since last insertion/promotion
+    uint64_t last_seen_update = 0;
+    uint64_t ma_loss          = 0;
+    uint64_t hit_count        = 0;
     uint32_t rrpv             = 0;
     bool          valid    = false;
     mutable bool  promoted = false;
@@ -615,42 +518,36 @@ private:
     uint64_t dead_count   = 0;
     uint64_t ts           = 0;
     bool     valid        = false;
-    bool     second_chance = false;  // true if this slot holds a main-table evictee
+    bool     second_chance = false;
   };
 
   bool        unbounded_           = false;
   uint64_t    checkpoint_interval_ = 0;
-  uint64_t    reset_period_        = 0;  // 0 = disabled; reset all scores every N updates
+  uint64_t    reset_period_        = 0;
   uint64_t    update_count_        = 0;
-  // Per-PC lock-in detection: counts bypass fires per key since the last eviction
-  // update for that key. When the count reaches bypass_pc_reset_period_, the
-  // entry's score is zeroed so the PC must re-earn its DoA classification.
-  // Cleared to 0 by update() whenever eviction feedback arrives for a key.
   uint64_t bypass_pc_reset_period_{0};
   mutable std::unordered_map<uint64_t, uint64_t> bypass_since_update_;
-  // Periodic bypass recheck (probe) state — see set_recheck()/should_probe().
   RecheckMode recheck_mode_     = RecheckMode::Off;
-  uint64_t    recheck_base_     = 0;  // base probe interval (bypasses between probes)
-  uint64_t    recheck_cap_      = 0;  // max interval for Backoff mode
-  uint64_t    recheck_probes_   = 0;  // total probes forced (instrumentation)
-  std::unordered_map<uint64_t, uint64_t> recheck_count_;     // bypasses since last probe
-  std::unordered_map<uint64_t, uint64_t> recheck_interval_;  // current interval (0 = base)
-  std::unordered_map<uint64_t, bool>     recheck_probing_;   // awaiting probe eviction outcome
+  uint64_t    recheck_base_     = 0;
+  uint64_t    recheck_cap_      = 0;
+  uint64_t    recheck_probes_   = 0;
+  std::unordered_map<uint64_t, uint64_t> recheck_count_;
+  std::unordered_map<uint64_t, uint64_t> recheck_interval_;
+  std::unordered_map<uint64_t, bool>     recheck_probing_;
   std::string checkpoint_name_;
-  unsigned hash_bits_ = 0;  // >0 → hash keys into this many bits (faithful Mazumdar)
-  int doa_default_pct_ = 0;  // DOA_DEFAULT_PCT: % of never-seen keys defaulted to DoA
-  int doa_force_pct_   = 0;  // DOA_FORCE_PCT: % of fills whose persistent score is forced up
+  unsigned hash_bits_ = 0;
+  int doa_default_pct_ = 0;
+  int doa_force_pct_   = 0;
 
   static uint64_t mix64_(uint64_t x) {
     x ^= x >> 33; x *= 0xff51afd7ed558ccdULL; x ^= x >> 33;
     x *= 0xc4ceb9fe1a85ec53ULL; x ^= x >> 33;
     return x;
   }
-  // Deterministic per-key coin flip: true for doa_default_pct_% of keys.
   bool doa_default_(uint64_t key) const {
     return doa_default_pct_ > 0 && (mix64_(key) % 100) < static_cast<uint64_t>(doa_default_pct_);
   }
-  mutable std::unordered_map<uint64_t, int64_t> unmap_;  // DoA counter per key
+  mutable std::unordered_map<uint64_t, int64_t> unmap_;
   uint64_t cap_          = 0;
   Policy   pol_          = Policy::LRU;
   std::vector<Entry>    entries_;
@@ -658,32 +555,20 @@ private:
   uint64_t buf_cap_      = 0;
   uint64_t buf_clock_    = 0;
   std::vector<BufEntry> buffer_;
-  // Instrumentation (active when buf_cap_ > 0, always unbounded):
-  // seen_pcs_: every key ever passed to update() — distinguishes warm vs cold misses.
-  // buf_evicted_pcs_: keys currently evicted from the buffer and not re-inserted.
-  // shadow_map_: keys evicted from buffer → dead_count at eviction; cleared on re-entry.
-  // oracle_buf_: unbounded accumulation of dead_count for all ever-evicted keys.
   std::unordered_set<uint64_t> seen_pcs_;
   mutable std::unordered_set<uint64_t> buf_evicted_pcs_;
   std::unordered_map<uint64_t, uint64_t> shadow_map_;
   std::unordered_map<uint64_t, uint64_t> oracle_buf_;
   mutable Stats stats_;
-  // Eviction attribution counters (LFU_DOA bounded only, not reset with stats_).
-  // At each hist-table eviction: record how much non-DoA penalty and aging
-  // contributed to the evicted entry's score reduction, and whether they
-  // drove it to zero.
   uint64_t evict_count_          = 0;
-  uint64_t evict_ma_nonzero_     = 0;  // evictions where ma_loss > 0
-  uint64_t evict_ma_loss_sum_    = 0;  // sum of ma_loss across all evicted entries
-  uint64_t evict_ma_decisive_    = 0;  // evictions where eff_freq==0 AND ma_loss > 0
-  uint64_t evict_aging_nonzero_  = 0;  // evictions where aging penalty > 0
-  uint64_t evict_aging_loss_sum_ = 0;  // sum of aging penalties on evicted entries
-  uint64_t evict_aging_decisive_ = 0;  // evictions where eff_freq==0 AND aging_penalty > 0
-  uint64_t evict_aging_hitsum_   = 0;  // sum of hit_count for all aging-decisive evictions
-  // Cached threshold (updated from update()'s arg) for use in victim_slot().
+  uint64_t evict_ma_nonzero_     = 0;
+  uint64_t evict_ma_loss_sum_    = 0;
+  uint64_t evict_ma_decisive_    = 0;
+  uint64_t evict_aging_nonzero_  = 0;
+  uint64_t evict_aging_loss_sum_ = 0;
+  uint64_t evict_aging_decisive_ = 0;
+  uint64_t evict_aging_hitsum_   = 0;
   int64_t  thd_doa_cache_  = 0;
-  // PCs whose hist-table entry was last evicted due to aging (eff_freq==0 caused by aging).
-  // Maps PC → {score, hit_count} at eviction time. Cleared when the PC is re-inserted.
   std::unordered_map<uint64_t, std::pair<int64_t,uint64_t>> aging_evicted_pcs_;
 
   void on_hit(Entry& e, liveness_class evict_class) {
@@ -703,7 +588,6 @@ private:
       ++e.hit_count;
       e.ts = ++clock_;
       break;
-    // DoA → protect (rrpv=0). Live → demote to eviction target (rrpv=SRRIP_MAX).
     case Policy::SRRIP:   e.rrpv = is_doa ? 0 : SRRIP_MAX;               break;
     }
   }
@@ -726,14 +610,12 @@ private:
     }
   }
 
-  // Promoted entries enter with higher priority than cold insertions.
   void on_promote(Entry& e, uint64_t dead_count) {
     e.promoted = true;
     e.last_seen_update = update_count_;
     switch (pol_) {
     case Policy::LRU:     e.ts = ++clock_; e.freq = 0; e.rrpv = 0;           break;
     case Policy::LFU:     e.freq = dead_count; e.ts = ++clock_; e.rrpv = 0;  break;
-    // Buffer dead_count is in DoA units (1 per DoA hit); scale by 3 to match LFU_DOA freq units.
     case Policy::LFU_DOA: e.freq      = std::min(FREQ_CAP, dead_count * 3);
                           e.ma_loss   = 0;
                           e.hit_count = 0;
@@ -743,11 +625,7 @@ private:
     }
   }
 
-  // Promote the best buffer entry into the main table when it beats the worst
-  // main table entry. The displaced main table entry re-enters the buffer with
-  // dead_count=0 so it must re-prove relevance before being re-admitted.
   void try_promote() {
-    // Find best buffer candidate: max dead_count, newest ts as tiebreak.
     BufEntry* best = nullptr;
     for (auto& b : buffer_) {
       if (!b.valid || b.dead_count == 0) continue;
@@ -758,7 +636,6 @@ private:
     if (!best) return;
     ++stats_.promote_attempts;
 
-    // Check whether best buffer entry beats worst main table entry.
     bool promote = false;
     for (const auto& e : entries_) if (!e.valid) { promote = true; break; }
     if (!promote) {
@@ -779,7 +656,6 @@ private:
     }
     if (!promote) { ++stats_.promote_blocked; return; }
 
-    // Evict worst main table entry → re-enter into best's buffer slot.
     ++stats_.promotions;
     stats_.buf_promo_dc_hist[std::min(best->dead_count, uint64_t{5})]++;
     if (best->second_chance) ++stats_.second_chance_promotions;
@@ -794,10 +670,10 @@ private:
     best->dead_count   = 0;
     best->ts           = has_victim ? ++buf_clock_ : 0;
     best->valid        = has_victim;
-    best->second_chance = has_victim;  // demoted main entry must re-earn promotion
+    best->second_chance = has_victim;
     if (has_victim) {
       ++stats_.demotions;
-      buf_evicted_pcs_.erase(victim_key);  // back in the buffer; no longer "evicted"
+      buf_evicted_pcs_.erase(victim_key);
     }
   }
 
@@ -813,7 +689,6 @@ private:
         [](const Entry& a, const Entry& b){
           return a.freq < b.freq || (a.freq == b.freq && a.ts < b.ts); });
     case Policy::LFU_DOA: {
-      // Aging: lose 1 unit of replacement priority per cap_ idle updates (one full round).
       const uint64_t aging_rate = cap_ > 0 ? cap_ : 1;
       auto eff = [&](const Entry& e) -> uint64_t {
         const uint64_t idle    = update_count_ - e.last_seen_update;
@@ -824,7 +699,6 @@ private:
         [&](const Entry& a, const Entry& b){
           const uint64_t fa = eff(a), fb = eff(b);
           return fa < fb || (fa == fb && a.ts < b.ts); });
-      // Attribution: record how much MA penalty and aging contributed to this eviction.
       ++evict_count_;
       const uint64_t idle          = update_count_ - victim.last_seen_update;
       const uint64_t aging_penalty = std::min(victim.freq, idle / aging_rate);
@@ -869,13 +743,6 @@ private:
   }
 };
 
-// Two-level history table: PC → { block address → dead-confirmation counter }.
-// Outer level: up to pc_ways distinct dpPred PCs, DoA-LFU eviction.
-// Inner level: up to addr_ways block addresses per PC, DoA-LFU eviction.
-// Both freq counters increment only on dead evictions (DoA-LFU).
-// Optional per-PC addr promotion buffer: new addr entries stage here and are
-// promoted to the inner table only when their dead count exceeds the weakest
-// current addr entry's freq.
 class PCPartitionedTable {
 public:
   PCPartitionedTable() = default;
@@ -899,7 +766,6 @@ public:
   }
 
   void update(uint64_t pc, uint64_t addr, liveness_class lv) {
-    // --- PC level: find or insert ---
     PCEntry* pe = nullptr;
     for (auto& e : entries_)
       if (e.valid && e.pc == pc) { pe = &e; break; }
@@ -911,9 +777,8 @@ public:
       for (auto& a : pe->addrs) a = AddrEntry{};
       for (auto& b : pe->buf)   b = BufEntry{};
     }
-    if (lv == liveness_class::doa) pe->freq++;  // DoA-LFU at PC level
+    if (lv == liveness_class::doa) pe->freq++;
 
-    // --- Addr level: check main slots ---
     for (auto& a : pe->addrs) {
       if (a.valid && a.addr == addr) {
         if (lv == liveness_class::doa) { a.count = std::min(a.count + 1, MAX_COUNTER); a.freq++; }
@@ -922,7 +787,6 @@ public:
       }
     }
 
-    // --- Addr level: check promotion buffer (DoA confirmations only) ---
     if (addr_buf_cap_ > 0) {
       for (auto& b : pe->buf) {
         if (b.valid && b.addr == addr) {
@@ -942,7 +806,6 @@ public:
           return;
         }
       }
-      // New addr: stage in buffer on DoA evictions only.
       if (lv == liveness_class::doa) {
         auto& bslot      = buf_victim(*pe);
         bslot.addr       = addr;
@@ -953,7 +816,6 @@ public:
       return;
     }
 
-    // --- No buffer: insert on DoA evictions only ---
     if (lv == liveness_class::doa) {
       auto& slot = evict_addr(*pe);
       slot.addr  = addr;
@@ -968,8 +830,8 @@ private:
 
   struct AddrEntry {
     uint64_t addr        = 0;
-    uint64_t count       = 0;  // DoA counter
-    uint64_t freq        = 0;  // DoA-LFU: dead confirmation count
+    uint64_t count       = 0;
+    uint64_t freq        = 0;
     bool     valid       = false;
   };
   struct BufEntry {
@@ -980,7 +842,7 @@ private:
   };
   struct PCEntry {
     uint64_t pc    = 0;
-    uint64_t freq  = 0;  // DoA-LFU: total dead confirmations across all addrs
+    uint64_t freq  = 0;
     bool     valid = false;
     std::vector<AddrEntry> addrs;
     std::vector<BufEntry>  buf;
@@ -1021,7 +883,6 @@ private:
 
 struct cache_stats {
   std::string name;
-  // prefetch stats
   uint64_t pf_requested = 0;
   uint64_t pf_issued = 0;
   uint64_t pf_useful = 0;
@@ -1035,27 +896,19 @@ struct cache_stats {
 
   uint64_t llt_bypasses = 0;
   uint64_t llc_bypasses = 0;
-  uint64_t pfq_hits = 0;              // LLC fills where PFN was in PFQ (dp=true)
-  uint64_t cbpred_nogate_bypasses = 0; // LLC bypasses that fired without a PFQ hit
-  uint64_t liveness_bypasses = 0;    // LLC bypasses from repl_hist DoA classification
-  uint64_t liveness_probes   = 0;    // DoA fills inserted as probes instead of bypassed (recheck)
-  uint64_t liveness_bypass_shadow_hits = 0;  // re-references to bypassed blocks (confirmed bypass mistakes)
-  uint64_t bypass_duel_suppressed = 0; // DoA fills not bypassed because the duel selected arm A (no-bypass)
+  uint64_t pfq_hits = 0;
+  uint64_t cbpred_nogate_bypasses = 0;
+  uint64_t liveness_bypasses = 0;
+  uint64_t liveness_probes   = 0;
+  uint64_t liveness_bypass_shadow_hits = 0;
+  uint64_t bypass_duel_suppressed = 0;
 
-  // DoA liveness stats.
-  // For every cache: evictions = valid blocks displaced; doa = those never accessed.
-  // For LLC only: doa_stlb_found / doa_stlb_also_doa track the reverse-STLB lookup
-  // on each LLC DoA eviction — how often the corresponding STLB entry is still present
-  // and also unaccessed (i.e., the LLC and STLB DoA are correlated).
   uint64_t evictions    = 0;
   uint64_t doa          = 0;
-  // Recency 4-state census (LIVENESS_CHAR only): indexed by BLOCK::eviction_state
-  // [0]=dead [1]=mid_lru [2]=mid_mru [3]=live.
   uint64_t recency_state[4] = {};
-  uint64_t doa_stlb_found    = 0; // LLC DoA evictions where STLB entry was present
-  uint64_t doa_stlb_also_doa = 0; // of those, STLB entry also had accessed == false
+  uint64_t doa_stlb_found    = 0;
+  uint64_t doa_stlb_also_doa = 0;
 
-  // History table utilisation (ROI only, reset at warmup boundary).
   uint64_t phist_queries       = 0;
   uint64_t phist_table_hits    = 0;
   uint64_t phist_promotions    = 0;
@@ -1101,28 +954,22 @@ class CACHE : public champsim::operable, public MemoryRequestConsumer, public Me
     bool valid = false;
     bool prefetch = false;
     bool dirty = false;
-    bool accessed = false; // set on hit; read and cleared on eviction
-    bool dp = false;       // dead-page bit: set on LLC fill when the block's PFN is in the PFQ;
-                           // gates accessed tracking and bHIST updates (cbPred only)
-    uint64_t dp_pc = 0;   // dpPred PC stored at fill time (valid when dp=true)
-    uint64_t prop_pc = 0; // STLB→LLC propagated PC (STLB_LLC_PROP): the STLB PC that
-                          // bypassed this block's page. 0 = none. Used to index the
-                          // LLC liveness history table on eviction (matches the fill-time
-                          // bypass decision). Kept separate from dp_pc/dp to avoid cbPred semantics.
+    bool accessed = false;
+    bool dp = false;
+    uint64_t dp_pc = 0;
+    uint64_t prop_pc = 0;
 
     uint64_t address = 0;
     uint64_t v_address = 0;
     uint64_t data = 0;
-    uint64_t ip = 0; // PC that caused the miss that filled this block
+    uint64_t ip = 0;
 
     uint32_t pf_metadata = 0;
 
-    uint64_t install_cycle   = 0; // cycle when block was installed (for halflife classification)
-    uint64_t last_hit_cycle  = 0; // cycle of most recent hit (0 = never hit)
-    liveness_class ins_class = liveness_class::alive; // class predicted at fill time
-    uint8_t eviction_state = 0; // 2-bit recency liveness state: 0=dead 1=mid_lru 2=mid_mru
-                                // 3=live. Set online on each demand hit from the block's
-                                // recency-stack rank, per RECENCY_VERSION. Reset to 0 on fill.
+    uint64_t install_cycle   = 0;
+    uint64_t last_hit_cycle  = 0;
+    liveness_class ins_class = liveness_class::alive;
+    uint8_t eviction_state = 0;
   };
   using set_type = std::vector<BLOCK>;
 
@@ -1132,140 +979,70 @@ class CACHE : public champsim::operable, public MemoryRequestConsumer, public Me
 
   // ── dpPred-cbPred predictor ──────────────────────────────────────────────
 
-  // Shared physical-frame queue: dpPred fills it; cbPred reads it.
-  // Each entry is (PFN, dpPred PC) so cbPred can use the PC as the bHIST key.
   inline static std::deque<std::pair<uint64_t, uint64_t>> pfq{};
-  // STLB→LLC propagation (STLB_LLC_PROP): idealized/unbounded PFN→PC map. The STLB
-  // bypass records PFN→(STLB PC); the LLC reads it at fill (always available, no
-  // aging). This is the "magic" oracle store to evaluate whether the cross-level
-  // signal helps at all — a realistic bounded structure comes later if it does.
   inline static std::unordered_map<uint64_t, uint64_t> prop_map{};
-  // STLB→LLC propagation, PC-gate variant (PROP_GATE=pc): the set of PCs whose
-  // translations the STLB bypassed. An LLC block is gated-in iff its own loading PC
-  // is in this set (instruction-granular cross-level signal), vs the PFN-gate above
-  // (page-granular). Idealized/unbounded, like prop_map.
   inline static std::unordered_set<uint64_t> stlb_dead_pcs{};
   inline static uint64_t pfq_cap = 8;
 
-  // Set by cpu0_STLB during initialize(); read by LLC for reverse STLB DoA lookup.
   inline static const set_type* stlb_block_ptr = nullptr;
 
-  // Per-instance state
   bool dppred = false;
   bool cbpred = false;
-  uint64_t pconf_thd = 6; // phist confidence threshold
-  uint64_t bconf_thd = 6; // bhist confidence threshold
-  uint64_t thd_doa  = 1;  // repl_hist_pc: score >= thd_doa  → DoA (θ_doa)
-  bool mid_promote = false; // promote DoA blocks to MRU on hit (srrip_live)
-  uint64_t st_size = 2;   // shadow table capacity
+  uint64_t pconf_thd = 6;
+  uint64_t bconf_thd = 6;
+  uint64_t thd_doa  = 1;
+  bool mid_promote = false;
+  uint64_t st_size = 2;
 
-  HistTable phist;           // PC → confidence (dpPred)
-  // cbPred bHIST: three modes selected by BHIST_MODE env var.
-  //   "flat" (default): HistTable keyed by block address (addr-indexed, exp004 style)
-  //   "pc":     PCPartitionedTable keyed by (dpPred PC, block address) — requires PFQ hit
-  //   "pconly": HistTable (bhist_flat) keyed by the dpPred PC ALONE — aggregates a PC's
-  //             deadness across all its addresses (like our repl_hist), to isolate the
-  //             per-PC-aggregate vs per-(PC,address) difference in the Mazumdar→ours bridge.
+  HistTable phist;
   bool use_pc_bhist = false;
-  bool cbpred_pc_only_ = false;   // BHIST_MODE=pconly: bhist_flat keyed by dp_pc only
-  bool cbpred_access_pc_ = false; // CBPRED_KEY set: use the clean ungated cbPred path
-                                  // (learn every eviction, evict_lv + thresholds)
-  bool cbpred_key_addr_  = false; // CBPRED_KEY=block_addr: key that clean path by block
-                                  // address instead of the demand-access PC. Lets us vary
-                                  // indexing and scoring ONE at a time in the morph.
-  HistTable          bhist_flat;  // used when use_pc_bhist=false (keyed by address, or dp_pc if pc_only)
-  PCPartitionedTable bhist_pc;    // used when use_pc_bhist=true
-  std::deque<std::tuple<uint64_t, uint64_t, uint64_t>> shadow_table; // (VPN, data, PC)
+  bool cbpred_pc_only_ = false;
+  bool cbpred_access_pc_ = false;
+  bool cbpred_key_addr_  = false;
+  HistTable          bhist_flat;
+  PCPartitionedTable bhist_pc;
+  std::deque<std::tuple<uint64_t, uint64_t, uint64_t>> shadow_table;
 
-  // Liveness-bypass shadow: block addresses our own predictor bypassed. A later
-  // re-reference to one is a confirmed bypass mistake → we feed an alive
-  // observation for that PC (which zeroes its score), so it stops bypassing.
-  // Self-calibrating: silent when bypass is correct (no re-refs → no cost).
-  // Enabled by BYPASS_SHADOW_SIZE (0 = disabled). Tags only, no data.
   uint64_t bypass_shadow_cap_ = 0;
-  std::unordered_map<uint64_t, std::pair<uint64_t, uint64_t>> bypass_shadow_;  // block_addr → (pc, data)
-  std::deque<uint64_t> bypass_shadow_fifo_;               // FIFO eviction order
+  std::unordered_map<uint64_t, std::pair<uint64_t, uint64_t>> bypass_shadow_;
+  std::deque<uint64_t> bypass_shadow_fifo_;
 
-  // Replacement guidance: use bHIST dead_count signals to guide cache replacement.
-  // High dead_count → entry is often dead → better eviction target (prioritize eviction).
-  // Used to integrate bypass predictor signals into replacement decisions.
-  bool repl_guidance_enable = false;  // enable replacement guidance from bHIST
-  uint64_t repl_guidance_thd = 0;     // threshold: dead_count >= thd → good victim
+  bool repl_guidance_enable = false;
+  uint64_t repl_guidance_thd = 0;
 
-  // Most recent miss-fill latency in cycles (current_cycle - cycle_enqueued - 1),
-  // set in handle_fill immediately before impl_update_replacement_state. Lets a
-  // replacement module attribute per-fill miss cost (e.g. ipv_live set dueling on
-  // total miss latency instead of hit count). 0 on warmup-elided fills.
   uint64_t last_fill_latency = 0;
 
-
-  // Query bHIST for guidance score (dead_count) of a block for replacement.
-  // Returns the dead_count from bHIST, or 0 if not found or guidance disabled.
   uint64_t get_repl_guidance_score(uint64_t block_address, uint64_t dp_pc) const;
 
-  // Per-PC replacement guidance history.
-  // Tracks a single score per PC: +1 on every DoA eviction, reset to 0 on any
-  // accessed eviction. Updated at every LLC/STLB eviction.
-  // Default: unbounded (unordered_map fallback, backward compatible).
-  // Bounded: configured via REPL_HIST_{LLC,STLB}_CAP + REPL_HIST_{BUF_CAP,REPL} env vars
-  // in load_predictor_settings(). Uses the same HistTable replacement policies
-  // (lru/lfu/lfu_doa/srrip) and optional promotion buffer as phist/bhist.
   HistTable repl_hist_pc;
-  bool repl_hist_use_addr{false};  // REPL_HIST_MODE=addr: index by block addr (LLC) or VPN (STLB)
+  bool repl_hist_use_addr{false};
 
-  // DOA_COUNTER_TRACE=1: log every repl_hist_pc score update (ROI only) to
-  // doa_counter_trace_<NAME>.csv as "cycle,pc,addr,evict_class,old_score,new_score",
-  // so the full per-key counter time series can be reconstructed offline to
-  // check whether scores saturate cleanly per PC or oscillate, and which
-  // block addresses within a PC are driving its score.
   bool doa_trace_enable_ = false;
   std::ofstream doa_trace_file_;
-  bool liveness_bypass{false};      // LIVENESS_BYPASS=1: bypass DoA LLC fills using repl_hist
-  uint64_t bypass_thd{0};           // BYPASS_THD: score >= bypass_thd → bypass (must be >= thd_doa)
-  bool stlb_liveness_bypass{false}; // STLB_LIVENESS_BYPASS=1: bypass DoA STLB fills using repl_hist
-  uint64_t stlb_bypass_thd{0};      // STLB_BYPASS_THD: threshold for STLB bypass
-  bool stlb_llc_prop_{false};       // STLB_LLC_PROP=1: STLB bypass records PFN→(STLB PC); the LLC
-                                    // bypass predictor indexes repl_hist by that propagated STLB PC
-                                    // for STLB-bypassed pages (cross-level, like Mazumdar's cbPred).
-  bool prop_hybrid_{false};         // STLB_LLC_PROP_HYBRID=1 (version B): on a prop_map MISS, fall
-                                    // back to the LLC's own PC for both predict and update. Off
-                                    // (version A): a miss means no predict and no update (pure
-                                    // cross-level / Mazumdar-like).
-  bool prop_ownpc_{false};          // STLB_LLC_PROP_OWNPC=1 (version D): use the PFN match only as a
-                                    // dead-page GATE (require a prop_map hit) but index repl_hist by
-                                    // the LLC's OWN PC, not the propagated STLB PC. Isolates the gate
-                                    // from the index.
-  bool prop_gate_pc_{false};        // PROP_GATE=pc: gate the LLC predictor by the block's own PC being
-                                    // in the STLB-dead-PC set (instruction-granular), indexing by own
-                                    // PC — vs the default PFN-gate (page-granular, index by propagated
-                                    // STLB PC). Tests whether the cross-level signal transfers better
-                                    // at page or PC granularity.
-  uint64_t bypass_fire_reset_period_{0}; // BYPASS_FIRE_RESET_PERIOD: reset scores every N bypass fires (global, legacy)
-  uint64_t bypass_fire_count_{0};        // running count of bypass fires (for fire-based reset)
+  bool liveness_bypass{false};
+  uint64_t bypass_thd{0};
+  bool stlb_liveness_bypass{false};
+  uint64_t stlb_bypass_thd{0};
+  bool stlb_llc_prop_{false};
+  bool prop_hybrid_{false};
+  bool prop_ownpc_{false};
+  bool prop_gate_pc_{false};
+  uint64_t bypass_fire_reset_period_{0};
+  uint64_t bypass_fire_count_{0};
 
-  // Bypass set-dueling (BYPASS_DUEL=1 + LIVENESS_BYPASS=1).
-  // arm A: bypass suppressed; arm B: bypass active; followers adopt the lower-
-  // miss-latency arm.  Independent of the replacement-guidance PSEL in srrip_live.
   bool     bypass_duel_enable_{false};
-  int      bypass_duel_ns_{0};       // BYPASS_DUEL_N_SAMPLERS (default 32 when enabled)
-  int64_t  bypass_duel_lat_a_{0};    // cumulative miss latency for arm-A sampler sets
-  int64_t  bypass_duel_lat_b_{0};    // cumulative miss latency for arm-B sampler sets
-  int64_t  bypass_duel_hyst_{0};     // BYPASS_DUEL_HYST: B must lead A by this margin to win
+  int      bypass_duel_ns_{0};
+  int64_t  bypass_duel_lat_a_{0};
+  int64_t  bypass_duel_lat_b_{0};
+  int64_t  bypass_duel_hyst_{0};
 
-  // Classify block liveness based on repl_hist_pc counters for the fill PC.
-  // Used by srrip_live and ipv_live replacement policies to guide insertion/promotion.
   liveness_class classify_block_liveness(uint64_t block_address, uint64_t pc) const;
 
-  // Unbounded characterization: track all (PC, address) pairs to measure actual demand.
-  // Enables data-driven sizing decisions: how many PCs and addresses per PC do we actually see?
   bool characterization_enable = false;
-  std::map<uint64_t, std::set<uint64_t>> pc_to_addrs;  // PC → set of unique addresses
+  std::map<uint64_t, std::set<uint64_t>> pc_to_addrs;
   void record_characterization(uint64_t dp_pc, uint64_t block_address);
   void print_characterization_stats() const;
 
-  // Per-PC liveness characterization: enabled by LIVENESS_CHAR=1.
-  // Classifies each eviction as DoA / mostly-dead / mostly-alive using the halflife criterion
-  // and accumulates counts per PC, then prints them at end_phase.
   struct PCLivenessEntry { uint64_t total = 0, doa = 0, mostly_dead = 0, mostly_alive = 0; };
   bool liveness_char_enable = false;
   std::unordered_map<uint64_t, PCLivenessEntry> pc_liveness_char;
@@ -1274,28 +1051,18 @@ class CACHE : public champsim::operable, public MemoryRequestConsumer, public Me
                             bool accessed);
   void print_liveness_char() const;
 
-  // Per-(PC, address) DoA counter: enabled by DOA_ADDR_SUMMARY=1. Replays the
-  // same +1-on-DoA/reset-on-alive rule as repl_hist_pc, but keyed by (pc, addr)
-  // instead of pc alone, so we can see the distribution of counter values
-  // *within* a PC's own address population -- not something the live
-  // replacement decision ever computes (repl_hist_pc is always single-keyed),
-  // this is diagnostic only. Aggregated per-PC summary printed at end_phase
-  // instead of an event log, so it scales to suites with huge address counts
-  // without writing multi-GB files.
   struct AddrCounterEntry { int64_t score = 0; bool ever_reset = false; };
   bool doa_addr_summary_enable_ = false;
   std::unordered_map<uint64_t, std::unordered_map<uint64_t, AddrCounterEntry>> doa_addr_table_;
-  std::unordered_map<uint64_t, uint64_t> doa_addr_pc_doa_total_;  // pc -> total DoA events
+  std::unordered_map<uint64_t, uint64_t> doa_addr_pc_doa_total_;
   void record_doa_addr_summary(uint64_t pc, uint64_t addr, liveness_class evict_lv);
   void print_doa_addr_summary() const;
 
-  // PFQ gate control: when false, cbPred bypasses on bhist alone (no PFQ hit required).
-  // pfq_ema_mode tracks the hit rate with an EMA and dynamically flips pfq_gate.
   bool pfq_gate = true;
   bool pfq_ema_mode = false;
-  double pfq_ema_val = 1.0;           // starts at 100% → gate starts ON
+  double pfq_ema_val = 1.0;
   double pfq_ema_alpha = 1.0 / 1024.0;
-  double pfq_ema_thd = 0.10;          // gate turns OFF when EMA drops below this
+  double pfq_ema_thd = 0.10;
 
   static constexpr unsigned  VPN_BITS    = 4;
   static constexpr unsigned  PC_BITS     = 6;
@@ -1303,13 +1070,13 @@ class CACHE : public champsim::operable, public MemoryRequestConsumer, public Me
   static constexpr uint64_t  MAX_COUNTER = 16;
 
   uint64_t fold_xor(uint64_t val, unsigned bits) const;
-  void load_predictor_settings();                          // reads env vars to configure dpPred/cbPred at construction
-  bool dppred_shadow_lookup(const PACKET& handle_pkt);     // true → shadow hit: history reset, data served, entry re-inserted into STLB, PTW skipped
-  bool dppred_bypass(const PACKET& fill_mshr);             // true → skip STLB fill
-  void shadow_record_bypass(uint64_t block_addr, uint64_t pc, uint64_t data);  // record a bypassed block + its data
-  bool liveness_bypass_shadow_hit(const PACKET& handle_pkt);            // re-reference of a bypassed block: erase history entry + reinsert; true → STLB miss satisfied
-  bool cbpred_bypass(const PACKET& fill_mshr);             // true → skip LLC fill
-  void update_eviction_counters(const BLOCK& victim, liveness_class lv);  // update history tables at eviction
+  void load_predictor_settings();
+  bool dppred_shadow_lookup(const PACKET& handle_pkt);
+  bool dppred_bypass(const PACKET& fill_mshr);
+  void shadow_record_bypass(uint64_t block_addr, uint64_t pc, uint64_t data);
+  bool liveness_bypass_shadow_hit(const PACKET& handle_pkt);
+  bool cbpred_bypass(const PACKET& fill_mshr);
+  void update_eviction_counters(const BLOCK& victim, liveness_class lv);
 
 public:
   struct NonTranslatingQueues : public champsim::operable {
@@ -1393,7 +1160,6 @@ public:
   std::deque<PACKET> MSHR;
   std::deque<PACKET> inflight_writes;
 
-  // functions
   bool add_rq(const PACKET& packet) override final;
   bool add_wq(const PACKET& packet) override final;
   bool add_pq(const PACKET& packet) override final;
@@ -1427,7 +1193,6 @@ public:
   const std::bitset<NUM_REPLACEMENT_MODULES> repl_type;
   const std::bitset<NUM_PREFETCH_MODULES> pref_type;
 
-  // constructor
   CACHE(std::string v1, double freq_scale, uint32_t v2, uint32_t v3, uint32_t v8, uint32_t fill_lat, long int max_tag, long int max_fill, unsigned offset_bits,
         bool pref_load, bool wq_full_addr, bool va_pref, unsigned pref_mask, NonTranslatingQueues& queue_set, MemoryRequestConsumer* ll,
         std::bitset<NUM_PREFETCH_MODULES> pref, std::bitset<NUM_REPLACEMENT_MODULES> repl)

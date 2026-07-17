@@ -31,8 +31,6 @@
 #include "instruction.h"
 #include "util.h"
 
-// Defined (strong) in the corresponding replacement/*_live/*.cc; each resolves
-// to a null weak symbol (no-op) in binaries that don't link that policy.
 extern "C" void lru_live_reset_phase_stats(CACHE*) __attribute__((weak));
 extern "C" void srrip_live_reset_phase_stats(CACHE*) __attribute__((weak));
 extern "C" void ipv_live_reset_phase_stats(CACHE*) __attribute__((weak));
@@ -43,10 +41,6 @@ extern "C" void ipv_live_reset_phase_stats(CACHE*) __attribute__((weak));
 
 namespace {
 
-// PC subset tracker (REPL_HIST_PC_SUBSET=1).
-// Collects unique fill-PCs per cache level and reports at program exit whether
-// the LLC PC set is a subset of the STLB PC set. If it isn't, something is
-// wrong: every LLC fill must have gone through address translation first.
 struct PCSubsetTracker {
   std::unordered_set<uint64_t> llc_pcs, stlb_pcs;
   bool enabled = false;
@@ -72,12 +66,6 @@ struct PCSubsetTracker {
 };
 PCSubsetTracker g_pc_subset;
 
-// Merged replacement history table (REPL_HIST_MERGED=1).
-// One HistTable shared by both LLC and cpu0_STLB. Both levels call update()
-// on the same object at eviction and classify() on it at fill time. Each
-// level still uses its own thd_doa for the classify call, so the per-level
-// threshold tuning continues to apply.
-// ChampSim is single-threaded, so sharing the table is race-condition-free.
 HistTable g_merged_repl_hist;
 bool      g_merged_hist_ready = false;
 bool      g_use_merged_hist   = false;
@@ -97,10 +85,6 @@ uint64_t CACHE::fold_xor(uint64_t val, unsigned bits) const
   return result;
 }
 
-// On a shadow table hit: reset the VPN's history row, serve the stored
-// translation to all requesters, and re-insert the entry into the STLB via
-// a synthetic handle_fill call (PTW is skipped entirely).
-// dppred_bypass will see a cleared phist counter and allow the insertion.
 bool CACHE::dppred_shadow_lookup(const PACKET& handle_pkt)
 {
   const auto vpn = handle_pkt.address >> OFFSET_BITS;
@@ -109,18 +93,15 @@ bool CACHE::dppred_shadow_lookup(const PACKET& handle_pkt)
   if (it == shadow_table.end())
     return false;
 
-  phist.reset(std::get<2>(*it));   // clear confidence for the PC that caused this bypass
+  phist.reset(std::get<2>(*it));
   const auto stored_data = std::get<1>(*it);
   shadow_table.erase(it);
 
-  // Serve the translation to all waiting requesters.
   auto copy{handle_pkt};
   copy.data = stored_data;
   for (auto ret : copy.to_return)
     ret->return_data(copy);
 
-  // Re-insert into the STLB. Clear to_return so handle_fill does not
-  // double-serve the data it already dispatched above.
   PACKET fill_pkt = handle_pkt;
   fill_pkt.data = stored_data;
   fill_pkt.to_return = {};
@@ -129,8 +110,6 @@ bool CACHE::dppred_shadow_lookup(const PACKET& handle_pkt)
   return true;
 }
 
-// Returns true and records the bypass when dpPred predicts this VPN is dead.
-// Only called when the set is full (otherwise there is nothing to bypass).
 bool CACHE::dppred_bypass(const PACKET& fill_mshr)
 {
   if (phist.get_score(fill_mshr.ip) <= (int64_t)pconf_thd)
@@ -140,7 +119,6 @@ bool CACHE::dppred_bypass(const PACKET& fill_mshr)
     pfq.pop_front();
   pfq.push_back({fill_mshr.data >> LOG2_PAGE_SIZE, fill_mshr.ip});
 
-  // Remember the bypassed (VPN, data, PC) for re-insertion on re-access (FIFO)
   if (shadow_table.size() >= st_size)
     shadow_table.pop_front();
   shadow_table.push_back({fill_mshr.address >> OFFSET_BITS, fill_mshr.data, fill_mshr.ip});
@@ -149,27 +127,18 @@ bool CACHE::dppred_bypass(const PACKET& fill_mshr)
   return true;
 }
 
-// Record a block our liveness predictor just bypassed, with its data, so a later
-// re-reference can be detected and recovered. FIFO eviction.
 void CACHE::shadow_record_bypass(uint64_t block_addr, uint64_t pc, uint64_t data)
 {
   if (bypass_shadow_cap_ == 0) return;
-  if (bypass_shadow_.count(block_addr)) return;  // already tracked
+  if (bypass_shadow_.count(block_addr)) return;
   while (bypass_shadow_fifo_.size() >= bypass_shadow_cap_) {
-    bypass_shadow_.erase(bypass_shadow_fifo_.front());  // no-op if already removed by a hit
+    bypass_shadow_.erase(bypass_shadow_fifo_.front());
     bypass_shadow_fifo_.pop_front();
   }
   bypass_shadow_[block_addr] = {pc, data};
   bypass_shadow_fifo_.push_back(block_addr);
 }
 
-// On a re-reference to a block we bypassed: a confirmed bypass mistake. Delete
-// the offending PC's history entry (so it must re-earn DoA) and reinsert the
-// block. STLB: serve the stored translation and re-insert, skipping the page
-// walk (translations are stable, so the stored mapping is safe to serve) →
-// returns true, miss satisfied. LLC: returns false so the miss refetches fresh
-// data and reinserts it normally (the erased history entry means it is no longer
-// bypassed) — avoids serving potentially-stale line data from a victim buffer.
 bool CACHE::liveness_bypass_shadow_hit(const PACKET& handle_pkt)
 {
   if (bypass_shadow_cap_ == 0) return false;
@@ -177,31 +146,26 @@ bool CACHE::liveness_bypass_shadow_hit(const PACKET& handle_pkt)
   auto it = bypass_shadow_.find(addr);
   if (it == bypass_shadow_.end()) return false;
   const uint64_t pc = it->second.first, data = it->second.second;
-  bypass_shadow_.erase(it);            // stale fifo slot cleaned on later eviction
-  repl_hist_pc.erase_key(pc);          // delete the offending PC's history entry
+  bypass_shadow_.erase(it);
+  repl_hist_pc.erase_key(pc);
   sim_stats.back().liveness_bypass_shadow_hits++;
   if (NAME == "cpu0_STLB") {
     auto copy{handle_pkt};
     copy.data = data;
     for (auto ret : copy.to_return)
-      ret->return_data(copy);          // serve the recovered translation
+      ret->return_data(copy);
     PACKET fill_pkt = handle_pkt;
     fill_pkt.data = data;
     fill_pkt.to_return = {};
-    handle_fill(fill_pkt);             // re-insert into the STLB (PTW skipped)
+    handle_fill(fill_pkt);
     return true;
   }
-  return false;  // LLC: miss proceeds, refetches fresh data, reinserts (not bypassed)
+  return false;
 }
 
-// Returns true when cbPred predicts this cache block is dead
-// (its page was previously bypassed by dpPred and its block counter is high).
 bool CACHE::cbpred_bypass(const PACKET& fill_mshr)
 {
   if (cbpred_access_pc_) {
-    // Morph rung: clean ungated predictor. Key by block address (CBPRED_KEY=block_addr)
-    // or the demand-access PC (CBPRED_KEY=access_pc) so indexing can be varied alone.
-    // bconf_thd plays the role of (bypass_thd - 1).
     const uint64_t key = cbpred_key_addr_ ? (fill_mshr.address >> OFFSET_BITS) : fill_mshr.ip;
     const uint64_t conf = (uint64_t)std::max(int64_t{0}, bhist_flat.get_score(key));
     if (conf <= bconf_thd)
@@ -223,13 +187,11 @@ bool CACHE::cbpred_bypass(const PACKET& fill_mshr)
   uint64_t confidence;
   uint64_t dp_pc = 0;
   if (cbpred_pc_only_) {
-    // PC-only: aggregate per dpPred PC (needs a PFQ hit for the PC), keyed in bhist_flat.
     if (!in_pfq) return false;
     dp_pc = pfq_it->second;
     confidence = (uint64_t)std::max(int64_t{0}, bhist_flat.get_score(dp_pc));
     record_characterization(dp_pc, block_addr);
   } else if (use_pc_bhist) {
-    // PC-indexed mode requires a PFQ hit to obtain the dpPred PC.
     if (!in_pfq) return false;
     dp_pc = pfq_it->second;
     confidence = bhist_pc.get(dp_pc, block_addr);
@@ -249,52 +211,38 @@ bool CACHE::cbpred_bypass(const PACKET& fill_mshr)
   return true;
 }
 
-// Updates the history table when a valid entry is displaced: phist for a
-// translation entry evicted from the STLB, bhist for a cache block evicted
-// from the LLC.  Increments the confidence counter if the entry was never
-// accessed since insertion; resets it to zero otherwise.
 void CACHE::update_eviction_counters(const BLOCK& victim, liveness_class evict_lv)
 {
-  // cbpred / dppred bypass-predictor tables.
-  // phist and bhist_flat are HistTable (take liveness_class); bhist_pc is
-  // PCPartitionedTable and still uses bool accessed.
   const liveness_class bypass_lv = victim.accessed ? liveness_class::alive : liveness_class::doa;
   if (dppred && NAME == "cpu0_STLB")
     phist.update(victim.ip, bypass_lv);
   else if (cbpred && NAME == "LLC") {
     if (cbpred_access_pc_) {
-      // Morph rung: learn on every eviction, same classification (evict_lv) + thresholds
-      // for both key choices, so only the key (and BHIST_SCORING) varies between rungs.
       const uint64_t key = cbpred_key_addr_ ? (victim.address >> OFFSET_BITS) : victim.ip;
       bhist_flat.update(key, evict_lv, thd_doa);
     } else if (cbpred_pc_only_) {
-      if (victim.dp) bhist_flat.update(victim.dp_pc, bypass_lv);  // PC-only: per dp_pc (needs PFQ)
+      if (victim.dp) bhist_flat.update(victim.dp_pc, bypass_lv);
     } else if (use_pc_bhist) {
       if (victim.dp) bhist_pc.update(victim.dp_pc, victim.address >> OFFSET_BITS, bypass_lv);
     } else if (victim.dp || !pfq_gate) {
-      // Per-address: when the PFQ gate is off (CBPRED_NO_PFQ) learn on every
-      // eviction so the ungated rung has data even with dpPred disabled.
       bhist_flat.update(victim.address >> OFFSET_BITS, bypass_lv);
     }
   }
 
-  // Replacement-guidance history: delegated to HistTable (bounded or unbounded).
   if (NAME == "LLC" || NAME == "cpu0_STLB") {
     bool do_update = true;
     uint64_t repl_key = 0;
     if (stlb_llc_prop_ && NAME == "LLC") {
       const uint64_t own_key = repl_hist_use_addr ? (victim.address >> OFFSET_BITS) : victim.ip;
       if (prop_ownpc_) {
-        // Version D: gate by the PFN match (prop_pc!=0 = page was STLB-bypassed),
-        // but index by the LLC's own PC.
         if (victim.prop_pc != 0) repl_key = own_key;
         else                     do_update = false;
       } else if (victim.prop_pc != 0) {
-        repl_key = victim.prop_pc;   // A/B propagated → STLB PC
+        repl_key = victim.prop_pc;
       } else if (prop_hybrid_) {
-        repl_key = own_key;          // version B: own PC on miss
+        repl_key = own_key;
       } else {
-        do_update = false;           // version A: no update on miss
+        do_update = false;
       }
     } else {
       repl_key = repl_hist_use_addr
@@ -321,30 +269,6 @@ void CACHE::update_eviction_counters(const BLOCK& victim, liveness_class evict_l
   }
 }
 
-// Reads environment variables to enable dpPred/cbPred and tune their
-// thresholds and table sizes. Called once from the CACHE constructor.
-// Variables (all optional; defaults match the header initializers):
-//   DPPRED=1             enable dead-page predictor on the STLB
-//   CBPRED=1             enable dead-block predictor on the LLC
-//   PCONF_THD=<n>        dpPred confidence threshold (default 6)
-//   BCONF_THD=<n>        cbPred confidence threshold (default 6)
-//   ST_SIZE=<n>          shadow-table capacity (default 2)
-//   PFQ_CAP=<n>          shared PFQ capacity (default 8)
-//   HIST_REPL=lru|lfu|lfu_doa|srrip  replacement for both phist and flat bhist (default: lru)
-//   PHIST_REPL=...       override HIST_REPL for pHIST only
-//   BHIST_REPL=...       override HIST_REPL for flat bHIST only
-//   PHIST_BUF_CAP=<n>    promotion buffer size for pHIST (default 0 = off)
-//   BHIST_MODE=flat|pc   bHIST indexing: flat=addr-indexed HistTable (default),
-//                        pc=PC-partitioned PCPartitionedTable (requires PFQ hit)
-//   BHIST_WAYS=<n>       flat bHIST capacity (default 4096)
-//   BHIST_BUF_CAP=<n>    promotion buffer size for flat bHIST (default 0 = off)
-//   BHIST_PC_WAYS=<n>    PC slots for pc-mode bHIST (default 256)
-//   BHIST_ADDR_WAYS=<n>  addr slots per PC (default 16)
-//   BHIST_ADDR_BUF=<n>   per-PC addr promotion buffer size (default 0 = off)
-//   CBPRED_NO_PFQ=1      disable the PFQ gate: cbPred fires on flat bhist alone
-//   PFQ_EMA=1            dynamically adapt the PFQ gate via an EMA of hit rate
-//   PFQ_EMA_ALPHA=<f>    EMA decay factor (default 1/1024 ≈ 0.001)
-//   PFQ_EMA_THD=<pct>    gate turns OFF when EMA < pct/100 (default 10 → 10%)
 void CACHE::load_predictor_settings()
 {
   auto getenv_uint64 = [](const char* var, uint64_t fallback) -> uint64_t {
@@ -374,16 +298,10 @@ void CACHE::load_predictor_settings()
       if (std::string_view(v) == "srrip")   return HistTable::Policy::SRRIP;
       return HistTable::Policy::LRU;
     };
-    // PHIST_REPL and BHIST_REPL override HIST_REPL for their respective table.
     const char* hist_repl  = std::getenv("HIST_REPL");
     const char* phist_repl = std::getenv("PHIST_REPL") ? std::getenv("PHIST_REPL") : hist_repl;
     const char* bhist_repl = std::getenv("BHIST_REPL") ? std::getenv("BHIST_REPL") : hist_repl;
 
-    // Morph study (branch maz-morph-unbounded): flags to gradually turn Mazumdar's
-    // bounded/hashed/gated predictor into our idealized one.
-    //   MAZ_UNBOUNDED=1   → bhist/phist become unbounded (idealized, like ours)
-    //   {B,P}HIST_HASH=1  → bounded table hashes the key into log2(ways) bits
-    //                       (faithful Mazumdar: finite hashed index with aliasing)
     const bool maz_unbounded = getenv_uint64("MAZ_UNBOUNDED", 0) != 0;
     auto log2_floor = [](uint64_t n) { unsigned b = 0; while (n > 1) { n >>= 1; ++b; } return b; };
 
@@ -406,7 +324,6 @@ void CACHE::load_predictor_settings()
       bhist_flat = maz_unbounded ? HistTable() : HistTable(bw, parse_policy(bhist_repl), buf_cap);
       if (!maz_unbounded && getenv_uint64("BHIST_HASH", 0))
         bhist_flat.set_hash(log2_floor(bw));
-      // pconly: same bhist_flat HistTable, but keyed by the dpPred PC alone (set below).
       if (const char* m = std::getenv("BHIST_MODE"); m && std::string_view(m) == "pconly")
         cbpred_pc_only_ = true;
     }
@@ -425,18 +342,11 @@ void CACHE::load_predictor_settings()
   pfq_ema_alpha = getenv_double("PFQ_EMA_ALPHA", pfq_ema_alpha);
   pfq_ema_thd   = getenv_double("PFQ_EMA_THD", 10.0) / 100.0;
 
-  // Liveness-guided replacement: score threshold θ_doa.
-  // Per-level vars (LLC_THD_DOA / STLB_THD_DOA) override THD_DOA for a specific
-  // cache level, allowing LLC and STLB to use different optimal thresholds in a
-  // combined run. Falls back to THD_DOA if the level-specific var is unset.
   const char* level_doa  = (NAME == "LLC")      ? std::getenv("LLC_THD_DOA")
                          : (NAME == "cpu0_STLB") ? std::getenv("STLB_THD_DOA")
                          : nullptr;
   thd_doa  = (level_doa  && *level_doa)  ? std::stoull(level_doa)  : getenv_uint64("THD_DOA",  1);
 
-  // Bounded repl_hist_pc: 0 = unbounded (default, backward compatible).
-  // REPL_HIST_REPL controls table management policy (same options as HIST_REPL).
-  // REPL_HIST_BUF_CAP controls the promotion buffer size (default 0 = disabled).
   {
     const uint64_t rh_cap = (NAME == "LLC")
         ? getenv_uint64("REPL_HIST_LLC_CAP",  0)
@@ -460,13 +370,8 @@ void CACHE::load_predictor_settings()
         repl_hist_pc.set_checkpoint(rh_ckpt, NAME);
     } else if ((NAME == "LLC"       && std::getenv("REPL_HIST_LLC_CAP")) ||
                (NAME == "cpu0_STLB" && std::getenv("REPL_HIST_STLB_CAP"))) {
-      // This level's own cap var is explicitly set to 0: zero-capacity bounded
-      // table — classify() always returns alive. Keyed on the level's OWN
-      // var so that bounding one level (e.g. LLC) leaves the other unbounded
-      // rather than forcing it empty.
       repl_hist_pc = HistTable(0, HistTable::Policy::LRU, 0, 0);
     }
-    // else (this level's env var absent): keep default-constructed HistTable (unbounded mode)
   }
   if (const char* v = std::getenv("DOA_COUNTER_TRACE"); v && std::stoull(v) && (NAME == "LLC" || NAME == "cpu0_STLB")) {
     doa_trace_enable_ = true;
@@ -486,31 +391,21 @@ void CACHE::load_predictor_settings()
   if (const char* v = std::getenv("MID_PROMOTE"); v && std::stoull(v))
     mid_promote = true;
 
-  // Replacement guidance: use bHIST signals to guide cache replacement decisions.
   if (const char* v = std::getenv("REPL_GUIDANCE"); v && std::stoull(v))
     repl_guidance_enable = true;
   repl_guidance_thd = getenv_uint64("REPL_GUIDANCE_THD", 0);
 
-  // Per-PC liveness characterization (LIVENESS_CHAR=1).
   if (const char* v = std::getenv("LIVENESS_CHAR"); v && std::stoull(v))
     liveness_char_enable = true;
 
-
-  // Unbounded characterization: track all (PC, address) pairs to measure actual demand.
   if (const char* v = std::getenv("CHARACTERIZATION"); v && std::stoull(v))
     characterization_enable = true;
 
-  // PC subset tracking: record unique fill-PCs per level (LLC and STLB) and
-  // report LLC⊆STLB at program exit. Activated by REPL_HIST_PC_SUBSET=1.
   if (const char* v = std::getenv("REPL_HIST_PC_SUBSET"); v && std::stoull(v))
     ::g_pc_subset.enabled = true;
 
   if (const char* v = std::getenv("REPL_HIST_MODE"); v && std::string_view(v) == "addr")
     repl_hist_use_addr = true;
-  // Periodic bypass recheck (probe): shared by LLC and STLB. Default off.
-  //   BYPASS_RECHECK_MODE     = off | fixed | backoff
-  //   BYPASS_RECHECK_INTERVAL = base interval (bypasses between probes, default 32)
-  //   BYPASS_RECHECK_CAP      = max interval for backoff (default 256)
   auto apply_recheck = [&](HistTable& tbl) {
     const char* m = std::getenv("BYPASS_RECHECK_MODE");
     if (!m) return;
@@ -518,7 +413,7 @@ void CACHE::load_predictor_settings()
     HistTable::RecheckMode mode = HistTable::RecheckMode::Off;
     if      (sv == "fixed")   mode = HistTable::RecheckMode::Fixed;
     else if (sv == "backoff") mode = HistTable::RecheckMode::Backoff;
-    else return;  // "off" or unrecognised → leave disabled
+    else return;
     const uint64_t base = getenv_uint64("BYPASS_RECHECK_INTERVAL", 32);
     const uint64_t cap  = getenv_uint64("BYPASS_RECHECK_CAP",     256);
     tbl.set_recheck(mode, base, cap);
@@ -563,17 +458,9 @@ void CACHE::load_predictor_settings()
       prop_ownpc_ = true;
     if (const char* v = std::getenv("PROP_GATE"); v && std::string_view(v) == "pc")
       prop_gate_pc_ = true;
-    // STLB bypass shadow (our predictor's own — distinct from Mazumdar's dpPred
-    // shadow_table). On the STLB, long-range translation re-reference is normal
-    // page re-use, so the shadow must be SMALL: only near-immediate re-references
-    // are genuine "needed that page now" bypass mistakes. A bit larger than the
-    // LLC's may be needed since translation working sets are coarser.
     bypass_shadow_cap_ = getenv_uint64("STLB_BYPASS_SHADOW_SIZE", getenv_uint64("BYPASS_SHADOW_SIZE", 0));
   }
 
-  // Merged replacement history table: one shared HistTable for both LLC and
-  // STLB. Capacity set by REPL_HIST_CAP (0 = unbounded). Activated by
-  // REPL_HIST_MERGED=1. Initialised only once (first CACHE constructor wins).
   if (const char* v = std::getenv("REPL_HIST_MERGED"); v && std::stoull(v)) {
     ::g_use_merged_hist = true;
     if (!::g_merged_hist_ready) {
@@ -582,8 +469,6 @@ void CACHE::load_predictor_settings()
       ::g_merged_repl_hist = HistTable(cap, HistTable::Policy::LRU, buf, 0);
       ::g_merged_hist_ready = true;
     }
-    // Per-instance repl_hist_pc is unused in merged mode; keep it default
-    // (unbounded, empty) so classify calls that somehow reach it are safe.
   }
 }
 
@@ -658,8 +543,6 @@ void CACHE::record_liveness_char(uint64_t pc, uint64_t install_cycle,
     entry.doa++;
     return;
   }
-  // Halflife criterion: last hit in first half of residency → mostly-dead,
-  // second half → mostly-alive.
   const uint64_t lifetime     = evict_cycle - install_cycle;
   const uint64_t time_til_end = evict_cycle - last_hit_cycle;
   if (lifetime == 0 || time_til_end <= lifetime / 2)
@@ -673,7 +556,6 @@ void CACHE::print_liveness_char() const
   if (!liveness_char_enable)
     return;
 
-  // Recency 4-state census (ROI), indexed by BLOCK::eviction_state.
   if (!roi_stats.empty()) {
     const char* rv = std::getenv("RECENCY_VERSION");
     const int ver = (rv && (rv[0] == '1' || rv[0] == '3')) ? (rv[0] - '0') : 2;
@@ -726,20 +608,14 @@ bool CACHE::handle_fill(const PACKET& fill_mshr)
 {
   cpu = fill_mshr.cpu;
 
-  // Expose this fill's miss latency to the replacement module (read in
-  // impl_update_replacement_state below). Mirrors the total_miss_latency
-  // accounting further down so set dueling can compare configs by miss cost.
   last_fill_latency = current_cycle - (fill_mshr.cycle_enqueued + 1);
 
-  // find victim
   auto [set_begin, set_end] = get_set_span(fill_mshr.address);
   auto way = std::find_if_not(set_begin, set_end, [](auto x) { return x.valid; });
   if (way == set_end) {
     way = std::next(set_begin, impl_find_victim(fill_mshr.cpu, fill_mshr.instr_id, get_set_index(fill_mshr.address), &*set_begin, fill_mshr.ip,
                                                 fill_mshr.address, fill_mshr.type));
 
-    // Replacement guidance: re-evaluate victim using bHIST dead_count signals.
-    // Prefer evicting entries with high dead_count (entries that are often dead).
     if (repl_guidance_enable) {
       auto best_victim = way;
       uint64_t best_score = get_repl_guidance_score(best_victim->address, best_victim->dp_pc);
@@ -758,11 +634,6 @@ bool CACHE::handle_fill(const PACKET& fill_mshr)
     }
   }
 
-  // Bypass set-dueling: accumulate miss latency per sampler arm so the duel
-  // can compare "bypass active" (arm B) vs "bypass suppressed" (arm A).
-  // Accumulated unconditionally for all demand fills (not WRITE) regardless of
-  // whether lv_bypass will fire — the PSEL measures overall cache performance,
-  // not just the DoA path.  bduel_use_b is then used below to gate lv_bypass.
   bool bduel_use_b = false;
   if (bypass_duel_enable_ && NAME == "LLC" && fill_mshr.type != WRITE) {
     const uint32_t fill_set = get_set_index(fill_mshr.address);
@@ -776,48 +647,29 @@ bool CACHE::handle_fill(const PACKET& fill_mshr)
     bduel_use_b = is_b || (!is_a && step > 0 && b_wins);
   }
 
-  // Predictor bypass: only fires when a valid entry would be displaced
-  // (way->valid distinguishes eviction from filling a free slot).
-  // On predictor bypass we do not redirect through the existing bypass code
-  // path (way = set_end) because that path calls impl_update_replacement_state
-  // with way_idx = NUM_WAY, which is out of bounds for LRU and semantically
-  // wrong for any policy (no way was actually used). Instead we track the
-  // bypass in a flag and handle it directly below.
   bool predictor_bypassed = false;
   if (way != set_end && way->valid) {
     uint64_t bypass_key = repl_hist_use_addr
         ? (fill_mshr.address >> OFFSET_BITS) : fill_mshr.ip;
-    // STLB→LLC propagation (option a, cross-level): index the LLC bypass by the
-    // STLB PC that bypassed this block's page. Require a PFQ hit — if the page was
-    // never STLB-bypassed, the LLC predictor does not act on it.
     bool prop_ok = true;
     if (stlb_llc_prop_ && NAME == "LLC") {
       if (prop_gate_pc_) {
-        // PC-gate: gate by the block's own PC being STLB-dead; index by own PC.
         if (!stlb_dead_pcs.count(fill_mshr.ip) && !prop_hybrid_)
-          prop_ok = false;                           // not STLB-dead PC → don't predict (unless hybrid)
-        // bypass_key stays own PC (fill_mshr.ip)
+          prop_ok = false;
       } else {
-        // PFN-gate (page-granular): index by the propagated STLB PC.
         const auto pfn = fill_mshr.address >> LOG2_PAGE_SIZE;
         const auto mit = prop_map.find(pfn);
         if (mit != prop_map.end()) {
-          if (!prop_ownpc_) bypass_key = mit->second;  // A/B: STLB PC; D: keep own PC
+          if (!prop_ownpc_) bypass_key = mit->second;
         } else if (!prop_hybrid_) {
-          prop_ok = false;                             // A/D: gate on miss; B: keep own PC
+          prop_ok = false;
         }
       }
     }
-    // DoA classification first; then, if a periodic recheck is due, suppress the
-    // bypass so this fill is inserted as a probe and yields fresh eviction data.
     const bool lv_doa = liveness_bypass && NAME == "LLC"
         && fill_mshr.type != TRANSLATION && prop_ok
         && repl_hist_pc.classify(bypass_key, bypass_thd) == liveness_class::doa;
     const bool lv_probe  = lv_doa && repl_hist_pc.should_probe(bypass_key);
-    // When bypass dueling is active, arm A sets never bypass; arm B sets and
-    // followers-using-B do.  This lets the PSEL compare the two policies and
-    // propagate the winner to followers.  Without dueling, bduel_use_b=false
-    // and the original liveness_bypass flag governs everything unchanged.
     const bool lv_bypass = lv_doa && !lv_probe
         && (!bypass_duel_enable_ || bduel_use_b);
     if (bypass_duel_enable_ && lv_doa && !lv_probe && !bduel_use_b)
@@ -841,9 +693,9 @@ bool CACHE::handle_fill(const PACKET& fill_mshr)
       sim_stats.back().liveness_bypasses++;
       repl_hist_pc.record_bypass(fill_mshr.ip);
       shadow_record_bypass(fill_mshr.address >> OFFSET_BITS, fill_mshr.ip, fill_mshr.data);
-      if (stlb_llc_prop_) {  // propagate to the LLC: PFN→(STLB PC) for the PFN-gate,
-        prop_map[fill_mshr.data >> LOG2_PAGE_SIZE] = fill_mshr.ip;  // and the PC itself
-        stlb_dead_pcs.insert(fill_mshr.ip);                          // for the PC-gate
+      if (stlb_llc_prop_) {
+        prop_map[fill_mshr.data >> LOG2_PAGE_SIZE] = fill_mshr.ip;
+        stlb_dead_pcs.insert(fill_mshr.ip);
       }
     }
 
@@ -913,8 +765,6 @@ bool CACHE::handle_fill(const PACKET& fill_mshr)
         }
         if (!way->accessed) {
           sim_stats.back().doa++;
-          // LLC only: reverse-STLB lookup — find the STLB entry for this block's
-          // virtual page and check whether it is also unaccessed (DoA).
           if (NAME == "LLC" && stlb_block_ptr != nullptr) {
             const uint64_t vpn = way->v_address >> LOG2_PAGE_SIZE;
             for (const auto& sb : *stlb_block_ptr) {
@@ -941,12 +791,9 @@ bool CACHE::handle_fill(const PACKET& fill_mshr)
         way->dp_pc = way->dp ? pit->second : 0;
         if (way->dp)
           sim_stats.back().pfq_hits++;
-        // STLB→LLC propagation: remember the propagated STLB PC so the eviction
-        // update indexes repl_hist by the same key used for the fill-time decision.
         way->prop_pc = 0;
         if (stlb_llc_prop_ && NAME == "LLC" && fill_mshr.type != TRANSLATION) {
           if (prop_gate_pc_) {
-            // PC-gate: gated-in (and indexed) by own PC if it is STLB-dead.
             if (stlb_dead_pcs.count(fill_mshr.ip)) way->prop_pc = fill_mshr.ip;
           } else {
             const auto mit = prop_map.find(pfn_fill);
@@ -960,9 +807,6 @@ bool CACHE::handle_fill(const PACKET& fill_mshr)
       way->ip = fill_mshr.ip;
       way->install_cycle  = current_cycle;
       way->last_hit_cycle = current_cycle;
-      // DOA_FORCE_PCT: force a random subset of keys' persistent score up to
-      // THD_DOA before classifying, so insertion depth and later hit-time
-      // promotion treat them as DoA -- independent of bypass (see maybe_force_doa).
       {
         const uint64_t force_key = repl_hist_use_addr
             ? (fill_mshr.address >> OFFSET_BITS) : fill_mshr.ip;
@@ -1039,13 +883,6 @@ bool CACHE::try_hit(const PACKET& handle_pkt)
       ret->return_data(copy);
 
     way->dirty = (handle_pkt.type == WRITE);
-    // A writeback hit is dirty data landing from L2, not a read of the block,
-    // so it is not evidence of read reuse. We therefore do not update the
-    // liveness signals on writeback hits: neither the Accessed bit (which
-    // distinguishes DoA from reused blocks) nor last_hit_cycle (which drives
-    // the mostly-dead vs mostly-alive halflife split). This keeps the liveness
-    // classification based on genuine reads only. Both fields are used solely
-    // by the LLC/STLB liveness mechanism.
     if (handle_pkt.type != WRITE) {
       if (NAME == "cpu0_STLB" || NAME == "LLC")
         way->accessed = true;
@@ -1107,14 +944,9 @@ bool CACHE::handle_miss(const PACKET& handle_pkt)
       mshr_entry->to_return = std::move(to_return);
     }
   } else {
-    // dpPred shadow table: if this VPN was previously bypassed, serve the
-    // stored translation and re-insert it into the STLB (PTW skipped).
     if (dppred && NAME == "cpu0_STLB" && dppred_shadow_lookup(handle_pkt))
       return true;
 
-    // Liveness-bypass shadow: a re-reference to a block our predictor bypassed
-    // is a confirmed mistake. Delete the PC's history entry and reinsert the
-    // block (STLB: serve the stored translation, skipping the PTW → returns true).
     if (liveness_bypass_shadow_hit(handle_pkt))
       return true;
 
@@ -1408,16 +1240,11 @@ void CACHE::begin_phase()
   roi_stats.back().name = NAME;
   sim_stats.back().name = NAME;
 
-  // Reset history table stats so ROI counts are clean (exclude warmup).
   phist.reset_stats();
   bhist_flat.reset_stats();
   repl_hist_pc.reset_stats();
   g_merged_repl_hist.reset_stats();
 
-  // Replacement-policy-local reporting counters (e.g. lru_live.cc's Insert
-  // mix / hit-promotion stats) live outside the module-dispatch system, so
-  // they're reset via a weak symbol that's a no-op if that policy isn't
-  // linked into this binary.
   if (lru_live_reset_phase_stats)
     lru_live_reset_phase_stats(this);
   if (srrip_live_reset_phase_stats)
@@ -1425,8 +1252,6 @@ void CACHE::begin_phase()
   if (ipv_live_reset_phase_stats)
     ipv_live_reset_phase_stats(this);
 
-  // pc_liveness_char (LIVENESS_CHAR's per-PC breakdown) is otherwise never
-  // reset, so it silently accumulates across the warmup/ROI boundary.
   pc_liveness_char.clear();
 }
 
@@ -1461,7 +1286,6 @@ void CACHE::end_phase(unsigned finished_cpu)
   for (int i = 0; i < 4; ++i)
     roi_stats.back().recency_state[i] = sim_stats.back().recency_state[i];
 
-  // History table utilisation stats (accumulated since begin_phase reset).
   {
     const auto& ps = phist.get_stats();
     roi_stats.back().phist_queries       = ps.queries;
