@@ -54,7 +54,7 @@ everything else is deterministic given the same binary + trace.
 | policy | condition | binary | env vars |
 |---|---|---|---|
 | lru | base | `champsim_lru` | (none) |
-| lru | fixed | `champsim_lru_live` | `THD_DOA=6 BHIST_MODE=pc SRRIP_LIVE_TARGET=llc LRU_LIVE_DOA_INS=2n3` |
+| lru | fixed | `champsim_lru_live` | `THD_DOA=6 SRRIP_LIVE_TARGET=llc LRU_LIVE_DOA_INS=2n3` |
 | lru | bypass | `champsim_lru_live` | above `base` fragment + `LRU_LIVE_DOA_INS=bypass` |
 | lru | duel | `champsim_lru_live` | `base` fragment + `LRU_LIVE_DOA_INS=2n3 LRU_LIVE_DOA_INS_B=lru DUEL_N_SAMPLERS=32 DUEL_METRIC=latency` |
 | lru | addr | `champsim_lru_live` | `base` fragment + `LRU_LIVE_DOA_INS=2n3` + `REPL_HIST_MODE=addr REPL_HIST_LLC_CAP=4096 REPL_HIST_REPL=lfu_doa` |
@@ -69,8 +69,14 @@ everything else is deterministic given the same binary + trace.
 | ipv | duel | `champsim_ipv_live` | `base` fragment + `DUEL_N_CONFIGS=2 DUEL_N_SAMPLERS=32 DUEL_METRIC=latency` |
 | ipv | addr | `champsim_ipv_live` | `base` fragment + `addr` fragment |
 
-`base` fragment = `THD_DOA=6 BHIST_MODE=pc SRRIP_LIVE_TARGET=llc`. `addr`
+`base` fragment = `THD_DOA=6 SRRIP_LIVE_TARGET=llc`. `addr`
 fragment = `REPL_HIST_MODE=addr REPL_HIST_LLC_CAP=4096 REPL_HIST_REPL=lfu_doa`.
+
+Earlier runs of this matrix also set `BHIST_MODE=pc` in the base fragment;
+it's dropped here because it's no longer read anywhere in the codebase
+(removed along with the dpPred/cbPred subsystem, the only thing that ever
+consumed it) — the 60 outputs above were regenerated without it and are
+unaffected, since it was already a no-op before removal too.
 
 ### IPV mechanism
 
