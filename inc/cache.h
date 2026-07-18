@@ -328,7 +328,12 @@ class CACHE : public champsim::operable, public MemoryRequestConsumer, public Me
   void shadow_record_bypass(uint64_t block_addr, uint64_t pc, uint64_t data);
   bool liveness_bypass_shadow_hit(const PACKET& handle_pkt);
   void update_eviction_counters(const BLOCK& victim, liveness_class lv);
+  void record_fill_eviction_stats(const BLOCK& victim);
   bool evaluate_liveness_bypass(uint64_t key, uint64_t level_thd, bool enabled);
+  bool evaluate_fill_bypass(const PACKET& fill_mshr, set_type::iterator& way, set_type::iterator set_end);
+  void maybe_force_doa_on_fill(const PACKET& fill_mshr);
+  void mark_accessed_on_hit(BLOCK& blk, uint8_t type);
+  void reset_phase_liveness_stats();
 
 public:
   struct NonTranslatingQueues : public champsim::operable {
