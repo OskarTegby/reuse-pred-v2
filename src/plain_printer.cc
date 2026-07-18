@@ -86,13 +86,9 @@ void champsim::plain_printer::print(CACHE::stats_type stats)
 
     stream << stats.name << " AVERAGE MISS LATENCY: " << std::ceil(stats.total_miss_latency) / std::ceil(TOTAL_MISS) << " cycles" << std::endl;
 
-    if (stats.evictions > 0) {
+    if (stats.evictions > 0)
       stream << stats.name << " DOA: " << stats.doa << " / " << stats.evictions
              << " (" << std::fixed << std::setprecision(2) << (100.0 * stats.doa / stats.evictions) << "%)" << std::endl;
-      if (stats.doa_stlb_found > 0)
-        stream << stats.name << " DOA_STLB_CORR: " << stats.doa_stlb_also_doa << " / " << stats.doa_stlb_found
-               << " (" << std::fixed << std::setprecision(2) << (100.0 * stats.doa_stlb_also_doa / stats.doa_stlb_found) << "%)" << std::endl;
-    }
     if (stats.liveness_bypasses > 0)
       stream << stats.name << " LIVENESS_BYPASSES: " << stats.liveness_bypasses << std::endl;
     if (stats.liveness_probes > 0)

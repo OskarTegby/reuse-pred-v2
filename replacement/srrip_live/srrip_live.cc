@@ -197,16 +197,13 @@ void CACHE::update_replacement_state(uint32_t triggering_cpu, uint32_t set, uint
   auto& cls  = ::slot_class[this][idx];
   auto& st   = ::stats[this];
 
-  bool use_liveness = false;
+  // SRRIP_LIVE_TARGET=none explicitly disables liveness guidance while
+  // still on the LLC (used by the "bypass" condition: raw DoA bypass stays
+  // active in cache.cc, but insertion/promotion here falls back to plain
+  // SRRIP). Liveness guidance never applies anywhere but the LLC.
   const char* target_env = std::getenv("SRRIP_LIVE_TARGET");
-  if (target_env && target_env[0] != '\0') {
-    std::string t(target_env);
-    if      (t == "llc"  && NAME == "LLC")        use_liveness = true;
-    else if (t == "stlb" && NAME == "cpu0_STLB")  use_liveness = true;
-    else if (t == "both" && (NAME == "LLC" || NAME == "cpu0_STLB")) use_liveness = true;
-  } else {
-    if (NAME == "LLC") use_liveness = true;
-  }
+  const bool disabled = target_env && target_env[0] != '\0' && std::string(target_env) != "llc";
+  const bool use_liveness = (NAME == "LLC") && !disabled;
 
   if (use_liveness) {
     // Set dueling: classify set as sampler_a, sampler_b, or follower.

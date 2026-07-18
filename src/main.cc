@@ -174,11 +174,11 @@ int main(int argc, char** argv)
 
       cfg << "# environment knobs (value or <unset>)\n";
       static const char* const env_keys[] = {
-          "THD_DOA", "LLC_THD_DOA", "STLB_THD_DOA",
+          "THD_DOA", "LLC_THD_DOA",
           "MID_THD", "LOW_THD", "BHIST_MODE", "SRRIP_LIVE_TARGET", "LRU_LIVE_HIT_INIT",
-          "LIVENESS_BYPASS", "BYPASS_THD", "STLB_LIVENESS_BYPASS", "STLB_BYPASS_THD",
+          "LIVENESS_BYPASS", "BYPASS_THD",
           "CBPRED", "DPPRED", "CBPRED_IDX", "DPPRED_IDX", "CBPRED_KEY", "MAZ_UNBOUNDED", "BHIST_HASH", "PHIST_HASH",
-          "BHIST_WAYS", "BHIST_PC_WAYS", "REPL_HIST_LLC_CAP", "REPL_HIST_STLB_CAP", "REPL_HIST_BUF_CAP", "REPL_HIST_REPL",
+          "BHIST_WAYS", "BHIST_PC_WAYS", "REPL_HIST_LLC_CAP", "REPL_HIST_BUF_CAP", "REPL_HIST_REPL",
           "PFQ_CAP", "LIVENESS_CHAR", "ST_SIZE", "JOB_ID", "SGE_TASK_ID"};
       for (const char* k : env_keys) {
         const char* v = std::getenv(k);

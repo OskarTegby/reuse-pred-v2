@@ -22,7 +22,9 @@
 // Runtime overrides (k+1 ints each):
 //   IPV_ALIVE=...             base/alive vector (config 0)
 //   IPV_DOA=...               DoA vector (config 0)
-//   SRRIP_LIVE_TARGET=llc|stlb|both
+//
+// Liveness guidance only ever applies to the LLC -- per-PC history tables
+// are LLC-only in this project.
 //
 // N-way set dueling (DUEL_N_CONFIGS=N, DUEL_N_SAMPLERS=S):
 //   Partitions LLC sets into N sampler groups (S sets each) plus followers.
@@ -115,17 +117,15 @@ void move_to(uint16_t* order, uint16_t* rank, int from, int to)
   rank[way] = static_cast<uint16_t>(to);
 }
 
+// SRRIP_LIVE_TARGET=none explicitly disables liveness guidance while still
+// on the LLC (used by the "bypass" condition: raw DoA bypass stays active
+// in cache.cc, but insertion/promotion here falls back to plain IPV).
+// Liveness guidance never applies anywhere but the LLC.
 bool is_targeted(const CACHE& c)
 {
+  if (c.NAME != "LLC") return false;
   const char* target_env = std::getenv("SRRIP_LIVE_TARGET");
-  if (target_env && target_env[0] != '\0') {
-    const std::string t(target_env);
-    if (t == "llc")  return c.NAME == "LLC";
-    if (t == "stlb") return c.NAME == "cpu0_STLB";
-    if (t == "both") return c.NAME == "LLC" || c.NAME == "cpu0_STLB";
-    return false;
-  }
-  return c.NAME == "LLC";
+  return !(target_env && target_env[0] != '\0' && std::string(target_env) != "llc");
 }
 
 struct Stats {
