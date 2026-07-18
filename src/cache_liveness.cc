@@ -138,13 +138,6 @@ void CACHE::configure_doa_diagnostics()
   }
   if (const char* v = std::getenv("DOA_ADDR_SUMMARY"); v && std::stoull(v) && NAME == "LLC")
     doa_addr_summary_enable_ = true;
-
-  const uint64_t ddp = getenv_uint64("DOA_DEFAULT_PCT", 0);
-  if (ddp > 0)
-    repl_hist_pc.set_doa_default_pct(static_cast<int>(ddp));
-  const uint64_t dfp = getenv_uint64("DOA_FORCE_PCT", 0);
-  if (dfp > 0)
-    repl_hist_pc.set_doa_force_pct(static_cast<int>(dfp));
 }
 
 void CACHE::apply_bypass_recheck(HistTable& tbl)
@@ -255,11 +248,4 @@ bool CACHE::evaluate_fill_bypass(const PACKET& fill_mshr, set_type::iterator& wa
   const liveness_class evict_lv = way->accessed ? liveness_class::alive : liveness_class::doa;
   update_eviction_counters(*way, evict_lv);
   return false;
-}
-
-void CACHE::maybe_force_doa_on_fill(const PACKET& fill_mshr)
-{
-  const uint64_t force_key = repl_hist_use_addr
-      ? (fill_mshr.address >> OFFSET_BITS) : fill_mshr.ip;
-  repl_hist_pc.maybe_force_doa(force_key, static_cast<int64_t>(thd_doa));
 }

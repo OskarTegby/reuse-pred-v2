@@ -84,11 +84,6 @@ public:
   void set_reset_period(uint64_t period) { reset_period_ = period; }
   void set_bypass_pc_reset(uint64_t period) { bypass_pc_reset_period_ = period; }
 
-  void set_doa_default_pct(int pct) { doa_default_pct_ = pct; }
-
-  void set_doa_force_pct(int pct) { doa_force_pct_ = pct; }
-  void maybe_force_doa(uint64_t key, int64_t value);
-
   void record_bypass(uint64_t key);
 
   void reset_scores() {
@@ -177,17 +172,7 @@ private:
   std::unordered_map<uint64_t, uint64_t> recheck_interval_;
   std::unordered_map<uint64_t, bool>     recheck_probing_;
   unsigned hash_bits_ = 0;
-  int doa_default_pct_ = 0;
-  int doa_force_pct_   = 0;
 
-  static uint64_t mix64_(uint64_t x) {
-    x ^= x >> 33; x *= 0xff51afd7ed558ccdULL; x ^= x >> 33;
-    x *= 0xc4ceb9fe1a85ec53ULL; x ^= x >> 33;
-    return x;
-  }
-  bool doa_default_(uint64_t key) const {
-    return doa_default_pct_ > 0 && (mix64_(key) % 100) < static_cast<uint64_t>(doa_default_pct_);
-  }
   mutable std::unordered_map<uint64_t, int64_t> unmap_;
   uint64_t cap_          = 0;
   Policy   pol_          = Policy::LFU_DOA;
@@ -331,7 +316,6 @@ class CACHE : public champsim::operable, public MemoryRequestConsumer, public Me
   void record_fill_eviction_stats(const BLOCK& victim);
   bool evaluate_liveness_bypass(uint64_t key, uint64_t level_thd, bool enabled);
   bool evaluate_fill_bypass(const PACKET& fill_mshr, set_type::iterator& way, set_type::iterator set_end);
-  void maybe_force_doa_on_fill(const PACKET& fill_mshr);
   void mark_accessed_on_hit(BLOCK& blk, uint8_t type);
   void reset_phase_liveness_stats();
 

@@ -96,7 +96,6 @@ bool CACHE::handle_fill(const PACKET& fill_mshr)
       way->data = fill_mshr.data;
       way->ip = fill_mshr.ip;
       way->install_cycle  = current_cycle;
-      maybe_force_doa_on_fill(fill_mshr);
 
       metadata_thru =
           impl_prefetcher_cache_fill(pkt_address, get_set_index(fill_mshr.address), way_idx, fill_mshr.type == PREFETCH, evicting_address, metadata_thru);

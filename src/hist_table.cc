@@ -27,13 +27,6 @@ HistTable::HistTable(uint64_t cap, Policy pol, uint64_t buf_cap, uint64_t /*shad
     ma_penalty_ = std::atoi(ev);
 }
 
-void HistTable::maybe_force_doa(uint64_t key, int64_t value) {
-  if (doa_force_pct_ <= 0 || !unbounded_) return;
-  const uint64_t k = hk_(key);
-  if ((mix64_(k ^ 0x9E3779B97F4A7C15ULL) % 100) < static_cast<uint64_t>(doa_force_pct_))
-    unmap_[k] = value;
-}
-
 void HistTable::record_bypass(uint64_t key) {
   if (bypass_pc_reset_period_ == 0) return;
   auto& cnt = bypass_since_update_[key];
@@ -93,7 +86,6 @@ liveness_class HistTable::classify(uint64_t key, uint64_t thd_doa) const {
   if (unbounded_) {
     auto it = unmap_.find(key);
     if (it != unmap_.end() && it->second >= (int64_t)thd_doa) return liveness_class::doa;
-    if (it == unmap_.end() && doa_default_(key)) return liveness_class::doa;
     return liveness_class::alive;
   }
   for (const auto& e : entries_) {
@@ -126,7 +118,6 @@ liveness_class HistTable::classify(uint64_t key, uint64_t thd_doa) const {
     }
   } else {
     ++stats_.classify_cold_miss;
-    if (doa_default_(key)) return liveness_class::doa;
   }
   return liveness_class::alive;
 }
