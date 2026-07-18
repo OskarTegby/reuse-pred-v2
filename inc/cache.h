@@ -43,7 +43,7 @@ enum class liveness_class { doa, alive };
 
 class HistTable {
 public:
-  enum class Policy { LRU, LFU, LFU_DOA, SRRIP };
+  enum class Policy { LFU_DOA };
 
   struct Stats {
     uint64_t queries       = 0;
@@ -80,18 +80,11 @@ public:
   HistTable() : unbounded_(true) {}
   HistTable(uint64_t cap, Policy pol, uint64_t buf_cap = 0, uint64_t /*shadow_cap*/ = 0)
     : unbounded_(false), cap_(cap), pol_(pol), entries_(cap), buf_cap_(buf_cap), buffer_(buf_cap) {
-    if (pol_ == Policy::LFU_DOA) {
-      if (const char* ev = std::getenv("HIST_MA_PENALTY"))
-        ma_penalty_ = std::atoi(ev);
-    }
+    if (const char* ev = std::getenv("HIST_MA_PENALTY"))
+      ma_penalty_ = std::atoi(ev);
   }
 
   void set_hash(unsigned bits) { hash_bits_ = bits; }
-
-  void set_checkpoint(uint64_t interval, std::string name) {
-    checkpoint_interval_ = interval;
-    checkpoint_name_     = std::move(name);
-  }
 
   void set_reset_period(uint64_t period) { reset_period_ = period; }
   void set_bypass_pc_reset(uint64_t period) { bypass_pc_reset_period_ = period; }
@@ -204,12 +197,10 @@ public:
       auto it = oracle_buf_.find(key);
       if (it != oracle_buf_.end() && it->second >= thd_doa)
         ++stats_.classify_warm_oracle_hit;
-      if (pol_ == Policy::LFU_DOA) {
-        auto ait = aging_evicted_pcs_.find(key);
-        if (ait != aging_evicted_pcs_.end()) {
-          ++stats_.classify_warm_aged_out;
-          stats_.classify_warm_aged_hitsum += ait->second.second;
-        }
+      auto ait = aging_evicted_pcs_.find(key);
+      if (ait != aging_evicted_pcs_.end()) {
+        ++stats_.classify_warm_aged_out;
+        stats_.classify_warm_aged_hitsum += ait->second.second;
       }
     } else {
       ++stats_.classify_cold_miss;
@@ -287,7 +278,7 @@ public:
                stats_.classify_warm_oracle_hit,
                stats_.classify_warm_miss ? 100.0 * stats_.classify_warm_oracle_hit / stats_.classify_warm_miss : 0.0,
                oracle_buf_.size());
-        if (pol_ == Policy::LFU_DOA && stats_.classify_warm_aged_out > 0) {
+        if (stats_.classify_warm_aged_out > 0) {
           auto avg_h = [](uint64_t sum, uint64_t n) { return n ? (double)sum / n : 0.0; };
           printf("%s repl_hist warm_aged : aged_out=%lu (%.1f%% of warm)  avg_hits=%.1f\n",
                  prefix,
@@ -297,7 +288,7 @@ public:
         }
       }
     }
-    if (pol_ == Policy::LFU_DOA && evict_count_ > 0) {
+    if (evict_count_ > 0) {
       auto pct = [](uint64_t n, uint64_t d) { return d ? 100.0 * n / d : 0.0; };
       printf("%s repl_hist evict_attr: total=%lu  ma_penalty=%d  "
              "ma_loss: %.1f%% of evictions  avg_loss=%.2f  decisive=%.1f%%  |  "
@@ -385,22 +376,6 @@ public:
     if (buf_cap_ > 0 && evict_class == liveness_class::doa) {
       auto it = oracle_buf_.find(key);
       if (it != oracle_buf_.end()) ++it->second;
-    }
-    if (!unbounded_ && checkpoint_interval_ > 0) {
-      if (update_count_ % checkpoint_interval_ == 0) {
-        const uint64_t main_occ = static_cast<uint64_t>(
-            std::count_if(entries_.begin(), entries_.end(),
-                          [](const Entry& e){ return e.valid; }));
-        const uint64_t buf_occ = static_cast<uint64_t>(
-            std::count_if(buffer_.begin(), buffer_.end(),
-                          [](const BufEntry& b){ return b.valid; }));
-        fprintf(stderr,
-            "[repl_hist %s] update=%-10lu  main=%lu/%lu (%.0f%%)  buf=%lu/%lu (%.0f%%)  shadow_evictions=%lu  shadow_hits=%lu\n",
-            checkpoint_name_.c_str(), update_count_,
-            main_occ, cap_, cap_ ? 100.0 * main_occ / cap_ : 0.0,
-            buf_occ,  buf_cap_, buf_cap_ ? 100.0 * buf_occ / buf_cap_ : 0.0,
-            stats_.buf_evictions, stats_.shadow_hits);
-      }
     }
     auto record_transition = [&](int64_t old_s, int64_t new_s) {
       if (thd_doa == 0 || old_s == new_s) return;
@@ -522,7 +497,6 @@ private:
   };
 
   bool        unbounded_           = false;
-  uint64_t    checkpoint_interval_ = 0;
   uint64_t    reset_period_        = 0;
   uint64_t    update_count_        = 0;
   uint64_t bypass_pc_reset_period_{0};
@@ -534,7 +508,6 @@ private:
   std::unordered_map<uint64_t, uint64_t> recheck_count_;
   std::unordered_map<uint64_t, uint64_t> recheck_interval_;
   std::unordered_map<uint64_t, bool>     recheck_probing_;
-  std::string checkpoint_name_;
   unsigned hash_bits_ = 0;
   int doa_default_pct_ = 0;
   int doa_force_pct_   = 0;
@@ -549,7 +522,7 @@ private:
   }
   mutable std::unordered_map<uint64_t, int64_t> unmap_;
   uint64_t cap_          = 0;
-  Policy   pol_          = Policy::LRU;
+  Policy   pol_          = Policy::LFU_DOA;
   std::vector<Entry>    entries_;
   uint64_t clock_        = 0;
   uint64_t buf_cap_      = 0;
@@ -574,55 +547,36 @@ private:
   void on_hit(Entry& e, liveness_class evict_class) {
     const bool is_doa = evict_class == liveness_class::doa;
     e.last_seen_update = update_count_;
-    switch (pol_) {
-    case Policy::LRU:     e.ts = ++clock_;                                break;
-    case Policy::LFU:     ++e.freq; e.ts = ++clock_;                      break;
-    case Policy::LFU_DOA:
-      if (is_doa) e.freq = std::min(FREQ_CAP, e.freq + 3);
-      else if (ma_penalty_ < 0) {
-        const uint64_t loss   = static_cast<uint64_t>(-ma_penalty_);
-        const uint64_t actual = std::min(e.freq, loss);
-        e.ma_loss += actual;
-        e.freq    -= actual;
-      }
-      ++e.hit_count;
-      e.ts = ++clock_;
-      break;
-    case Policy::SRRIP:   e.rrpv = is_doa ? 0 : SRRIP_MAX;               break;
+    if (is_doa) e.freq = std::min(FREQ_CAP, e.freq + 3);
+    else if (ma_penalty_ < 0) {
+      const uint64_t loss   = static_cast<uint64_t>(-ma_penalty_);
+      const uint64_t actual = std::min(e.freq, loss);
+      e.ma_loss += actual;
+      e.freq    -= actual;
     }
+    ++e.hit_count;
+    e.ts = ++clock_;
   }
 
   void on_insert(Entry& e, liveness_class evict_class) {
     e.promoted = false;
     e.last_seen_update = update_count_;
     const bool is_doa = evict_class == liveness_class::doa;
-    switch (pol_) {
-    case Policy::LRU:     e.ts = ++clock_; e.freq = 0; e.rrpv = 0;                break;
-    case Policy::LFU:     e.freq = 1; e.ts = ++clock_; e.rrpv = 0;                break;
-    case Policy::LFU_DOA:
-      e.freq      = is_doa ? 3 : 0;
-      e.ma_loss   = 0;
-      e.hit_count = 0;
-      e.ts = ++clock_; e.rrpv = 0;
-      aging_evicted_pcs_.erase(e.key);
-      break;
-    case Policy::SRRIP:   e.rrpv = SRRIP_INS; e.freq = 0; e.ts = 0;              break;
-    }
+    e.freq      = is_doa ? 3 : 0;
+    e.ma_loss   = 0;
+    e.hit_count = 0;
+    e.ts = ++clock_; e.rrpv = 0;
+    aging_evicted_pcs_.erase(e.key);
   }
 
   void on_promote(Entry& e, uint64_t dead_count) {
     e.promoted = true;
     e.last_seen_update = update_count_;
-    switch (pol_) {
-    case Policy::LRU:     e.ts = ++clock_; e.freq = 0; e.rrpv = 0;           break;
-    case Policy::LFU:     e.freq = dead_count; e.ts = ++clock_; e.rrpv = 0;  break;
-    case Policy::LFU_DOA: e.freq      = std::min(FREQ_CAP, dead_count * 3);
-                          e.ma_loss   = 0;
-                          e.hit_count = 0;
-                          e.ts = ++clock_; e.rrpv = 0;
-                          aging_evicted_pcs_.erase(e.key);                    break;
-    case Policy::SRRIP:   e.rrpv = 0; e.freq = 0; e.ts = 0;                  break;
-    }
+    e.freq      = std::min(FREQ_CAP, dead_count * 3);
+    e.ma_loss   = 0;
+    e.hit_count = 0;
+    e.ts = ++clock_; e.rrpv = 0;
+    aging_evicted_pcs_.erase(e.key);
   }
 
   void try_promote() {
@@ -639,20 +593,9 @@ private:
     bool promote = false;
     for (const auto& e : entries_) if (!e.valid) { promote = true; break; }
     if (!promote) {
-      switch (pol_) {
-      case Policy::LRU:
-      case Policy::LFU:
-      case Policy::LFU_DOA: {
-        uint64_t min_freq = UINT64_MAX;
-        for (const auto& e : entries_) min_freq = std::min(min_freq, e.freq);
-        promote = best->dead_count > min_freq;
-        break;
-      }
-      case Policy::SRRIP:
-        for (const auto& e : entries_)
-          if (e.rrpv == SRRIP_MAX) { promote = true; break; }
-        break;
-      }
+      uint64_t min_freq = UINT64_MAX;
+      for (const auto& e : entries_) min_freq = std::min(min_freq, e.freq);
+      promote = best->dead_count > min_freq;
     }
     if (!promote) { ++stats_.promote_blocked; return; }
 
@@ -680,48 +623,31 @@ private:
   Entry& victim_slot() {
     for (auto& e : entries_) if (!e.valid) return e;
     stats_.main_ever_full = true;
-    switch (pol_) {
-    case Policy::LRU:
-      return *std::min_element(entries_.begin(), entries_.end(),
-        [](const Entry& a, const Entry& b){ return a.ts < b.ts; });
-    case Policy::LFU:
-      return *std::min_element(entries_.begin(), entries_.end(),
-        [](const Entry& a, const Entry& b){
-          return a.freq < b.freq || (a.freq == b.freq && a.ts < b.ts); });
-    case Policy::LFU_DOA: {
-      const uint64_t aging_rate = cap_ > 0 ? cap_ : 1;
-      auto eff = [&](const Entry& e) -> uint64_t {
-        const uint64_t idle    = update_count_ - e.last_seen_update;
-        const uint64_t penalty = idle / aging_rate;
-        return e.freq > penalty ? e.freq - penalty : 0;
-      };
-      Entry& victim = *std::min_element(entries_.begin(), entries_.end(),
-        [&](const Entry& a, const Entry& b){
-          const uint64_t fa = eff(a), fb = eff(b);
-          return fa < fb || (fa == fb && a.ts < b.ts); });
-      ++evict_count_;
-      const uint64_t idle          = update_count_ - victim.last_seen_update;
-      const uint64_t aging_penalty = std::min(victim.freq, idle / aging_rate);
-      const uint64_t eff_freq      = eff(victim);
-      if (victim.ma_loss > 0)   { ++evict_ma_nonzero_;    evict_ma_loss_sum_    += victim.ma_loss;    }
-      if (aging_penalty  > 0)   { ++evict_aging_nonzero_; evict_aging_loss_sum_ += aging_penalty;     }
-      if (eff_freq == 0) {
-        if (victim.ma_loss   > 0) ++evict_ma_decisive_;
-        if (aging_penalty    > 0) {
-          ++evict_aging_decisive_;
-          aging_evicted_pcs_[victim.key] = {victim.score, victim.hit_count};
-          evict_aging_hitsum_ += victim.hit_count;
-        }
-      }
-      return victim;
-    }
-    case Policy::SRRIP:
-      for (;;) {
-        for (auto& e : entries_) if (e.rrpv == SRRIP_MAX) return e;
-        for (auto& e : entries_) e.rrpv = std::min(e.rrpv + 1, SRRIP_MAX);
+    const uint64_t aging_rate = cap_ > 0 ? cap_ : 1;
+    auto eff = [&](const Entry& e) -> uint64_t {
+      const uint64_t idle    = update_count_ - e.last_seen_update;
+      const uint64_t penalty = idle / aging_rate;
+      return e.freq > penalty ? e.freq - penalty : 0;
+    };
+    Entry& victim = *std::min_element(entries_.begin(), entries_.end(),
+      [&](const Entry& a, const Entry& b){
+        const uint64_t fa = eff(a), fb = eff(b);
+        return fa < fb || (fa == fb && a.ts < b.ts); });
+    ++evict_count_;
+    const uint64_t idle          = update_count_ - victim.last_seen_update;
+    const uint64_t aging_penalty = std::min(victim.freq, idle / aging_rate);
+    const uint64_t eff_freq      = eff(victim);
+    if (victim.ma_loss > 0)   { ++evict_ma_nonzero_;    evict_ma_loss_sum_    += victim.ma_loss;    }
+    if (aging_penalty  > 0)   { ++evict_aging_nonzero_; evict_aging_loss_sum_ += aging_penalty;     }
+    if (eff_freq == 0) {
+      if (victim.ma_loss   > 0) ++evict_ma_decisive_;
+      if (aging_penalty    > 0) {
+        ++evict_aging_decisive_;
+        aging_evicted_pcs_[victim.key] = {victim.score, victim.hit_count};
+        evict_aging_hitsum_ += victim.hit_count;
       }
     }
-    return entries_[0];
+    return victim;
   }
 
   BufEntry& buf_victim() {
@@ -763,8 +689,6 @@ struct cache_stats {
 
   uint64_t evictions    = 0;
   uint64_t doa          = 0;
-  uint64_t doa_stlb_found    = 0;
-  uint64_t doa_stlb_also_doa = 0;
 };
 
 struct cache_queue_stats {
@@ -819,8 +743,6 @@ class CACHE : public champsim::operable, public MemoryRequestConsumer, public Me
   std::pair<set_type::const_iterator, set_type::const_iterator> get_set_span(uint64_t address) const;
   std::size_t get_set_index(uint64_t address) const;
 
-  inline static const set_type* stlb_block_ptr = nullptr;
-
   uint64_t thd_doa  = 1;
 
   uint64_t bypass_shadow_cap_ = 0;
@@ -836,8 +758,6 @@ class CACHE : public champsim::operable, public MemoryRequestConsumer, public Me
   std::ofstream doa_trace_file_;
   bool liveness_bypass{false};
   uint64_t bypass_thd{0};
-  bool stlb_liveness_bypass{false};
-  uint64_t stlb_bypass_thd{0};
 
   liveness_class classify_block_liveness(uint64_t block_address, uint64_t pc) const;
 
@@ -854,11 +774,9 @@ class CACHE : public champsim::operable, public MemoryRequestConsumer, public Me
   void configure_doa_diagnostics();
   void apply_bypass_recheck(HistTable& tbl);
   void configure_bypass_llc();
-  void configure_bypass_stlb();
   void shadow_record_bypass(uint64_t block_addr, uint64_t pc, uint64_t data);
   bool liveness_bypass_shadow_hit(const PACKET& handle_pkt);
   void update_eviction_counters(const BLOCK& victim, liveness_class lv);
-  void record_doa_stlb_corr(const BLOCK& victim);
   bool evaluate_liveness_bypass(uint64_t key, uint64_t level_thd, bool enabled);
 
 public:

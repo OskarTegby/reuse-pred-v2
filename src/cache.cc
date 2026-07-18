@@ -83,10 +83,8 @@ bool CACHE::liveness_bypass_shadow_hit(const PACKET& handle_pkt)
 
 void CACHE::update_eviction_counters(const BLOCK& victim, liveness_class evict_lv)
 {
-  if (NAME == "LLC" || NAME == "cpu0_STLB") {
-    const uint64_t repl_key = repl_hist_use_addr
-        ? ((NAME == "LLC") ? (victim.address >> OFFSET_BITS) : victim.address)
-        : victim.ip;
+  if (NAME == "LLC") {
+    const uint64_t repl_key = repl_hist_use_addr ? (victim.address >> OFFSET_BITS) : victim.ip;
     const int64_t old_score = (doa_trace_enable_ && !warmup) ? repl_hist_pc.get_score(repl_key) : 0;
     repl_hist_pc.update(repl_key, evict_lv, thd_doa);
     if (doa_trace_enable_ && !warmup) {
@@ -99,53 +97,23 @@ void CACHE::update_eviction_counters(const BLOCK& victim, liveness_class evict_l
   }
 }
 
-void CACHE::record_doa_stlb_corr(const BLOCK& victim)
-{
-  if (NAME != "LLC" || stlb_block_ptr == nullptr) return;
-  const uint64_t vpn = victim.v_address >> LOG2_PAGE_SIZE;
-  for (const auto& sb : *stlb_block_ptr) {
-    if (sb.valid && (sb.v_address >> LOG2_PAGE_SIZE) == vpn) {
-      sim_stats.back().doa_stlb_found++;
-      if (!sb.accessed)
-        sim_stats.back().doa_stlb_also_doa++;
-      break;
-    }
-  }
-}
-
 void CACHE::configure_thd_doa()
 {
-  const char* level_doa  = (NAME == "LLC")      ? std::getenv("LLC_THD_DOA")
-                         : (NAME == "cpu0_STLB") ? std::getenv("STLB_THD_DOA")
-                         : nullptr;
+  const char* level_doa  = (NAME == "LLC") ? std::getenv("LLC_THD_DOA") : nullptr;
   thd_doa  = (level_doa  && *level_doa)  ? std::stoull(level_doa)  : getenv_uint64("THD_DOA",  1);
 }
 
 void CACHE::configure_repl_hist_table()
 {
-  const uint64_t rh_cap = (NAME == "LLC")
-      ? getenv_uint64("REPL_HIST_LLC_CAP",  0)
-      : getenv_uint64("REPL_HIST_STLB_CAP", 0);
+  const uint64_t rh_cap = (NAME == "LLC") ? getenv_uint64("REPL_HIST_LLC_CAP", 0) : 0;
   if (rh_cap > 0) {
-    const uint64_t rh_buf    = getenv_uint64("REPL_HIST_BUF_CAP", 0);
-    const char* rh_repl      = std::getenv("REPL_HIST_REPL");
-    auto parse_rh_policy     = [](const char* v) -> HistTable::Policy {
-      if (!v) return HistTable::Policy::LRU;
-      if (std::string_view(v) == "lfu")     return HistTable::Policy::LFU;
-      if (std::string_view(v) == "lfu_doa") return HistTable::Policy::LFU_DOA;
-      if (std::string_view(v) == "srrip")   return HistTable::Policy::SRRIP;
-      return HistTable::Policy::LRU;
-    };
-    repl_hist_pc = HistTable(rh_cap, parse_rh_policy(rh_repl), rh_buf);
+    const uint64_t rh_buf = getenv_uint64("REPL_HIST_BUF_CAP", 0);
+    repl_hist_pc = HistTable(rh_cap, HistTable::Policy::LFU_DOA, rh_buf);
     const uint64_t rh_hash = getenv_uint64("REPL_HIST_HASH_BITS", 0);
     if (rh_hash > 0)
       repl_hist_pc.set_hash(static_cast<unsigned>(rh_hash));
-    const uint64_t rh_ckpt = getenv_uint64("REPL_HIST_CHECKPOINT", 0);
-    if (rh_ckpt > 0)
-      repl_hist_pc.set_checkpoint(rh_ckpt, NAME);
-  } else if ((NAME == "LLC"       && std::getenv("REPL_HIST_LLC_CAP")) ||
-             (NAME == "cpu0_STLB" && std::getenv("REPL_HIST_STLB_CAP"))) {
-    repl_hist_pc = HistTable(0, HistTable::Policy::LRU, 0, 0);
+  } else if (NAME == "LLC" && std::getenv("REPL_HIST_LLC_CAP")) {
+    repl_hist_pc = HistTable(0, HistTable::Policy::LFU_DOA, 0, 0);
   }
 
   if (const char* v = std::getenv("REPL_HIST_MODE"); v && std::string_view(v) == "addr")
@@ -154,12 +122,12 @@ void CACHE::configure_repl_hist_table()
 
 void CACHE::configure_doa_diagnostics()
 {
-  if (const char* v = std::getenv("DOA_COUNTER_TRACE"); v && std::stoull(v) && (NAME == "LLC" || NAME == "cpu0_STLB")) {
+  if (const char* v = std::getenv("DOA_COUNTER_TRACE"); v && std::stoull(v) && NAME == "LLC") {
     doa_trace_enable_ = true;
     doa_trace_file_.open("doa_counter_trace_" + NAME + ".csv");
     doa_trace_file_ << "cycle,pc,addr,evict_class,old_score,new_score\n";
   }
-  if (const char* v = std::getenv("DOA_ADDR_SUMMARY"); v && std::stoull(v) && (NAME == "LLC" || NAME == "cpu0_STLB"))
+  if (const char* v = std::getenv("DOA_ADDR_SUMMARY"); v && std::stoull(v) && NAME == "LLC")
     doa_addr_summary_enable_ = true;
 
   const uint64_t ddp = getenv_uint64("DOA_DEFAULT_PCT", 0);
@@ -198,32 +166,17 @@ void CACHE::configure_bypass_llc()
   bypass_shadow_cap_ = getenv_uint64("LLC_BYPASS_SHADOW_SIZE", getenv_uint64("BYPASS_SHADOW_SIZE", 0));
 }
 
-void CACHE::configure_bypass_stlb()
-{
-  if (NAME != "cpu0_STLB") return;
-  if (const char* v = std::getenv("STLB_LIVENESS_BYPASS"); v && std::stoull(v))
-    stlb_liveness_bypass = true;
-  stlb_bypass_thd = getenv_uint64("STLB_BYPASS_THD", getenv_uint64("BYPASS_THD", thd_doa));
-  if (const uint64_t rp = getenv_uint64("BYPASS_PC_RESET_PERIOD", 0); rp > 0)
-    repl_hist_pc.set_bypass_pc_reset(rp);
-  apply_bypass_recheck(repl_hist_pc);
-  bypass_shadow_cap_ = getenv_uint64("STLB_BYPASS_SHADOW_SIZE", getenv_uint64("BYPASS_SHADOW_SIZE", 0));
-}
-
 void CACHE::load_predictor_settings()
 {
   configure_thd_doa();
   configure_repl_hist_table();
   configure_doa_diagnostics();
   configure_bypass_llc();
-  configure_bypass_stlb();
 }
 
 liveness_class CACHE::classify_block_liveness(uint64_t block_address, uint64_t pc) const
 {
-  const uint64_t key = repl_hist_use_addr
-      ? ((NAME == "LLC") ? (block_address >> OFFSET_BITS) : block_address)
-      : pc;
+  const uint64_t key = repl_hist_use_addr ? (block_address >> OFFSET_BITS) : pc;
   return repl_hist_pc.classify(key, thd_doa);
 }
 
@@ -288,12 +241,8 @@ bool CACHE::handle_fill(const PACKET& fill_mshr)
   if (way != set_end && way->valid) {
     const uint64_t bypass_key = repl_hist_use_addr
         ? (fill_mshr.address >> OFFSET_BITS) : fill_mshr.ip;
-    const bool lv_bypass = evaluate_liveness_bypass(bypass_key, bypass_thd,
+    const bool bypassed = evaluate_liveness_bypass(bypass_key, bypass_thd,
         liveness_bypass && NAME == "LLC" && fill_mshr.type != TRANSLATION);
-    const bool stlb_lv_bypass = evaluate_liveness_bypass(fill_mshr.ip, stlb_bypass_thd,
-        stlb_liveness_bypass && NAME == "cpu0_STLB");
-
-    const bool bypassed = lv_bypass || stlb_lv_bypass;
 
     if (bypassed) {
       shadow_record_bypass(fill_mshr.address >> OFFSET_BITS, fill_mshr.ip, fill_mshr.data);
@@ -350,10 +299,8 @@ bool CACHE::handle_fill(const PACKET& fill_mshr)
 
       if (way->valid) {
         sim_stats.back().evictions++;
-        if (!way->accessed) {
+        if (!way->accessed)
           sim_stats.back().doa++;
-          record_doa_stlb_corr(*way);
-        }
       }
 
       way->valid = true;
@@ -780,8 +727,6 @@ void CACHE::initialize()
 {
   impl_prefetcher_initialize();
   impl_initialize_replacement();
-  if (NAME == "cpu0_STLB")
-    stlb_block_ptr = &block;
 }
 
 void CACHE::begin_phase()
@@ -823,8 +768,6 @@ void CACHE::end_phase(unsigned finished_cpu)
 
   roi_stats.back().evictions    = sim_stats.back().evictions;
   roi_stats.back().doa          = sim_stats.back().doa;
-  roi_stats.back().doa_stlb_found    = sim_stats.back().doa_stlb_found;
-  roi_stats.back().doa_stlb_also_doa = sim_stats.back().doa_stlb_also_doa;
 
   print_doa_addr_summary();
 }
