@@ -33,10 +33,9 @@ bool CACHE::handle_fill(const PACKET& fill_mshr)
   // find victim
   auto [set_begin, set_end] = get_set_span(fill_mshr.address);
   auto way = std::find_if_not(set_begin, set_end, [](auto x) { return x.valid; });
-  if (way == set_end) {
+  if (way == set_end)
     way = std::next(set_begin, impl_find_victim(fill_mshr.cpu, fill_mshr.instr_id, get_set_index(fill_mshr.address), &*set_begin, fill_mshr.ip,
                                                 fill_mshr.address, fill_mshr.type));
-  }
 
   const bool predictor_bypassed = evaluate_fill_bypass(fill_mshr, way, set_end);
 
@@ -76,8 +75,6 @@ bool CACHE::handle_fill(const PACKET& fill_mshr)
     }
 
     if (success) {
-      last_fill_latency = fill_latency;
-
       auto evicting_address = (ever_seen_data ? way->address : way->v_address) & ~champsim::bitmask(match_offset_bits ? 0 : OFFSET_BITS);
 
       if (way->prefetch)
@@ -97,6 +94,8 @@ bool CACHE::handle_fill(const PACKET& fill_mshr)
       way->data = fill_mshr.data;
       way->ip = fill_mshr.ip;
       way->install_cycle  = current_cycle;
+
+      last_fill_latency = fill_latency;
 
       metadata_thru =
           impl_prefetcher_cache_fill(pkt_address, get_set_index(fill_mshr.address), way_idx, fill_mshr.type == PREFETCH, evicting_address, metadata_thru);
