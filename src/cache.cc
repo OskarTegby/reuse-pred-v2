@@ -37,7 +37,7 @@ bool CACHE::handle_fill(const PACKET& fill_mshr)
     way = std::next(set_begin, impl_find_victim(fill_mshr.cpu, fill_mshr.instr_id, get_set_index(fill_mshr.address), &*set_begin, fill_mshr.ip,
                                                 fill_mshr.address, fill_mshr.type));
 
-  const bool predictor_bypassed = evaluate_fill_bypass(fill_mshr, way, set_end);
+  const bool fill_bypassed = resolve_fill_bypass(fill_mshr, way, set_end);
 
   assert(set_begin <= way);
   assert(way <= set_end);
@@ -104,7 +104,7 @@ bool CACHE::handle_fill(const PACKET& fill_mshr)
 
       way->pf_metadata = metadata_thru;
     }
-  } else if (!predictor_bypassed) {
+  } else if (!fill_bypassed) {
     assert(fill_mshr.type != WRITE);
 
     last_fill_latency = fill_latency;
@@ -224,9 +224,6 @@ bool CACHE::handle_miss(const PACKET& handle_pkt)
       mshr_entry->to_return = std::move(to_return);
     }
   } else {
-    if (liveness_bypass_shadow_hit(handle_pkt))
-      return true;
-
     if (mshr_full)  // not enough MSHR resource
       return false; // TODO should we allow prefetches anyway if they will not be filled to this level?
 
@@ -535,12 +532,9 @@ void CACHE::end_phase(unsigned finished_cpu)
 
   roi_stats.back().liveness_bypasses       = sim_stats.back().liveness_bypasses;
   roi_stats.back().liveness_probes         = sim_stats.back().liveness_probes;
-  roi_stats.back().liveness_bypass_shadow_hits = sim_stats.back().liveness_bypass_shadow_hits;
 
   roi_stats.back().evictions    = sim_stats.back().evictions;
   roi_stats.back().doa          = sim_stats.back().doa;
-
-  print_doa_addr_summary();
 }
 
 bool CACHE::should_activate_prefetcher(const PACKET& pkt) const { return ((1 << pkt.type) & pref_activate_mask) && !pkt.prefetch_from_this; }

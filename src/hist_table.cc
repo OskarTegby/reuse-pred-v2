@@ -42,12 +42,6 @@ void HistTable::record_bypass(uint64_t key) {
   }
 }
 
-void HistTable::erase_key(uint64_t key) {
-  if (unbounded_) { unmap_.erase(key); }
-  else { for (auto& e : entries_) if (e.valid && e.key == key) { e.valid = false; break; } }
-  bypass_since_update_.erase(key);
-}
-
 bool HistTable::should_probe(uint64_t key) {
   if (recheck_mode_ == RecheckMode::Off) return false;
   uint64_t& cnt = recheck_count_[key];

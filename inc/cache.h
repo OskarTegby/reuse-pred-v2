@@ -22,7 +22,6 @@
 #include <cassert>
 #include <cstdlib>
 #include <deque>
-#include <fstream>
 #include <functional>
 #include <list>
 #include <map>
@@ -90,8 +89,6 @@ public:
     if (unbounded_) { for (auto& [k, v] : unmap_) v = 0; }
     else            { for (auto& e : entries_) e.score = 0; }
   }
-
-  void erase_key(uint64_t key);
 
   enum class RecheckMode { Off, Fixed, Backoff };
   void set_recheck(RecheckMode mode, uint64_t base, uint64_t cap) {
@@ -221,7 +218,6 @@ struct cache_stats {
 
   uint64_t liveness_bypasses = 0;
   uint64_t liveness_probes   = 0;
-  uint64_t liveness_bypass_shadow_hits = 0;
 
   uint64_t evictions    = 0;
   uint64_t doa          = 0;
@@ -279,43 +275,27 @@ class CACHE : public champsim::operable, public MemoryRequestConsumer, public Me
   std::pair<set_type::const_iterator, set_type::const_iterator> get_set_span(uint64_t address) const;
   std::size_t get_set_index(uint64_t address) const;
 
-  uint64_t thd_doa  = 1;
-
-  uint64_t bypass_shadow_cap_ = 0;
-  std::unordered_map<uint64_t, std::pair<uint64_t, uint64_t>> bypass_shadow_;
-  std::deque<uint64_t> bypass_shadow_fifo_;
+  uint64_t guidance_thd  = 1;
 
   uint64_t last_fill_latency = 0;
 
-  HistTable repl_hist_pc;
-  bool repl_hist_use_addr{false};
+  HistTable liveness_hist;
+  bool use_addr_key{false};
 
-  bool doa_trace_enable_ = false;
-  std::ofstream doa_trace_file_;
-  bool liveness_bypass{false};
+  bool bypass_enabled{false};
   uint64_t bypass_thd{0};
 
   liveness_class classify_block_liveness(uint64_t block_address, uint64_t pc) const;
 
-  struct AddrCounterEntry { int64_t score = 0; bool ever_reset = false; };
-  bool doa_addr_summary_enable_ = false;
-  std::unordered_map<uint64_t, std::unordered_map<uint64_t, AddrCounterEntry>> doa_addr_table_;
-  std::unordered_map<uint64_t, uint64_t> doa_addr_pc_doa_total_;
-  void record_doa_addr_summary(uint64_t pc, uint64_t addr, liveness_class evict_lv);
-  void print_doa_addr_summary() const;
-
   void load_predictor_settings();
-  void configure_thd_doa();
+  void configure_guidance_thd();
   void configure_repl_hist_table();
-  void configure_doa_diagnostics();
   void apply_bypass_recheck(HistTable& tbl);
   void configure_bypass_llc();
-  void shadow_record_bypass(uint64_t block_addr, uint64_t pc, uint64_t data);
-  bool liveness_bypass_shadow_hit(const PACKET& handle_pkt);
-  void update_eviction_counters(const BLOCK& victim, liveness_class lv);
   void record_fill_eviction_stats(const BLOCK& victim);
-  bool evaluate_liveness_bypass(uint64_t key, uint64_t level_thd, bool enabled);
-  bool evaluate_fill_bypass(const PACKET& fill_mshr, set_type::iterator& way, set_type::iterator set_end);
+  bool should_bypass(uint64_t key, uint64_t thd, bool enabled);
+  void update_eviction_counters(const BLOCK& victim, liveness_class lv);
+  bool resolve_fill_bypass(const PACKET& fill_mshr, set_type::iterator& way, set_type::iterator set_end);
   void mark_accessed_on_hit(BLOCK& blk, uint8_t type);
   void reset_phase_liveness_stats();
 
