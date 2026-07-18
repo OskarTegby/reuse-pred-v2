@@ -30,8 +30,6 @@ bool CACHE::handle_fill(const PACKET& fill_mshr)
 {
   cpu = fill_mshr.cpu;
 
-  last_fill_latency = current_cycle - (fill_mshr.cycle_enqueued + 1);
-
   // find victim
   auto [set_begin, set_end] = get_set_span(fill_mshr.address);
   auto way = std::find_if_not(set_begin, set_end, [](auto x) { return x.valid; });
@@ -59,6 +57,7 @@ bool CACHE::handle_fill(const PACKET& fill_mshr)
   }
 
   bool success = true;
+  const uint64_t fill_latency = current_cycle - (fill_mshr.cycle_enqueued + 1);
   auto metadata_thru = fill_mshr.pf_metadata;
   auto pkt_address = (virtual_prefetch ? fill_mshr.v_address : fill_mshr.address) & ~champsim::bitmask(match_offset_bits ? 0 : OFFSET_BITS);
   if (way != set_end) {
@@ -77,6 +76,8 @@ bool CACHE::handle_fill(const PACKET& fill_mshr)
     }
 
     if (success) {
+      last_fill_latency = fill_latency;
+
       auto evicting_address = (ever_seen_data ? way->address : way->v_address) & ~champsim::bitmask(match_offset_bits ? 0 : OFFSET_BITS);
 
       if (way->prefetch)
@@ -107,13 +108,15 @@ bool CACHE::handle_fill(const PACKET& fill_mshr)
   } else if (!predictor_bypassed) {
     assert(fill_mshr.type != WRITE);
 
+    last_fill_latency = fill_latency;
+
     metadata_thru = impl_prefetcher_cache_fill(pkt_address, get_set_index(fill_mshr.address), way_idx, fill_mshr.type == PREFETCH, 0, metadata_thru);
     impl_update_replacement_state(fill_mshr.cpu, get_set_index(fill_mshr.address), way_idx, fill_mshr.address, fill_mshr.ip, 0, fill_mshr.type, false);
   }
 
   if (success) {
     // COLLECT STATS
-    sim_stats.back().total_miss_latency += current_cycle - (fill_mshr.cycle_enqueued + 1);
+    sim_stats.back().total_miss_latency += fill_latency;
 
     auto copy{fill_mshr};
     copy.pf_metadata = metadata_thru;
