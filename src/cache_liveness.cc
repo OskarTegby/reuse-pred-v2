@@ -20,10 +20,6 @@
 #include <cstdlib>
 #include <string_view>
 
-extern "C" void lru_live_reset_phase_stats(CACHE*) __attribute__((weak));
-extern "C" void srrip_live_reset_phase_stats(CACHE*) __attribute__((weak));
-extern "C" void ipv_live_reset_phase_stats(CACHE*) __attribute__((weak));
-
 namespace {
 
 uint64_t getenv_uint64(const char* var, uint64_t fallback)
@@ -33,21 +29,6 @@ uint64_t getenv_uint64(const char* var, uint64_t fallback)
 }
 
 } // namespace
-
-void CACHE::reset_phase_liveness_stats()
-{
-  liveness_hist.reset_stats();
-
-  if (lru_live_reset_phase_stats) {
-    lru_live_reset_phase_stats(this);
-  }
-  if (srrip_live_reset_phase_stats) {
-    srrip_live_reset_phase_stats(this);
-  }
-  if (ipv_live_reset_phase_stats) {
-    ipv_live_reset_phase_stats(this);
-  }
-}
 
 void CACHE::configure_guidance_thd()
 {

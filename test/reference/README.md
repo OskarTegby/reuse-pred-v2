@@ -92,3 +92,16 @@ same ratio `lru_live.cc` uses.
 Generated on commit **`0ebb15cfac7730dbad71cf7590f42156fc54c36d`**
 (2026-07-17) from the current `champsim_config.json` (Redwood Cove).
 
+The 48 `_live`-active outputs (`fixed`/`bypass`/`duel`/`addr` conditions,
+excluding `base`) were regenerated on 2026-07-19 after removing the
+phase-boundary reset of `HistTable`/`_live`-policy stats from
+`CACHE::begin_phase()`: those stats are printed exactly once, after all
+phases, from `impl_replacement_final_stats()`, entirely independent of the
+phase/warmup-filtered `sim_stats`/`roi_stats` pipeline, so resetting them
+at the warmup/ROI boundary never matched how they're actually reported.
+The printed `repl_hist`/insert-mix/lifespan block for these 48 outputs now
+reflects combined warmup+ROI activity instead of ROI-only; the 12 `base`
+outputs are unaffected (that binary never calls
+`replacement_final_stats()`) and remain byte-identical to the commit
+above.
+

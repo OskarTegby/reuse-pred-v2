@@ -44,10 +44,7 @@ public:
   enum class Policy { LFU_DOA };
 
   struct Stats {
-    uint64_t queries       = 0;
-    uint64_t table_hits    = 0;
     uint64_t promotions    = 0;
-    uint64_t promoted_hits = 0;
     bool     main_ever_full = false;
     bool     buf_ever_full  = false;
     uint64_t buf_evictions       = 0;
@@ -85,11 +82,6 @@ public:
 
   void record_bypass(uint64_t key);
 
-  void reset_scores() {
-    if (unbounded_) { for (auto& [k, v] : unmap_) v = 0; }
-    else            { for (auto& e : entries_) e.score = 0; }
-  }
-
   enum class RecheckMode { Off, Fixed, Backoff };
   void set_recheck(RecheckMode mode, uint64_t base, uint64_t cap) {
     recheck_mode_ = mode; recheck_base_ = base ? base : 1;
@@ -98,27 +90,11 @@ public:
 
   bool should_probe(uint64_t key);
 
-  uint64_t recheck_probes() const { return recheck_probes_; }
-
-  int64_t get_score(uint64_t key) const;
-
   liveness_class classify(uint64_t key, uint64_t thd_doa) const;
-
-  const Stats& get_stats() const { return stats_.back(); }
-  void reset_stats() {
-    stats_.emplace_back();
-    for (auto& e : entries_) e.promoted = false;
-  }
 
   void print_stats(const char* prefix, uint64_t thd_doa = 0) const;
 
   void update(uint64_t key, liveness_class evict_class, int64_t thd_doa = 0);
-
-  void reset(uint64_t key) {
-    key = hk_(key);
-    for (auto& e : entries_)
-      if (e.valid && e.key == key) { e.score = 0; return; }
-  }
 
 private:
   static constexpr uint32_t SRRIP_INS  = 2;
@@ -145,7 +121,6 @@ private:
     uint64_t hit_count        = 0;
     uint32_t rrpv             = 0;
     bool          valid    = false;
-    mutable bool  promoted = false;
   };
 
   struct BufEntry {
@@ -164,7 +139,6 @@ private:
   RecheckMode recheck_mode_     = RecheckMode::Off;
   uint64_t    recheck_base_     = 0;
   uint64_t    recheck_cap_      = 0;
-  uint64_t    recheck_probes_   = 0;
   std::unordered_map<uint64_t, uint64_t> recheck_count_;
   std::unordered_map<uint64_t, uint64_t> recheck_interval_;
   std::unordered_map<uint64_t, bool>     recheck_probing_;
@@ -182,7 +156,7 @@ private:
   mutable std::unordered_set<uint64_t> buf_evicted_pcs_;
   std::unordered_map<uint64_t, uint64_t> shadow_map_;
   std::unordered_map<uint64_t, uint64_t> oracle_buf_;
-  mutable std::vector<Stats> stats_{Stats{}};
+  mutable Stats stats_;
   uint64_t evict_count_          = 0;
   uint64_t evict_ma_nonzero_     = 0;
   uint64_t evict_ma_loss_sum_    = 0;
@@ -295,7 +269,6 @@ class CACHE : public champsim::operable, public MemoryRequestConsumer, public Me
   bool should_bypass(uint64_t key, uint64_t bypass_threshold, bool bypass_allowed);
   void update_eviction_counters(const BLOCK& victim, liveness_class lv);
   bool resolve_fill_bypass(const PACKET& fill_mshr, set_type::iterator& way, set_type::iterator set_end);
-  void reset_phase_liveness_stats();
 
 public:
   struct NonTranslatingQueues : public champsim::operable {

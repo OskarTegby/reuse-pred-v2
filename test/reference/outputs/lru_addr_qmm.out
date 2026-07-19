@@ -128,20 +128,20 @@ LLC LRU-Live STATS:
   DoA ins mode     : 2n3 (default)  (LRU_LIVE_DOA_INS)
   Insertion positions: DoA=8/MRU  Alive=0/MRU  (N=12)
   Hit promotion    : full to MRU
-  Activation rate  : 100.0%  (163646 guided / 163646 total insertions)
-  guided_insertions=163646
+  Activation rate  : 100.0%  (281112 guided / 281112 total insertions)
+  guided_insertions=281112
   Insert mix       : DoA=0.0%  Alive=100.0%  Unguided=0.0%
-  Hit rate/class   : DoA=0.0%  Alive=52.4%  Unguided=0.0%
+  Hit rate/class   : DoA=0.0%  Alive=43.5%  Unguided=0.0%
   Promo capped (raw): DoA=0/0  (capped / hits-on-class, LRU_LIVE_HIT_INIT=0)
   Evict class mix  : DoA=0.0%  Alive=100.0%  Unguided=0.0%
   Residency (ticks) by class x reuse:
     Unguided     0hit: mean=      0.0 (n=0)   >=1hit: mean=      0.0 (n=0)   after-last-hit: mean=      0.0 (n=0)
     DoA          0hit: mean=      0.0 (n=0)   >=1hit: mean=      0.0 (n=0)   after-last-hit: mean=      0.0 (n=0)
-    Alive        0hit: mean=     15.0 (n=149421)   >=1hit: mean=     36.7 (n=14202)   after-last-hit: mean=     14.8 (n=14202)
+    Alive        0hit: mean=     14.8 (n=212917)   >=1hit: mean=     34.8 (n=19043)   after-last-hit: mean=     14.7 (n=19043)
 LLC repl_hist occupancy : main 4096/4096 (100%) [was full]  buf 0/0 (0%)
-LLC repl_hist classify  : main=1485 (1.0%)  buf_guided=0 (0.0%)  buf_weak=0 (0.0%)  warm_miss=105694 (64.6%)  cold_miss=56467 (34.6%)
-LLC repl_hist warm_miss : total=105694  buf_evicted=0 (0.0%)  main_evicted=105694 (64.6%)
-LLC repl_hist oracle    : warm_miss=105694  oracle_would_hit=0 (0.0% of warm)  oracle_buf_size=0
+LLC repl_hist classify  : main=2839 (1.1%)  buf_guided=0 (0.0%)  buf_weak=0 (0.0%)  warm_miss=117558 (41.9%)  cold_miss=160715 (57.2%)
+LLC repl_hist warm_miss : total=117558  buf_evicted=0 (0.0%)  main_evicted=117558 (41.9%)
+LLC repl_hist oracle    : warm_miss=117558  oracle_would_hit=0 (0.0% of warm)  oracle_buf_size=0
 LLC repl_hist evict_attr: total=208820  ma_penalty=-2  ma_loss: 0.0% of evictions  avg_loss=0.00  decisive=0.0%  |  aging: 100.0% of evictions  avg_penalty=1.01  decisive=0.0% (avg_hits=0.0)
 LLC repl_hist transitions: alive->doa=0  doa->alive=0
 

@@ -138,19 +138,9 @@ struct Stats {
     double   afterhit_sum[3] = {};
     uint64_t afterhit_cnt[3] = {};
 };
-std::unordered_map<CACHE*, std::vector<Stats>> stats;
+std::unordered_map<CACHE*, Stats> stats;
 
 } // namespace
-
-// Weak-symbol counterpart declared in cache.cc: resets only the reporting
-// counters (Insert mix / hit-promotion / residency stats) at the ROI
-// boundary, matching sim_stats/HistTable's begin_phase reset. Deliberately
-// leaves live mechanism state (ranks, hit_cnt, last_hit_time, bypassed, ...)
-// untouched, since that must carry over from warmup for correct behavior.
-extern "C" void lru_live_reset_phase_stats(CACHE* c)
-{
-    ::stats[c].emplace_back();
-}
 
 void CACHE::initialize_replacement()
 {
@@ -173,7 +163,7 @@ void CACHE::initialize_replacement()
     ::sampler_b_hits[this] = 0;
     ::miss_lat_a[this]     = 0;
     ::miss_lat_b[this]     = 0;
-    ::stats[this] = std::vector<Stats>(1);
+    ::stats[this] = Stats{};
 }
 
 uint32_t CACHE::find_victim(uint32_t triggering_cpu, uint64_t instr_id, uint32_t set,
@@ -191,7 +181,7 @@ uint32_t CACHE::find_victim(uint32_t triggering_cpu, uint64_t instr_id, uint32_t
             for (uint32_t w2 = w + 1; w2 < NUM_WAY; ++w2)
                 if (bypass_[set * NUM_WAY + w2] && ranks[w2] < ranks[victim])
                     victim = w2;
-                ::stats[this].back().evict_doa_bypass++;
+                ::stats[this].evict_doa_bypass++;
             return victim;
         }
     }
@@ -203,7 +193,7 @@ uint32_t CACHE::find_victim(uint32_t triggering_cpu, uint64_t instr_id, uint32_t
 
     const std::size_t vi = set * NUM_WAY + victim;
     const int8_t cls = ::slot_class[this][vi];
-    auto& st = ::stats[this].back();
+    auto& st = ::stats[this];
     switch (cls) {
         case 1:  st.evict_doa++;      break;
         case 2:  st.evict_alive++;    break;
@@ -236,7 +226,7 @@ void CACHE::update_replacement_state(uint32_t triggering_cpu, uint32_t set, uint
     const std::size_t slot = base + way;
     auto* ranks = ::lru_rank[this].data() + base;
     auto& cls   = ::slot_class[this][slot];
-    auto& st    = ::stats[this].back();
+    auto& st    = ::stats[this];
 
     // One tick per set access (hit or fill) — the residency clock.
     const uint64_t clk = ++::set_clock[this][set];
@@ -384,7 +374,7 @@ void CACHE::update_replacement_state(uint32_t triggering_cpu, uint32_t set, uint
 
 void CACHE::replacement_final_stats()
 {
-    const auto& st = ::stats[this].back();
+    const auto& st = ::stats[this];
     const uint64_t total_ins  = st.ins_unguided + st.ins_doa + st.ins_alive;
     const uint64_t guided_ins = st.ins_doa + st.ins_alive;
     const uint64_t total_evict = st.evict_doa + st.evict_alive + st.evict_unguided;

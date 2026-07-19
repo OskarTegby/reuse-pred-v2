@@ -143,7 +143,7 @@ std::unordered_map<CACHE*, std::vector<int8_t>>              g_slot_class;   // 
 std::unordered_map<CACHE*, std::vector<uint8_t>>              g_slot_cfg_idx; // duel config active at insertion
 std::unordered_map<CACHE*, std::array<int64_t, MAX_DUEL_CFGS>> g_hit_counts;
 std::unordered_map<CACHE*, std::array<int64_t, MAX_DUEL_CFGS>> g_miss_latency;
-std::unordered_map<CACHE*, std::vector<Stats>>                g_stats;
+std::unordered_map<CACHE*, Stats>                             g_stats;
 
 int g_n_configs   = -1;
 int g_n_samplers  = -1;
@@ -201,11 +201,6 @@ int sampler_config_of(int set, int step, int n_configs)
 
 } // namespace
 
-extern "C" void ipv_live_reset_phase_stats(CACHE* c)
-{
-  ::g_stats[c].emplace_back();
-}
-
 void CACHE::initialize_replacement()
 {
   ::ensure_parsed_duel();
@@ -240,7 +235,7 @@ void CACHE::initialize_replacement()
   ::g_slot_cfg_idx[this].assign(static_cast<std::size_t>(NUM_SET) * NUM_WAY, 0);
   ::g_hit_counts[this]   = {};
   ::g_miss_latency[this] = {};
-  ::g_stats[this]        = std::vector<Stats>(1);
+  ::g_stats[this]        = Stats{};
 }
 
 uint32_t CACHE::find_victim(uint32_t triggering_cpu, uint64_t instr_id, uint32_t set,
@@ -260,7 +255,7 @@ void CACHE::update_replacement_state(uint32_t triggering_cpu, uint32_t set, uint
   uint16_t* rank  = ::g_rank[this].data() + base;
   int8_t&   cls   = ::g_slot_class[this][base + way];
   uint8_t&  cfg_stored = ::g_slot_cfg_idx[this][base + way];
-  auto& st = ::g_stats[this].back();
+  auto& st = ::g_stats[this];
   const bool targeted = ::is_targeted(*this);
 
   const int nc   = ::g_n_configs;
@@ -320,7 +315,7 @@ void CACHE::update_replacement_state(uint32_t triggering_cpu, uint32_t set, uint
 
 void CACHE::replacement_final_stats()
 {
-  const auto& st = ::g_stats[this].back();
+  const auto& st = ::g_stats[this];
   const uint64_t total_ins  = st.ins_unguided + st.ins_doa + st.ins_alive;
   const uint64_t guided_ins = st.ins_doa + st.ins_alive;
 

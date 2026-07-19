@@ -63,32 +63,9 @@ bool HistTable::should_probe(uint64_t key) {
   if (++cnt >= iv) {
     cnt = 0;
     recheck_probing_[key] = true;
-    ++recheck_probes_;
     return true;
   }
   return false;
-}
-
-int64_t HistTable::get_score(uint64_t key) const {
-  key = hk_(key);
-  if (unbounded_) {
-    auto it = unmap_.find(key);
-    return it != unmap_.end() ? it->second : 0;
-  }
-  stats_.back().queries++;
-  for (const auto& e : entries_) {
-    if (e.valid && e.key == key) {
-      if (e.score > 0) {
-        stats_.back().table_hits++;
-        if (e.promoted) {
-          stats_.back().promoted_hits++;
-          e.promoted = false;
-        }
-      }
-      return e.score;
-    }
-  }
-  return 0;
 }
 
 liveness_class HistTable::classify(uint64_t key, uint64_t thd_doa) const {
@@ -102,36 +79,36 @@ liveness_class HistTable::classify(uint64_t key, uint64_t thd_doa) const {
   }
   for (const auto& e : entries_) {
     if (e.valid && e.key == key) {
-      ++stats_.back().classify_main;
+      ++stats_.classify_main;
       return e.score >= (int64_t)thd_doa ? liveness_class::doa : liveness_class::alive;
     }
   }
   for (const auto& b : buffer_) {
     if (b.valid && b.key == key) {
       if (b.dead_count >= thd_doa) {
-        ++stats_.back().classify_buf_guided;
+        ++stats_.classify_buf_guided;
         return liveness_class::doa;
       }
-      ++stats_.back().classify_buf_weak;
+      ++stats_.classify_buf_weak;
       return liveness_class::alive;
     }
   }
   if (!seen_pcs_.empty() && seen_pcs_.count(key)) {
-    ++stats_.back().classify_warm_miss;
+    ++stats_.classify_warm_miss;
     if (!buf_evicted_pcs_.empty() && buf_evicted_pcs_.count(key)) {
-      ++stats_.back().classify_warm_buf_evicted;
+      ++stats_.classify_warm_buf_evicted;
     }
     auto it = oracle_buf_.find(key);
     if (it != oracle_buf_.end() && it->second >= thd_doa) {
-      ++stats_.back().classify_warm_oracle_hit;
+      ++stats_.classify_warm_oracle_hit;
     }
     auto ait = aging_evicted_pcs_.find(key);
     if (ait != aging_evicted_pcs_.end()) {
-      ++stats_.back().classify_warm_aged_out;
-      stats_.back().classify_warm_aged_hitsum += ait->second.second;
+      ++stats_.classify_warm_aged_out;
+      stats_.classify_warm_aged_hitsum += ait->second.second;
     }
   } else {
-    ++stats_.back().classify_cold_miss;
+    ++stats_.classify_cold_miss;
   }
   return liveness_class::alive;
 }
@@ -160,7 +137,7 @@ void HistTable::print_stats(const char* prefix, uint64_t thd_doa) const {
     printf("%s repl_hist: unbounded (%zu entries)\n", prefix, unmap_.size());
     if (thd_doa > 0) {
       printf("%s repl_hist transitions: alive->doa=%lu  doa->alive=%lu\n",
-             prefix, stats_.back().trans_alive_doa, stats_.back().trans_doa_alive);
+             prefix, stats_.trans_alive_doa, stats_.trans_doa_alive);
     }
     return;
   }
@@ -172,47 +149,47 @@ void HistTable::print_stats(const char* prefix, uint64_t thd_doa) const {
          prefix,
          main_occ, cap_,
          cap_ ? 100.0 * main_occ / cap_ : 0.0,
-         stats_.back().main_ever_full ? " [was full]" : "",
+         stats_.main_ever_full ? " [was full]" : "",
          buf_occ, buf_cap_,
          buf_cap_ ? 100.0 * buf_occ / buf_cap_ : 0.0,
-         stats_.back().buf_ever_full  ? " [was full]" : "");
-  const uint64_t classify_total = stats_.back().classify_main + stats_.back().classify_buf_guided
-                                + stats_.back().classify_buf_weak + stats_.back().classify_warm_miss
-                                + stats_.back().classify_cold_miss;
+         stats_.buf_ever_full  ? " [was full]" : "");
+  const uint64_t classify_total = stats_.classify_main + stats_.classify_buf_guided
+                                + stats_.classify_buf_weak + stats_.classify_warm_miss
+                                + stats_.classify_cold_miss;
   if (classify_total > 0) {
     auto pct_c = [&](uint64_t n){ return classify_total ? 100.0 * n / classify_total : 0.0; };
     printf("%s repl_hist classify  : main=%lu (%.1f%%)  "
            "buf_guided=%lu (%.1f%%)  buf_weak=%lu (%.1f%%)  "
            "warm_miss=%lu (%.1f%%)  cold_miss=%lu (%.1f%%)\n",
            prefix,
-           stats_.back().classify_main,       pct_c(stats_.back().classify_main),
-           stats_.back().classify_buf_guided, pct_c(stats_.back().classify_buf_guided),
-           stats_.back().classify_buf_weak,   pct_c(stats_.back().classify_buf_weak),
-           stats_.back().classify_warm_miss,  pct_c(stats_.back().classify_warm_miss),
-           stats_.back().classify_cold_miss,  pct_c(stats_.back().classify_cold_miss));
-    if (stats_.back().classify_warm_miss > 0) {
+           stats_.classify_main,       pct_c(stats_.classify_main),
+           stats_.classify_buf_guided, pct_c(stats_.classify_buf_guided),
+           stats_.classify_buf_weak,   pct_c(stats_.classify_buf_weak),
+           stats_.classify_warm_miss,  pct_c(stats_.classify_warm_miss),
+           stats_.classify_cold_miss,  pct_c(stats_.classify_cold_miss));
+    if (stats_.classify_warm_miss > 0) {
       printf("%s repl_hist warm_miss : total=%lu  buf_evicted=%lu (%.1f%%)  "
              "main_evicted=%lu (%.1f%%)\n",
              prefix,
-             stats_.back().classify_warm_miss,
-             stats_.back().classify_warm_buf_evicted,
-             pct_c(stats_.back().classify_warm_buf_evicted),
-             stats_.back().classify_warm_miss - stats_.back().classify_warm_buf_evicted,
-             pct_c(stats_.back().classify_warm_miss - stats_.back().classify_warm_buf_evicted));
+             stats_.classify_warm_miss,
+             stats_.classify_warm_buf_evicted,
+             pct_c(stats_.classify_warm_buf_evicted),
+             stats_.classify_warm_miss - stats_.classify_warm_buf_evicted,
+             pct_c(stats_.classify_warm_miss - stats_.classify_warm_buf_evicted));
       printf("%s repl_hist oracle    : warm_miss=%lu  oracle_would_hit=%lu (%.1f%% of warm)  "
              "oracle_buf_size=%zu\n",
              prefix,
-             stats_.back().classify_warm_miss,
-             stats_.back().classify_warm_oracle_hit,
-             stats_.back().classify_warm_miss ? 100.0 * stats_.back().classify_warm_oracle_hit / stats_.back().classify_warm_miss : 0.0,
+             stats_.classify_warm_miss,
+             stats_.classify_warm_oracle_hit,
+             stats_.classify_warm_miss ? 100.0 * stats_.classify_warm_oracle_hit / stats_.classify_warm_miss : 0.0,
              oracle_buf_.size());
-      if (stats_.back().classify_warm_aged_out > 0) {
+      if (stats_.classify_warm_aged_out > 0) {
         auto avg_h = [](uint64_t sum, uint64_t n) { return n ? (double)sum / n : 0.0; };
         printf("%s repl_hist warm_aged : aged_out=%lu (%.1f%% of warm)  avg_hits=%.1f\n",
                prefix,
-               stats_.back().classify_warm_aged_out,
-               pct_c(stats_.back().classify_warm_aged_out),
-               avg_h(stats_.back().classify_warm_aged_hitsum, stats_.back().classify_warm_aged_out));
+               stats_.classify_warm_aged_out,
+               pct_c(stats_.classify_warm_aged_out),
+               avg_h(stats_.classify_warm_aged_hitsum, stats_.classify_warm_aged_out));
       }
     }
   }
@@ -236,52 +213,52 @@ void HistTable::print_stats(const char* prefix, uint64_t thd_doa) const {
            "2nd_chance_promo=%lu (%.1f%% of demoted)  2nd_chance_evict=%lu (%.1f%%)  "
            "doa_buf_miss=%lu  attempts=%lu  blocked=%lu (%.1f%%)\n",
            prefix,
-           stats_.back().promotions, stats_.back().demotions,
-           stats_.back().second_chance_promotions, pct(stats_.back().second_chance_promotions, stats_.back().demotions),
-           stats_.back().second_chance_evictions,  pct(stats_.back().second_chance_evictions,  stats_.back().demotions),
-           stats_.back().doa_buf_miss,
-           stats_.back().promote_attempts, stats_.back().promote_blocked,
-           pct(stats_.back().promote_blocked, stats_.back().promote_attempts));
+           stats_.promotions, stats_.demotions,
+           stats_.second_chance_promotions, pct(stats_.second_chance_promotions, stats_.demotions),
+           stats_.second_chance_evictions,  pct(stats_.second_chance_evictions,  stats_.demotions),
+           stats_.doa_buf_miss,
+           stats_.promote_attempts, stats_.promote_blocked,
+           pct(stats_.promote_blocked, stats_.promote_attempts));
     const uint64_t evict_total = std::accumulate(
-        stats_.back().buf_evict_dc_hist, stats_.back().buf_evict_dc_hist + 6, uint64_t{0});
+        stats_.buf_evict_dc_hist, stats_.buf_evict_dc_hist + 6, uint64_t{0});
     const uint64_t promo_total = std::accumulate(
-        stats_.back().buf_promo_dc_hist, stats_.back().buf_promo_dc_hist + 6, uint64_t{0});
+        stats_.buf_promo_dc_hist, stats_.buf_promo_dc_hist + 6, uint64_t{0});
     if (evict_total > 0) {
       printf("%s repl_hist buf_evict_dc: total=%lu  "
              "dc=0:%.1f%%  dc=1:%.1f%%  dc=2:%.1f%%  dc=3:%.1f%%  dc=4:%.1f%%  dc=5+:%.1f%%\n",
              prefix, evict_total,
-             pct(stats_.back().buf_evict_dc_hist[0], evict_total),
-             pct(stats_.back().buf_evict_dc_hist[1], evict_total),
-             pct(stats_.back().buf_evict_dc_hist[2], evict_total),
-             pct(stats_.back().buf_evict_dc_hist[3], evict_total),
-             pct(stats_.back().buf_evict_dc_hist[4], evict_total),
-             pct(stats_.back().buf_evict_dc_hist[5], evict_total));
+             pct(stats_.buf_evict_dc_hist[0], evict_total),
+             pct(stats_.buf_evict_dc_hist[1], evict_total),
+             pct(stats_.buf_evict_dc_hist[2], evict_total),
+             pct(stats_.buf_evict_dc_hist[3], evict_total),
+             pct(stats_.buf_evict_dc_hist[4], evict_total),
+             pct(stats_.buf_evict_dc_hist[5], evict_total));
     }
     if (promo_total > 0) {
       printf("%s repl_hist buf_promo_dc: total=%lu  "
              "dc=1:%.1f%%  dc=2:%.1f%%  dc=3:%.1f%%  dc=4:%.1f%%  dc=5+:%.1f%%\n",
              prefix, promo_total,
-             pct(stats_.back().buf_promo_dc_hist[1], promo_total),
-             pct(stats_.back().buf_promo_dc_hist[2], promo_total),
-             pct(stats_.back().buf_promo_dc_hist[3], promo_total),
-             pct(stats_.back().buf_promo_dc_hist[4], promo_total),
-             pct(stats_.back().buf_promo_dc_hist[5], promo_total));
+             pct(stats_.buf_promo_dc_hist[1], promo_total),
+             pct(stats_.buf_promo_dc_hist[2], promo_total),
+             pct(stats_.buf_promo_dc_hist[3], promo_total),
+             pct(stats_.buf_promo_dc_hist[4], promo_total),
+             pct(stats_.buf_promo_dc_hist[5], promo_total));
     }
   }
-  if (buf_cap_ > 0 && stats_.back().buf_evictions > 0) {
+  if (buf_cap_ > 0 && stats_.buf_evictions > 0) {
     auto pct = [](uint64_t n, uint64_t d){ return d ? 100.0 * n / d : 0.0; };
-    const double avg_doa = stats_.back().shadow_hits
-        ? static_cast<double>(stats_.back().shadow_hit_doa_sum) / stats_.back().shadow_hits : 0.0;
+    const double avg_doa = stats_.shadow_hits
+        ? static_cast<double>(stats_.shadow_hit_doa_sum) / stats_.shadow_hits : 0.0;
     printf("%s repl_hist shadow    : evictions=%lu  shadow_hits=%lu (%.1f%% of doa_miss)  "
            "avg_doa@evict=%.2f  nonzero=%lu\n",
            prefix,
-           stats_.back().buf_evictions, stats_.back().shadow_hits,
-           pct(stats_.back().shadow_hits, stats_.back().doa_buf_miss),
-           avg_doa, stats_.back().shadow_hit_nonzero);
+           stats_.buf_evictions, stats_.shadow_hits,
+           pct(stats_.shadow_hits, stats_.doa_buf_miss),
+           avg_doa, stats_.shadow_hit_nonzero);
   }
   if (thd_doa > 0) {
     printf("%s repl_hist transitions: alive->doa=%lu  doa->alive=%lu\n",
-           prefix, stats_.back().trans_alive_doa, stats_.back().trans_doa_alive);
+           prefix, stats_.trans_alive_doa, stats_.trans_doa_alive);
   }
 }
 
@@ -319,9 +296,9 @@ void HistTable::update(uint64_t key, liveness_class evict_class, int64_t thd_doa
     const bool was_doa = old_s >= (int64_t)thd_doa;
     const bool is_doa  = new_s >= (int64_t)thd_doa;
     if (!was_doa && is_doa) {
-      ++stats_.back().trans_alive_doa;
+      ++stats_.trans_alive_doa;
     } else if (was_doa && !is_doa) {
-      ++stats_.back().trans_doa_alive;
+      ++stats_.trans_doa_alive;
     }
   };
   if (unbounded_) {
@@ -368,16 +345,16 @@ void HistTable::update(uint64_t key, liveness_class evict_class, int64_t thd_doa
     if (evict_class == liveness_class::doa) {
       auto sit = shadow_map_.find(key);
       if (sit != shadow_map_.end()) {
-        ++stats_.back().shadow_hits;
-        stats_.back().shadow_hit_doa_sum += sit->second;
+        ++stats_.shadow_hits;
+        stats_.shadow_hit_doa_sum += sit->second;
         if (sit->second > 0) {
-          ++stats_.back().shadow_hit_nonzero;
+          ++stats_.shadow_hit_nonzero;
         }
         shadow_map_.erase(sit);
       }
     }
     if (evict_class == liveness_class::doa) {
-      ++stats_.back().doa_buf_miss;
+      ++stats_.doa_buf_miss;
       buf_evicted_pcs_.erase(key);
       shadow_map_.erase(key);
       auto& bslot         = buf_victim();
@@ -416,7 +393,6 @@ void HistTable::on_hit(Entry& e, liveness_class evict_class) {
 }
 
 void HistTable::on_insert(Entry& e, liveness_class evict_class) {
-  e.promoted = false;
   e.last_seen_update = update_count_;
   const bool is_doa = evict_class == liveness_class::doa;
   e.freq      = is_doa ? 3 : 0;
@@ -428,7 +404,6 @@ void HistTable::on_insert(Entry& e, liveness_class evict_class) {
 }
 
 void HistTable::on_promote(Entry& e, uint64_t dead_count) {
-  e.promoted = true;
   e.last_seen_update = update_count_;
   e.freq      = std::min(FREQ_CAP, dead_count * 3);
   e.ma_loss   = 0;
@@ -452,7 +427,7 @@ void HistTable::try_promote() {
   if (!best) {
     return;
   }
-  ++stats_.back().promote_attempts;
+  ++stats_.promote_attempts;
 
   bool promote = false;
   for (const auto& e : entries_) {
@@ -469,14 +444,14 @@ void HistTable::try_promote() {
     promote = best->dead_count > min_freq;
   }
   if (!promote) {
-    ++stats_.back().promote_blocked;
+    ++stats_.promote_blocked;
     return;
   }
 
-  ++stats_.back().promotions;
-  stats_.back().buf_promo_dc_hist[std::min(best->dead_count, uint64_t{5})]++;
+  ++stats_.promotions;
+  stats_.buf_promo_dc_hist[std::min(best->dead_count, uint64_t{5})]++;
   if (best->second_chance) {
-    ++stats_.back().second_chance_promotions;
+    ++stats_.second_chance_promotions;
   }
   auto& slot = victim_slot();
   const bool has_victim = slot.valid;
@@ -491,7 +466,7 @@ void HistTable::try_promote() {
   best->valid        = has_victim;
   best->second_chance = has_victim;
   if (has_victim) {
-    ++stats_.back().demotions;
+    ++stats_.demotions;
     buf_evicted_pcs_.erase(victim_key);
   }
 }
@@ -502,7 +477,7 @@ HistTable::Entry& HistTable::victim_slot() {
       return e;
     }
   }
-  stats_.back().main_ever_full = true;
+  stats_.main_ever_full = true;
   const uint64_t aging_rate = cap_ > 0 ? cap_ : 1;
   auto eff = [&](const Entry& e) -> uint64_t {
     const uint64_t idle    = update_count_ - e.last_seen_update;
@@ -544,18 +519,18 @@ HistTable::BufEntry& HistTable::buf_victim() {
       return b;
     }
   }
-  stats_.back().buf_ever_full = true;
+  stats_.buf_ever_full = true;
   auto& victim = *std::min_element(buffer_.begin(), buffer_.end(),
     [](const BufEntry& a, const BufEntry& b){
       return a.dead_count < b.dead_count ||
              (a.dead_count == b.dead_count && a.ts < b.ts); });
   if (victim.valid) {
     if (victim.second_chance) {
-      ++stats_.back().second_chance_evictions;
+      ++stats_.second_chance_evictions;
     }
-    stats_.back().buf_evict_dc_hist[std::min(victim.dead_count, uint64_t{5})]++;
+    stats_.buf_evict_dc_hist[std::min(victim.dead_count, uint64_t{5})]++;
     buf_evicted_pcs_.insert(victim.key);
-    ++stats_.back().buf_evictions;
+    ++stats_.buf_evictions;
     shadow_map_[victim.key] = victim.dead_count;
     oracle_buf_[victim.key] += victim.dead_count;
   }

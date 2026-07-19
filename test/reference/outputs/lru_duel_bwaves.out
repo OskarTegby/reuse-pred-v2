@@ -127,16 +127,16 @@ LLC LRU-Live STATS:
   cfgB DoA ins     : lru (rank 0)
   Insertion positions: DoA=8/MRU  Alive=0/MRU  (N=12)
   Hit promotion    : full to MRU
-  Activation rate  : 100.0%  (1558595 guided / 1558595 total insertions)
-  guided_insertions=1558595
-  Insert mix       : DoA=100.0%  Alive=0.0%  Unguided=0.0%
-  Hit rate/class   : DoA=0.0%  Alive=0.0%  Unguided=0.0%
+  Activation rate  : 100.0%  (3391470 guided / 3391470 total insertions)
+  guided_insertions=3391470
+  Insert mix       : DoA=96.6%  Alive=3.5%  Unguided=0.0%
+  Hit rate/class   : DoA=0.0%  Alive=21.0%  Unguided=0.0%
   Promo capped (raw): DoA=0/0  (capped / hits-on-class, LRU_LIVE_HIT_INIT=0)
-  Evict class mix  : DoA=100.0%  Alive=0.0%  Unguided=0.0%
+  Evict class mix  : DoA=97.5%  Alive=2.6%  Unguided=0.0%
   Residency (ticks) by class x reuse:
     Unguided     0hit: mean=      0.0 (n=0)   >=1hit: mean=      0.0 (n=0)   after-last-hit: mean=      0.0 (n=0)
-    DoA          0hit: mean=      0.1 (n=1558595)   >=1hit: mean=      0.0 (n=0)   after-last-hit: mean=      0.0 (n=0)
-    Alive        0hit: mean=      0.0 (n=0)   >=1hit: mean=      0.0 (n=0)   after-last-hit: mean=      0.0 (n=0)
+    DoA          0hit: mean=      1.6 (n=3257764)   >=1hit: mean=      0.0 (n=0)   after-last-hit: mean=      0.0 (n=0)
+    Alive        0hit: mean=    170.4 (n=84550)   >=1hit: mean=    428.3 (n=4)   after-last-hit: mean=     17.3 (n=4)
 LLC repl_hist: unbounded (30 entries)
-LLC repl_hist transitions: alive->doa=0  doa->alive=0
+LLC repl_hist transitions: alive->doa=11  doa->alive=0
 

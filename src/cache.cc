@@ -518,8 +518,6 @@ void CACHE::begin_phase()
 
   roi_stats.back().name = NAME;
   sim_stats.back().name = NAME;
-
-  reset_phase_liveness_stats();
 }
 
 void CACHE::end_phase(unsigned finished_cpu)

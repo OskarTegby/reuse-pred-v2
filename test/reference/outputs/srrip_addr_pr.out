@@ -124,18 +124,18 @@ Channel 0
 LLC SRRIP-Live STATS:
   DoA ins RRPV     : 2  (SRRIP_DOA_INS_RRPV; 2=default, 3=legacy)
   DoA hit RRPV     : 2  (SRRIP_DOA_HIT_RRPV; 2=reset-to-ins, 1=mild)
-  Activation rate  : 100.0%  (737370 guided / 737370 total insertions)
-  guided_insertions=737370
+  Activation rate  : 100.0%  (2498192 guided / 2498192 total insertions)
+  guided_insertions=2498192
   Insert mix       : DoA=0.1%  Alive=100.0%  Unguided=0.0%
-  Hit rate/class   : DoA=37.5%  Alive=68.9%  Unguided=0.0%
+  Hit rate/class   : DoA=37.5%  Alive=49.8%  Unguided=0.0%
   RRPV@evict DoA   : [0]=0.0% [1]=0.0% [2]=0.0% [3]=100.0%  (ideal: ~100% at [3])
   RRPV@evict Alive : [0]=0.0% [1]=0.0% [2]=0.0% [3]=100.0%  (ideal: low RRPV after promotion)
-  Aging loops      : 89127  (0.13 per eviction)
-  Avg lifespan(cy) : DoA=1088682  Alive=4353856  Unguided=0
+  Aging loops      : 233821  (0.10 per eviction)
+  Avg lifespan(cy) : DoA=1088682  Alive=1564789  Unguided=0
 LLC repl_hist occupancy : main 4096/4096 (100%) [was full]  buf 0/0 (0%)
-LLC repl_hist classify  : main=15325 (2.1%)  buf_guided=0 (0.0%)  buf_weak=0 (0.0%)  warm_miss=327473 (44.5%)  cold_miss=394572 (53.6%)
-LLC repl_hist warm_miss : total=327473  buf_evicted=0 (0.0%)  main_evicted=327473 (44.5%)
-LLC repl_hist oracle    : warm_miss=327473  oracle_would_hit=0 (0.0% of warm)  oracle_buf_size=0
+LLC repl_hist classify  : main=15335 (0.7%)  buf_guided=0 (0.0%)  buf_weak=0 (0.0%)  warm_miss=1092642 (43.8%)  cold_miss=1390215 (55.7%)
+LLC repl_hist warm_miss : total=1092642  buf_evicted=0 (0.0%)  main_evicted=1092642 (43.8%)
+LLC repl_hist oracle    : warm_miss=1092642  oracle_would_hit=0 (0.0% of warm)  oracle_buf_size=0
 LLC repl_hist evict_attr: total=2414634  ma_penalty=-2  ma_loss: 0.0% of evictions  avg_loss=0.00  decisive=0.0%  |  aging: 100.0% of evictions  avg_penalty=1.01  decisive=0.0% (avg_hits=0.0)
 LLC repl_hist transitions: alive->doa=5  doa->alive=2
 
