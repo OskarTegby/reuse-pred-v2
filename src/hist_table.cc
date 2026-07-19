@@ -76,16 +76,24 @@ void HistTable::print_stats(const char* prefix) const {
 void HistTable::update(uint64_t key, liveness_class evict_class) {
   ++update_count_;
   if (cap_ == 0) {
-    auto it = unmap_.find(key);
-    if (it == unmap_.end()) {
-      if (evict_class != liveness_class::doa) {
-        return;
-      }
-      it = unmap_.emplace(key, 0).first;
-    }
-    it->second = (evict_class == liveness_class::doa) ? it->second + 1 : 0;
-    return;
+    update_unbounded(key, evict_class);
+  } else {
+    update_bounded(key, evict_class);
   }
+}
+
+void HistTable::update_unbounded(uint64_t key, liveness_class evict_class) {
+  auto it = unmap_.find(key);
+  if (it == unmap_.end()) {
+    if (evict_class != liveness_class::doa) {
+      return;
+    }
+    it = unmap_.emplace(key, 0).first;
+  }
+  it->second = (evict_class == liveness_class::doa) ? it->second + 1 : 0;
+}
+
+void HistTable::update_bounded(uint64_t key, liveness_class evict_class) {
   for (auto& e : entries_) {
     if (e.valid && e.key == key) {
       const bool is_doa = evict_class == liveness_class::doa;

@@ -67,6 +67,8 @@ private:
   uint64_t cap_          = 0;
   std::vector<Entry>    entries_;
 
+  void update_unbounded(uint64_t key, liveness_class evict_class);
+  void update_bounded(uint64_t key, liveness_class evict_class);
   Entry& victim_slot();
 };
 
