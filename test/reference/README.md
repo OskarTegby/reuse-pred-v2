@@ -105,3 +105,20 @@ outputs are unaffected (that binary never calls
 `replacement_final_stats()`) and remain byte-identical to the commit
 above.
 
+The same 48 outputs were regenerated again on 2026-07-20 after a series
+of follow-up simplifications to `HistTable` (shadow/buffer/promotion
+subsystem removal, unused config knobs, the `Stats` struct, and the
+`evict_attr` diagnostic fields — see the `champsim-source-refactor`
+branch history for the itemized list). The only behavior change with any
+potential to affect simulated results was simplifying `Entry::freq`'s
+update rule to grow only on DoA-classified hits (no more decay on alive
+hits) — verified via a full 60-scenario cluster run to produce **zero**
+cache-level differences (IPC, hit/miss counts, bypass counts) anywhere,
+including the 12 `addr` scenarios that actually exercise bounded-mode
+eviction: `classify()` compares `Entry::score`, not `freq`, and `freq`
+only influences which entries `HistTable` itself retains internally, not
+the classification decision for a currently-tracked key. Every diff
+across all 48 outputs is confined to the `repl_hist` block shrinking to
+reflect the removed instrumentation; the 12 `base` outputs remain
+untouched.
+

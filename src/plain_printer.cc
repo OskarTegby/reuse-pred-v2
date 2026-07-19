@@ -91,8 +91,6 @@ void champsim::plain_printer::print(CACHE::stats_type stats)
              << " (" << std::fixed << std::setprecision(2) << (100.0 * stats.doa / stats.evictions) << "%)" << std::endl;
     if (stats.cache_bypasses > 0)
       stream << stats.name << " CACHE_BYPASSES: " << stats.cache_bypasses << std::endl;
-    if (stats.bypass_probes > 0)
-      stream << stats.name << " BYPASS_PROBES: " << stats.bypass_probes << std::endl;
   }
 }
 

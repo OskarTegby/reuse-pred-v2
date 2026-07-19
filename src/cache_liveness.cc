@@ -50,26 +50,6 @@ void CACHE::configure_repl_hist_table()
   }
 }
 
-void CACHE::apply_bypass_recheck(HistTable& tbl)
-{
-  const char* m = std::getenv("BYPASS_RECHECK_MODE");
-  if (!m) {
-    return;
-  }
-  const std::string_view sv(m);
-  HistTable::RecheckMode mode = HistTable::RecheckMode::Off;
-  if (sv == "fixed") {
-    mode = HistTable::RecheckMode::Fixed;
-  } else if (sv == "backoff") {
-    mode = HistTable::RecheckMode::Backoff;
-  } else {
-    return;
-  }
-  const uint64_t base = getenv_uint64("BYPASS_RECHECK_INTERVAL", 32);
-  const uint64_t cap  = getenv_uint64("BYPASS_RECHECK_CAP",     256);
-  tbl.set_recheck(mode, base, cap);
-}
-
 void CACHE::configure_bypass_llc()
 {
   if (NAME != "LLC") {
@@ -79,7 +59,6 @@ void CACHE::configure_bypass_llc()
     bypass_enabled = true;
   }
   bypass_thd = getenv_uint64("BYPASS_THD", 6);
-  apply_bypass_recheck(liveness_hist);
 }
 
 void CACHE::load_predictor_settings()
@@ -101,12 +80,7 @@ bool CACHE::should_bypass(uint64_t key, uint64_t bypass_threshold, bool bypass_a
     return false;
   }
 
-  const bool predicted_doa = liveness_hist.classify(key, bypass_threshold) == liveness_class::doa;
-  const bool is_probe = predicted_doa && liveness_hist.should_probe(key);
-  if (is_probe) {
-    sim_stats.back().bypass_probes++;
-  }
-  const bool bypass = predicted_doa && !is_probe;
+  const bool bypass = liveness_hist.classify(key, bypass_threshold) == liveness_class::doa;
   if (bypass) {
     sim_stats.back().cache_bypasses++;
   }

@@ -536,7 +536,6 @@ void CACHE::end_phase(unsigned finished_cpu)
   roi_stats.back().total_miss_latency = sim_stats.back().total_miss_latency;
 
   roi_stats.back().cache_bypasses = sim_stats.back().cache_bypasses;
-  roi_stats.back().bypass_probes  = sim_stats.back().bypass_probes;
 
   roi_stats.back().evictions    = sim_stats.back().evictions;
   roi_stats.back().doa          = sim_stats.back().doa;

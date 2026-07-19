@@ -22,28 +22,11 @@
 #include <numeric>
 
 HistTable::HistTable(uint64_t cap)
-  : unbounded_(false), cap_(cap), entries_(cap) {
-}
-
-bool HistTable::should_probe(uint64_t key) {
-  if (recheck_mode_ == RecheckMode::Off) {
-    return false;
-  }
-  uint64_t& cnt = recheck_count_[key];
-  uint64_t  iv  = recheck_interval_[key];
-  if (iv == 0) {
-    iv = recheck_base_;
-  }
-  if (++cnt >= iv) {
-    cnt = 0;
-    recheck_probing_[key] = true;
-    return true;
-  }
-  return false;
+  : cap_(cap), entries_(cap) {
 }
 
 liveness_class HistTable::classify(uint64_t key, uint64_t thd_doa) const {
-  if (unbounded_) {
+  if (cap_ == 0) {
     auto it = unmap_.find(key);
     if (it != unmap_.end() && it->second >= (int64_t)thd_doa) {
       return liveness_class::doa;
@@ -61,7 +44,7 @@ liveness_class HistTable::classify(uint64_t key, uint64_t thd_doa) const {
 void HistTable::print_stats(const char* prefix) const {
   if (const char* d = std::getenv("REPL_HIST_DUMP_PCS"); d && d[0] == '1') {
     std::vector<std::pair<uint64_t, int64_t>> dump;
-    if (unbounded_) {
+    if (cap_ == 0) {
       for (const auto& [k, v] : unmap_) {
         dump.emplace_back(k, v);
       }
@@ -78,7 +61,7 @@ void HistTable::print_stats(const char* prefix) const {
       printf("%s repl_hist PC: key=0x%lx doa=%ld\n", prefix, k, sc);
     }
   }
-  if (unbounded_) {
+  if (cap_ == 0) {
     printf("%s repl_hist: unbounded (%zu entries)\n", prefix, unmap_.size());
     return;
   }
@@ -91,22 +74,8 @@ void HistTable::print_stats(const char* prefix) const {
 }
 
 void HistTable::update(uint64_t key, liveness_class evict_class) {
-  if (!unbounded_ && cap_ == 0) {
-    return;
-  }
   ++update_count_;
-  if (recheck_mode_ == RecheckMode::Backoff) {
-    auto pit = recheck_probing_.find(key);
-    if (pit != recheck_probing_.end() && pit->second) {
-      pit->second = false;
-      uint64_t& iv  = recheck_interval_[key];
-      const uint64_t cur = iv ? iv : recheck_base_;
-      iv = (evict_class == liveness_class::doa)
-               ? std::min(cur * 2, recheck_cap_)
-               : recheck_base_;
-    }
-  }
-  if (unbounded_) {
+  if (cap_ == 0) {
     auto it = unmap_.find(key);
     if (it == unmap_.end()) {
       if (evict_class != liveness_class::doa) {
@@ -119,34 +88,25 @@ void HistTable::update(uint64_t key, liveness_class evict_class) {
   }
   for (auto& e : entries_) {
     if (e.valid && e.key == key) {
-      e.score = (evict_class == liveness_class::doa) ? e.score + 1 : 0;
-      on_hit(e, evict_class);
+      const bool is_doa = evict_class == liveness_class::doa;
+      e.score = is_doa ? e.score + 1 : 0;
+      if (is_doa) {
+        e.freq = std::min(FREQ_CAP, e.freq + 3);
+      }
+      e.last_seen_update = update_count_;
+      e.ts = ++clock_;
       return;
     }
   }
   if (evict_class == liveness_class::doa) {
-    auto& slot   = victim_slot();
-    slot.key     = key;
-    slot.score   = 1;
-    slot.valid   = true;
-    on_insert(slot, evict_class);
+    auto& slot          = victim_slot();
+    slot.key            = key;
+    slot.score          = 1;
+    slot.valid          = true;
+    slot.freq           = 3;
+    slot.last_seen_update = update_count_;
+    slot.ts              = ++clock_;
   }
-}
-
-void HistTable::on_hit(Entry& e, liveness_class evict_class) {
-  const bool is_doa = evict_class == liveness_class::doa;
-  e.last_seen_update = update_count_;
-  if (is_doa) {
-    e.freq = std::min(FREQ_CAP, e.freq + 3);
-  }
-  e.ts = ++clock_;
-}
-
-void HistTable::on_insert(Entry& e, liveness_class evict_class) {
-  e.last_seen_update = update_count_;
-  const bool is_doa = evict_class == liveness_class::doa;
-  e.freq = is_doa ? 3 : 0;
-  e.ts = ++clock_;
 }
 
 HistTable::Entry& HistTable::victim_slot() {
@@ -155,10 +115,9 @@ HistTable::Entry& HistTable::victim_slot() {
       return e;
     }
   }
-  const uint64_t aging_rate = cap_ > 0 ? cap_ : 1;
   auto eff = [&](const Entry& e) -> uint64_t {
     const uint64_t idle    = update_count_ - e.last_seen_update;
-    const uint64_t penalty = idle / aging_rate;
+    const uint64_t penalty = idle / cap_;
     return e.freq > penalty ? e.freq - penalty : 0;
   };
   Entry& victim = *std::min_element(entries_.begin(), entries_.end(),

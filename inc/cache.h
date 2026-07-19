@@ -41,16 +41,8 @@ enum class liveness_class { doa, alive };
 
 class HistTable {
 public:
-  HistTable() : unbounded_(true) {}
+  HistTable() = default;
   HistTable(uint64_t cap);
-
-  enum class RecheckMode { Off, Fixed, Backoff };
-  void set_recheck(RecheckMode mode, uint64_t base, uint64_t cap) {
-    recheck_mode_ = mode; recheck_base_ = base ? base : 1;
-    recheck_cap_  = cap   ? cap  : recheck_base_;
-  }
-
-  bool should_probe(uint64_t key);
 
   liveness_class classify(uint64_t key, uint64_t thd_doa) const;
 
@@ -70,22 +62,13 @@ private:
     bool          valid    = false;
   };
 
-  bool        unbounded_           = false;
   uint64_t    update_count_        = 0;
-  RecheckMode recheck_mode_     = RecheckMode::Off;
-  uint64_t    recheck_base_     = 0;
-  uint64_t    recheck_cap_      = 0;
-  std::unordered_map<uint64_t, uint64_t> recheck_count_;
-  std::unordered_map<uint64_t, uint64_t> recheck_interval_;
-  std::unordered_map<uint64_t, bool>     recheck_probing_;
 
   mutable std::unordered_map<uint64_t, int64_t> unmap_;
   uint64_t cap_          = 0;
   std::vector<Entry>    entries_;
   uint64_t clock_        = 0;
 
-  void on_hit(Entry& e, liveness_class evict_class);
-  void on_insert(Entry& e, liveness_class evict_class);
   Entry& victim_slot();
 };
 
@@ -104,7 +87,6 @@ struct cache_stats {
   uint64_t total_miss_latency = 0;
 
   uint64_t cache_bypasses = 0;
-  uint64_t bypass_probes  = 0;
 
   uint64_t evictions    = 0;
   uint64_t doa          = 0;
@@ -177,7 +159,6 @@ class CACHE : public champsim::operable, public MemoryRequestConsumer, public Me
   void load_predictor_settings();
   void configure_guidance_thd();
   void configure_repl_hist_table();
-  void apply_bypass_recheck(HistTable& tbl);
   void configure_bypass_llc();
   bool should_bypass(uint64_t key, uint64_t bypass_threshold, bool bypass_allowed);
   void update_eviction_counters(const BLOCK& victim, liveness_class lv);
