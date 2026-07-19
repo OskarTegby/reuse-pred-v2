@@ -104,9 +104,9 @@ public:
 
   liveness_class classify(uint64_t key, uint64_t thd_doa) const;
 
-  const Stats& get_stats() const { return stats_; }
+  const Stats& get_stats() const { return stats_.back(); }
   void reset_stats() {
-    stats_ = Stats{};
+    stats_.emplace_back();
     for (auto& e : entries_) e.promoted = false;
   }
 
@@ -182,7 +182,7 @@ private:
   mutable std::unordered_set<uint64_t> buf_evicted_pcs_;
   std::unordered_map<uint64_t, uint64_t> shadow_map_;
   std::unordered_map<uint64_t, uint64_t> oracle_buf_;
-  mutable Stats stats_;
+  mutable std::vector<Stats> stats_{Stats{}};
   uint64_t evict_count_          = 0;
   uint64_t evict_ma_nonzero_     = 0;
   uint64_t evict_ma_loss_sum_    = 0;

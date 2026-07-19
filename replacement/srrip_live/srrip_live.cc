@@ -62,7 +62,7 @@ struct Stats {
     std::array<uint64_t, 3> lifespan_sum   = {};
     std::array<uint64_t, 3> lifespan_count = {};
 };
-std::unordered_map<CACHE*, Stats> stats;
+std::unordered_map<CACHE*, std::vector<Stats>> stats;
 
 constexpr int PSEL_BITS = 10;
 constexpr int PSEL_MAX  = (1 << PSEL_BITS) - 1;
@@ -82,7 +82,7 @@ std::unordered_map<CACHE*, int64_t>              miss_lat_b;
 // must carry over from warmup for correct behavior.
 extern "C" void srrip_live_reset_phase_stats(CACHE* c)
 {
-    ::stats[c] = Stats{};
+    ::stats[c].emplace_back();
 }
 
 static int g_duel_metric  = -1;  // 0=hits (PSEL), 1=latency (argmin)
@@ -135,7 +135,7 @@ void CACHE::initialize_replacement()
   ::rrpv_values[this]  = std::vector<int>   (n, ::maxRRPV);
   ::slot_class[this]   = std::vector<int8_t>(n, 0);
   ::slot_cfg_b[this]   = std::vector<uint8_t>(n, 0);
-  ::stats[this]        = Stats{};
+  ::stats[this]        = std::vector<Stats>(1);
   ::psel[this]         = PSEL_MID;
   ::miss_lat_a[this]   = 0;
   ::miss_lat_b[this]   = 0;
@@ -152,7 +152,7 @@ uint32_t CACHE::find_victim(uint32_t triggering_cpu, uint64_t instr_id, uint32_t
   auto end    = std::next(begin, NUM_WAY);
   auto victim = std::find(begin, end, ::maxRRPV);
   while (victim == end) {
-    ++::stats[this].aging_loops;
+    ++::stats[this].back().aging_loops;
     for (auto it = begin; it != end; ++it)
       ++(*it);
     victim = std::find(begin, end, ::maxRRPV);
@@ -165,7 +165,7 @@ uint32_t CACHE::find_victim(uint32_t triggering_cpu, uint64_t instr_id, uint32_t
   const std::size_t idx = set * NUM_WAY + way;
   const int8_t  cls  = ::slot_class[this][idx];
   const int     rrpv = ::rrpv_values[this][idx];
-  auto& st = ::stats[this];
+  auto& st = ::stats[this].back();
 
   switch (cls) {
     case 1: st.evict_rrpv_doa    [rrpv]++; break;
@@ -195,7 +195,7 @@ void CACHE::update_replacement_state(uint32_t triggering_cpu, uint32_t set, uint
   const std::size_t idx = set * NUM_WAY + way;
   auto& rrpv = ::rrpv_values[this][idx];
   auto& cls  = ::slot_class[this][idx];
-  auto& st   = ::stats[this];
+  auto& st   = ::stats[this].back();
 
   // SRRIP_LIVE_TARGET=none explicitly disables liveness guidance while
   // still on the LLC (used by the "bypass" condition: raw DoA bypass stays
@@ -258,7 +258,7 @@ void CACHE::update_replacement_state(uint32_t triggering_cpu, uint32_t set, uint
 
 void CACHE::replacement_final_stats()
 {
-  const auto& st = ::stats[this];
+  const auto& st = ::stats[this].back();
   const uint64_t total_ins  = st.ins_unguided + st.ins_doa + st.ins_alive;
   const uint64_t guided_ins = st.ins_doa + st.ins_alive;
 
