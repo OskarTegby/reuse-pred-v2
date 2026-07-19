@@ -94,7 +94,6 @@ void HistTable::update(uint64_t key, liveness_class evict_class) {
         e.freq = std::min(FREQ_CAP, e.freq + 3);
       }
       e.last_seen_update = update_count_;
-      e.ts = ++clock_;
       return;
     }
   }
@@ -105,7 +104,6 @@ void HistTable::update(uint64_t key, liveness_class evict_class) {
     slot.valid          = true;
     slot.freq           = 3;
     slot.last_seen_update = update_count_;
-    slot.ts              = ++clock_;
   }
 }
 
@@ -123,6 +121,6 @@ HistTable::Entry& HistTable::victim_slot() {
   Entry& victim = *std::min_element(entries_.begin(), entries_.end(),
     [&](const Entry& a, const Entry& b){
       const uint64_t fa = eff(a), fb = eff(b);
-      return fa < fb || (fa == fb && a.ts < b.ts); });
+      return fa < fb || (fa == fb && a.last_seen_update < b.last_seen_update); });
   return victim;
 }

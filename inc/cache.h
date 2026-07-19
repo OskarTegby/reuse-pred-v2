@@ -57,7 +57,6 @@ private:
     uint64_t key              = 0;
     int64_t  score            = 0;
     uint64_t freq             = 0;
-    uint64_t ts               = 0;
     uint64_t last_seen_update = 0;
     bool          valid    = false;
   };
@@ -67,7 +66,6 @@ private:
   mutable std::unordered_map<uint64_t, int64_t> unmap_;
   uint64_t cap_          = 0;
   std::vector<Entry>    entries_;
-  uint64_t clock_        = 0;
 
   Entry& victim_slot();
 };
