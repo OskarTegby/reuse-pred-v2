@@ -143,16 +143,20 @@ void CACHE::mark_accessed_on_hit(BLOCK& blk, uint8_t type)
   }
 }
 
-bool CACHE::should_bypass(uint64_t key, uint64_t thd, bool bypass_allowed)
+bool CACHE::should_bypass(uint64_t key, uint64_t bypass_threshold, bool bypass_allowed)
 {
-  const bool is_doa = bypass_allowed && liveness_hist.classify(key, thd) == liveness_class::doa;
-  const bool is_probe = is_doa && liveness_hist.should_probe(key);
-  if (is_probe) {
-    sim_stats.back().liveness_probes++;
+  if (!bypass_allowed) {
+    return false;
   }
-  const bool bypass = is_doa && !is_probe;
+
+  const bool predicted_doa = liveness_hist.classify(key, bypass_threshold) == liveness_class::doa;
+  const bool is_probe = predicted_doa && liveness_hist.should_probe(key);
+  if (is_probe) {
+    sim_stats.back().bypass_probes++;
+  }
+  const bool bypass = predicted_doa && !is_probe;
   if (bypass) {
-    sim_stats.back().liveness_bypasses++;
+    sim_stats.back().cache_bypasses++;
     liveness_hist.record_bypass(key);
   }
   return bypass;

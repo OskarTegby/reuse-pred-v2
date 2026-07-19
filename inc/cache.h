@@ -216,8 +216,8 @@ struct cache_stats {
 
   uint64_t total_miss_latency = 0;
 
-  uint64_t liveness_bypasses = 0;
-  uint64_t liveness_probes   = 0;
+  uint64_t cache_bypasses = 0;
+  uint64_t bypass_probes  = 0;
 
   uint64_t evictions    = 0;
   uint64_t doa          = 0;
@@ -293,7 +293,7 @@ class CACHE : public champsim::operable, public MemoryRequestConsumer, public Me
   void apply_bypass_recheck(HistTable& tbl);
   void configure_bypass_llc();
   void record_fill_eviction_stats(const BLOCK& victim);
-  bool should_bypass(uint64_t key, uint64_t thd, bool bypass_allowed);
+  bool should_bypass(uint64_t key, uint64_t bypass_threshold, bool bypass_allowed);
   void update_eviction_counters(const BLOCK& victim, liveness_class lv);
   bool resolve_fill_bypass(const PACKET& fill_mshr, set_type::iterator& way, set_type::iterator set_end);
   void mark_accessed_on_hit(BLOCK& blk, uint8_t type);
