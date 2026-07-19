@@ -38,20 +38,26 @@ void CACHE::reset_phase_liveness_stats()
 {
   liveness_hist.reset_stats();
 
-  if (lru_live_reset_phase_stats)
+  if (lru_live_reset_phase_stats) {
     lru_live_reset_phase_stats(this);
-  if (srrip_live_reset_phase_stats)
+  }
+  if (srrip_live_reset_phase_stats) {
     srrip_live_reset_phase_stats(this);
-  if (ipv_live_reset_phase_stats)
+  }
+  if (ipv_live_reset_phase_stats) {
     ipv_live_reset_phase_stats(this);
+  }
 }
 
 void CACHE::record_fill_eviction_stats(const BLOCK& victim)
 {
-  if (!victim.valid) return;
+  if (!victim.valid) {
+    return;
+  }
   sim_stats.back().evictions++;
-  if (!victim.accessed)
+  if (!victim.accessed) {
     sim_stats.back().doa++;
+  }
 }
 
 void CACHE::configure_guidance_thd()
@@ -67,25 +73,33 @@ void CACHE::configure_repl_hist_table()
     const uint64_t rh_buf = getenv_uint64("REPL_HIST_BUF_CAP", 0);
     liveness_hist = HistTable(rh_cap, HistTable::Policy::LFU_DOA, rh_buf);
     const uint64_t rh_hash = getenv_uint64("REPL_HIST_HASH_BITS", 0);
-    if (rh_hash > 0)
+    if (rh_hash > 0) {
       liveness_hist.set_hash(static_cast<unsigned>(rh_hash));
+    }
   } else if (NAME == "LLC" && std::getenv("REPL_HIST_LLC_CAP")) {
     liveness_hist = HistTable(0, HistTable::Policy::LFU_DOA, 0, 0);
   }
 
-  if (const char* v = std::getenv("REPL_HIST_MODE"); v && std::string_view(v) == "addr")
+  if (const char* v = std::getenv("REPL_HIST_MODE"); v && std::string_view(v) == "addr") {
     use_addr_key = true;
+  }
 }
 
 void CACHE::apply_bypass_recheck(HistTable& tbl)
 {
   const char* m = std::getenv("BYPASS_RECHECK_MODE");
-  if (!m) return;
+  if (!m) {
+    return;
+  }
   const std::string_view sv(m);
   HistTable::RecheckMode mode = HistTable::RecheckMode::Off;
-  if      (sv == "fixed")   mode = HistTable::RecheckMode::Fixed;
-  else if (sv == "backoff") mode = HistTable::RecheckMode::Backoff;
-  else return;
+  if (sv == "fixed") {
+    mode = HistTable::RecheckMode::Fixed;
+  } else if (sv == "backoff") {
+    mode = HistTable::RecheckMode::Backoff;
+  } else {
+    return;
+  }
   const uint64_t base = getenv_uint64("BYPASS_RECHECK_INTERVAL", 32);
   const uint64_t cap  = getenv_uint64("BYPASS_RECHECK_CAP",     256);
   tbl.set_recheck(mode, base, cap);
@@ -93,14 +107,19 @@ void CACHE::apply_bypass_recheck(HistTable& tbl)
 
 void CACHE::configure_bypass_llc()
 {
-  if (NAME != "LLC") return;
-  if (const char* v = std::getenv("LIVENESS_BYPASS"); v && std::stoull(v))
+  if (NAME != "LLC") {
+    return;
+  }
+  if (const char* v = std::getenv("LIVENESS_BYPASS"); v && std::stoull(v)) {
     bypass_enabled = true;
+  }
   bypass_thd = getenv_uint64("BYPASS_THD", guidance_thd);
-  if (const uint64_t rp = getenv_uint64("BYPASS_RESET_PERIOD", 0); rp > 0)
+  if (const uint64_t rp = getenv_uint64("BYPASS_RESET_PERIOD", 0); rp > 0) {
     liveness_hist.set_reset_period(rp);
-  if (const uint64_t rp = getenv_uint64("BYPASS_PC_RESET_PERIOD", 0); rp > 0)
+  }
+  if (const uint64_t rp = getenv_uint64("BYPASS_PC_RESET_PERIOD", 0); rp > 0) {
     liveness_hist.set_bypass_pc_reset(rp);
+  }
   apply_bypass_recheck(liveness_hist);
 }
 
@@ -119,15 +138,18 @@ liveness_class CACHE::classify_block_liveness(uint64_t block_address, uint64_t p
 
 void CACHE::mark_accessed_on_hit(BLOCK& blk, uint8_t type)
 {
-  if (type != WRITE && (NAME == "cpu0_STLB" || NAME == "LLC"))
+  if (type != WRITE && (NAME == "cpu0_STLB" || NAME == "LLC")) {
     blk.accessed = true;
+  }
 }
 
 bool CACHE::should_bypass(uint64_t key, uint64_t thd, bool bypass_allowed)
 {
   const bool is_doa = bypass_allowed && liveness_hist.classify(key, thd) == liveness_class::doa;
   const bool is_probe = is_doa && liveness_hist.should_probe(key);
-  if (is_probe) sim_stats.back().liveness_probes++;
+  if (is_probe) {
+    sim_stats.back().liveness_probes++;
+  }
   const bool bypass = is_doa && !is_probe;
   if (bypass) {
     sim_stats.back().liveness_bypasses++;
@@ -138,7 +160,9 @@ bool CACHE::should_bypass(uint64_t key, uint64_t thd, bool bypass_allowed)
 
 void CACHE::update_eviction_counters(const BLOCK& victim, liveness_class evict_lv)
 {
-  if (NAME != "LLC") return;
+  if (NAME != "LLC") {
+    return;
+  }
 
   const uint64_t block_addr = victim.address >> OFFSET_BITS;
   const uint64_t key = use_addr_key ? block_addr : victim.ip;
@@ -148,7 +172,9 @@ void CACHE::update_eviction_counters(const BLOCK& victim, liveness_class evict_l
 
 bool CACHE::resolve_fill_bypass(const PACKET& fill_mshr, set_type::iterator& way, set_type::iterator set_end)
 {
-  if (way == set_end || !way->valid) return false;
+  if (way == set_end || !way->valid) {
+    return false;
+  }
 
   const uint64_t bypass_key = use_addr_key
       ? (fill_mshr.address >> OFFSET_BITS) : fill_mshr.ip;

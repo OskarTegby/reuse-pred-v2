@@ -23,30 +23,43 @@
 
 HistTable::HistTable(uint64_t cap, Policy pol, uint64_t buf_cap, uint64_t /*shadow_cap*/)
   : unbounded_(false), cap_(cap), pol_(pol), entries_(cap), buf_cap_(buf_cap), buffer_(buf_cap) {
-  if (const char* ev = std::getenv("HIST_MA_PENALTY"))
+  if (const char* ev = std::getenv("HIST_MA_PENALTY")) {
     ma_penalty_ = std::atoi(ev);
+  }
 }
 
 void HistTable::record_bypass(uint64_t key) {
-  if (bypass_pc_reset_period_ == 0) return;
+  if (bypass_pc_reset_period_ == 0) {
+    return;
+  }
   auto& cnt = bypass_since_update_[key];
   if (++cnt >= bypass_pc_reset_period_) {
     if (unbounded_) {
       auto it = unmap_.find(key);
-      if (it != unmap_.end()) it->second = 0;
+      if (it != unmap_.end()) {
+        it->second = 0;
+      }
     } else {
-      for (auto& e : entries_)
-        if (e.valid && e.key == key) { e.score = 0; break; }
+      for (auto& e : entries_) {
+        if (e.valid && e.key == key) {
+          e.score = 0;
+          break;
+        }
+      }
     }
     cnt = 0;
   }
 }
 
 bool HistTable::should_probe(uint64_t key) {
-  if (recheck_mode_ == RecheckMode::Off) return false;
+  if (recheck_mode_ == RecheckMode::Off) {
+    return false;
+  }
   uint64_t& cnt = recheck_count_[key];
   uint64_t  iv  = recheck_interval_[key];
-  if (iv == 0) iv = recheck_base_;
+  if (iv == 0) {
+    iv = recheck_base_;
+  }
   if (++cnt >= iv) {
     cnt = 0;
     recheck_probing_[key] = true;
@@ -67,7 +80,10 @@ int64_t HistTable::get_score(uint64_t key) const {
     if (e.valid && e.key == key) {
       if (e.score > 0) {
         stats_.table_hits++;
-        if (e.promoted) { stats_.promoted_hits++; e.promoted = false; }
+        if (e.promoted) {
+          stats_.promoted_hits++;
+          e.promoted = false;
+        }
       }
       return e.score;
     }
@@ -79,7 +95,9 @@ liveness_class HistTable::classify(uint64_t key, uint64_t thd_doa) const {
   key = hk_(key);
   if (unbounded_) {
     auto it = unmap_.find(key);
-    if (it != unmap_.end() && it->second >= (int64_t)thd_doa) return liveness_class::doa;
+    if (it != unmap_.end() && it->second >= (int64_t)thd_doa) {
+      return liveness_class::doa;
+    }
     return liveness_class::alive;
   }
   for (const auto& e : entries_) {
@@ -100,11 +118,13 @@ liveness_class HistTable::classify(uint64_t key, uint64_t thd_doa) const {
   }
   if (!seen_pcs_.empty() && seen_pcs_.count(key)) {
     ++stats_.classify_warm_miss;
-    if (!buf_evicted_pcs_.empty() && buf_evicted_pcs_.count(key))
+    if (!buf_evicted_pcs_.empty() && buf_evicted_pcs_.count(key)) {
       ++stats_.classify_warm_buf_evicted;
+    }
     auto it = oracle_buf_.find(key);
-    if (it != oracle_buf_.end() && it->second >= thd_doa)
+    if (it != oracle_buf_.end() && it->second >= thd_doa) {
       ++stats_.classify_warm_oracle_hit;
+    }
     auto ait = aging_evicted_pcs_.find(key);
     if (ait != aging_evicted_pcs_.end()) {
       ++stats_.classify_warm_aged_out;
@@ -120,21 +140,28 @@ void HistTable::print_stats(const char* prefix, uint64_t thd_doa) const {
   if (const char* d = std::getenv("REPL_HIST_DUMP_PCS"); d && d[0] == '1') {
     std::vector<std::pair<uint64_t, int64_t>> dump;
     if (unbounded_) {
-      for (const auto& [k, v] : unmap_) dump.emplace_back(k, v);
+      for (const auto& [k, v] : unmap_) {
+        dump.emplace_back(k, v);
+      }
     } else {
-      for (const auto& e : entries_)
-        if (e.valid) dump.emplace_back(e.key, e.score);
+      for (const auto& e : entries_) {
+        if (e.valid) {
+          dump.emplace_back(e.key, e.score);
+        }
+      }
     }
     std::sort(dump.begin(), dump.end());
     printf("%s repl_hist PCS: count=%zu\n", prefix, dump.size());
-    for (const auto& [k, sc] : dump)
+    for (const auto& [k, sc] : dump) {
       printf("%s repl_hist PC: key=0x%lx doa=%ld\n", prefix, k, sc);
+    }
   }
   if (unbounded_) {
     printf("%s repl_hist: unbounded (%zu entries)\n", prefix, unmap_.size());
-    if (thd_doa > 0)
+    if (thd_doa > 0) {
       printf("%s repl_hist transitions: alive->doa=%lu  doa->alive=%lu\n",
              prefix, stats_.trans_alive_doa, stats_.trans_doa_alive);
+    }
     return;
   }
   const uint64_t main_occ = static_cast<uint64_t>(
@@ -252,17 +279,22 @@ void HistTable::print_stats(const char* prefix, uint64_t thd_doa) const {
            pct(stats_.shadow_hits, stats_.doa_buf_miss),
            avg_doa, stats_.shadow_hit_nonzero);
   }
-  if (thd_doa > 0)
+  if (thd_doa > 0) {
     printf("%s repl_hist transitions: alive->doa=%lu  doa->alive=%lu\n",
            prefix, stats_.trans_alive_doa, stats_.trans_doa_alive);
+  }
 }
 
 void HistTable::update(uint64_t key, liveness_class evict_class, int64_t thd_doa) {
-  if (!unbounded_ && cap_ == 0 && buf_cap_ == 0) return;
+  if (!unbounded_ && cap_ == 0 && buf_cap_ == 0) {
+    return;
+  }
   key = hk_(key);
   seen_pcs_.insert(key);
   ++update_count_;
-  if (thd_doa > 0) thd_doa_cache_ = thd_doa;
+  if (thd_doa > 0) {
+    thd_doa_cache_ = thd_doa;
+  }
   if (recheck_mode_ == RecheckMode::Backoff) {
     auto pit = recheck_probing_.find(key);
     if (pit != recheck_probing_.end() && pit->second) {
@@ -276,27 +308,38 @@ void HistTable::update(uint64_t key, liveness_class evict_class, int64_t thd_doa
   }
   if (buf_cap_ > 0 && evict_class == liveness_class::doa) {
     auto it = oracle_buf_.find(key);
-    if (it != oracle_buf_.end()) ++it->second;
+    if (it != oracle_buf_.end()) {
+      ++it->second;
+    }
   }
   auto record_transition = [&](int64_t old_s, int64_t new_s) {
-    if (thd_doa == 0 || old_s == new_s) return;
+    if (thd_doa == 0 || old_s == new_s) {
+      return;
+    }
     const bool was_doa = old_s >= (int64_t)thd_doa;
     const bool is_doa  = new_s >= (int64_t)thd_doa;
-    if (!was_doa && is_doa) ++stats_.trans_alive_doa;
-    else if (was_doa && !is_doa) ++stats_.trans_doa_alive;
+    if (!was_doa && is_doa) {
+      ++stats_.trans_alive_doa;
+    } else if (was_doa && !is_doa) {
+      ++stats_.trans_doa_alive;
+    }
   };
   if (unbounded_) {
     bypass_since_update_[key] = 0;
     auto it = unmap_.find(key);
     if (it == unmap_.end()) {
-      if (evict_class != liveness_class::doa) return;
+      if (evict_class != liveness_class::doa) {
+        return;
+      }
       it = unmap_.emplace(key, 0).first;
     }
     const int64_t old_s = it->second;
     it->second = (evict_class == liveness_class::doa) ? old_s + 1 : 0;
     record_transition(old_s, it->second);
     if (reset_period_ > 0 && update_count_ % reset_period_ == 0) {
-      for (auto& [k, v] : unmap_) v = 0;
+      for (auto& [k, v] : unmap_) {
+        v = 0;
+      }
     }
     return;
   }
@@ -327,7 +370,9 @@ void HistTable::update(uint64_t key, liveness_class evict_class, int64_t thd_doa
       if (sit != shadow_map_.end()) {
         ++stats_.shadow_hits;
         stats_.shadow_hit_doa_sum += sit->second;
-        if (sit->second > 0) ++stats_.shadow_hit_nonzero;
+        if (sit->second > 0) {
+          ++stats_.shadow_hit_nonzero;
+        }
         shadow_map_.erase(sit);
       }
     }
@@ -358,8 +403,9 @@ void HistTable::update(uint64_t key, liveness_class evict_class, int64_t thd_doa
 void HistTable::on_hit(Entry& e, liveness_class evict_class) {
   const bool is_doa = evict_class == liveness_class::doa;
   e.last_seen_update = update_count_;
-  if (is_doa) e.freq = std::min(FREQ_CAP, e.freq + 3);
-  else if (ma_penalty_ < 0) {
+  if (is_doa) {
+    e.freq = std::min(FREQ_CAP, e.freq + 3);
+  } else if (ma_penalty_ < 0) {
     const uint64_t loss   = static_cast<uint64_t>(-ma_penalty_);
     const uint64_t actual = std::min(e.freq, loss);
     e.ma_loss += actual;
@@ -376,7 +422,8 @@ void HistTable::on_insert(Entry& e, liveness_class evict_class) {
   e.freq      = is_doa ? 3 : 0;
   e.ma_loss   = 0;
   e.hit_count = 0;
-  e.ts = ++clock_; e.rrpv = 0;
+  e.ts = ++clock_;
+  e.rrpv = 0;
   aging_evicted_pcs_.erase(e.key);
 }
 
@@ -386,33 +433,51 @@ void HistTable::on_promote(Entry& e, uint64_t dead_count) {
   e.freq      = std::min(FREQ_CAP, dead_count * 3);
   e.ma_loss   = 0;
   e.hit_count = 0;
-  e.ts = ++clock_; e.rrpv = 0;
+  e.ts = ++clock_;
+  e.rrpv = 0;
   aging_evicted_pcs_.erase(e.key);
 }
 
 void HistTable::try_promote() {
   BufEntry* best = nullptr;
   for (auto& b : buffer_) {
-    if (!b.valid || b.dead_count == 0) continue;
+    if (!b.valid || b.dead_count == 0) {
+      continue;
+    }
     if (!best || b.dead_count > best->dead_count ||
-        (b.dead_count == best->dead_count && b.ts > best->ts))
+        (b.dead_count == best->dead_count && b.ts > best->ts)) {
       best = &b;
+    }
   }
-  if (!best) return;
+  if (!best) {
+    return;
+  }
   ++stats_.promote_attempts;
 
   bool promote = false;
-  for (const auto& e : entries_) if (!e.valid) { promote = true; break; }
+  for (const auto& e : entries_) {
+    if (!e.valid) {
+      promote = true;
+      break;
+    }
+  }
   if (!promote) {
     uint64_t min_freq = UINT64_MAX;
-    for (const auto& e : entries_) min_freq = std::min(min_freq, e.freq);
+    for (const auto& e : entries_) {
+      min_freq = std::min(min_freq, e.freq);
+    }
     promote = best->dead_count > min_freq;
   }
-  if (!promote) { ++stats_.promote_blocked; return; }
+  if (!promote) {
+    ++stats_.promote_blocked;
+    return;
+  }
 
   ++stats_.promotions;
   stats_.buf_promo_dc_hist[std::min(best->dead_count, uint64_t{5})]++;
-  if (best->second_chance) ++stats_.second_chance_promotions;
+  if (best->second_chance) {
+    ++stats_.second_chance_promotions;
+  }
   auto& slot = victim_slot();
   const bool has_victim = slot.valid;
   const uint64_t victim_key = has_victim ? slot.key : 0;
@@ -432,7 +497,11 @@ void HistTable::try_promote() {
 }
 
 HistTable::Entry& HistTable::victim_slot() {
-  for (auto& e : entries_) if (!e.valid) return e;
+  for (auto& e : entries_) {
+    if (!e.valid) {
+      return e;
+    }
+  }
   stats_.main_ever_full = true;
   const uint64_t aging_rate = cap_ > 0 ? cap_ : 1;
   auto eff = [&](const Entry& e) -> uint64_t {
@@ -448,11 +517,19 @@ HistTable::Entry& HistTable::victim_slot() {
   const uint64_t idle          = update_count_ - victim.last_seen_update;
   const uint64_t aging_penalty = std::min(victim.freq, idle / aging_rate);
   const uint64_t eff_freq      = eff(victim);
-  if (victim.ma_loss > 0)   { ++evict_ma_nonzero_;    evict_ma_loss_sum_    += victim.ma_loss;    }
-  if (aging_penalty  > 0)   { ++evict_aging_nonzero_; evict_aging_loss_sum_ += aging_penalty;     }
+  if (victim.ma_loss > 0) {
+    ++evict_ma_nonzero_;
+    evict_ma_loss_sum_ += victim.ma_loss;
+  }
+  if (aging_penalty > 0) {
+    ++evict_aging_nonzero_;
+    evict_aging_loss_sum_ += aging_penalty;
+  }
   if (eff_freq == 0) {
-    if (victim.ma_loss   > 0) ++evict_ma_decisive_;
-    if (aging_penalty    > 0) {
+    if (victim.ma_loss > 0) {
+      ++evict_ma_decisive_;
+    }
+    if (aging_penalty > 0) {
       ++evict_aging_decisive_;
       aging_evicted_pcs_[victim.key] = {victim.score, victim.hit_count};
       evict_aging_hitsum_ += victim.hit_count;
@@ -462,14 +539,20 @@ HistTable::Entry& HistTable::victim_slot() {
 }
 
 HistTable::BufEntry& HistTable::buf_victim() {
-  for (auto& b : buffer_) if (!b.valid) return b;
+  for (auto& b : buffer_) {
+    if (!b.valid) {
+      return b;
+    }
+  }
   stats_.buf_ever_full = true;
   auto& victim = *std::min_element(buffer_.begin(), buffer_.end(),
     [](const BufEntry& a, const BufEntry& b){
       return a.dead_count < b.dead_count ||
              (a.dead_count == b.dead_count && a.ts < b.ts); });
   if (victim.valid) {
-    if (victim.second_chance) ++stats_.second_chance_evictions;
+    if (victim.second_chance) {
+      ++stats_.second_chance_evictions;
+    }
     stats_.buf_evict_dc_hist[std::min(victim.dead_count, uint64_t{5})]++;
     buf_evicted_pcs_.insert(victim.key);
     ++stats_.buf_evictions;
