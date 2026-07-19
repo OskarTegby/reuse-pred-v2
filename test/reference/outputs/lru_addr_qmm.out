@@ -138,10 +138,8 @@ LLC LRU-Live STATS:
     Unguided     0hit: mean=      0.0 (n=0)   >=1hit: mean=      0.0 (n=0)   after-last-hit: mean=      0.0 (n=0)
     DoA          0hit: mean=      0.0 (n=0)   >=1hit: mean=      0.0 (n=0)   after-last-hit: mean=      0.0 (n=0)
     Alive        0hit: mean=     14.8 (n=212917)   >=1hit: mean=     34.8 (n=19043)   after-last-hit: mean=     14.7 (n=19043)
-LLC repl_hist occupancy : main 4096/4096 (100%) [was full]  buf 0/0 (0%)
-LLC repl_hist classify  : main=2839 (1.1%)  buf_guided=0 (0.0%)  buf_weak=0 (0.0%)  warm_miss=117558 (41.9%)  cold_miss=160715 (57.2%)
-LLC repl_hist warm_miss : total=117558  buf_evicted=0 (0.0%)  main_evicted=117558 (41.9%)
-LLC repl_hist oracle    : warm_miss=117558  oracle_would_hit=0 (0.0% of warm)  oracle_buf_size=0
+LLC repl_hist occupancy : main 4096/4096 (100%) [was full]
+LLC repl_hist classify  : main=2839 (1.1%)  warm_miss=117558 (41.9%)  cold_miss=160715 (57.2%)
 LLC repl_hist evict_attr: total=208820  ma_penalty=-2  ma_loss: 0.0% of evictions  avg_loss=0.00  decisive=0.0%  |  aging: 100.0% of evictions  avg_penalty=1.01  decisive=0.0% (avg_hits=0.0)
 LLC repl_hist transitions: alive->doa=0  doa->alive=0
 

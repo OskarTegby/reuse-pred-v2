@@ -41,46 +41,8 @@ enum class liveness_class { doa, alive };
 
 class HistTable {
 public:
-  enum class Policy { LFU_DOA };
-
-  struct Stats {
-    uint64_t promotions    = 0;
-    bool     main_ever_full = false;
-    bool     buf_ever_full  = false;
-    uint64_t buf_evictions       = 0;
-    uint64_t shadow_hits         = 0;
-    uint64_t shadow_hit_doa_sum  = 0;
-    uint64_t shadow_hit_nonzero  = 0;
-    uint64_t doa_buf_miss            = 0;
-    uint64_t demotions               = 0;
-    uint64_t second_chance_promotions = 0;
-    uint64_t second_chance_evictions  = 0;
-    uint64_t promote_attempts        = 0;
-    uint64_t promote_blocked         = 0;
-    uint64_t buf_evict_dc_hist[6]   = {};
-    uint64_t buf_promo_dc_hist[6]   = {};
-    uint64_t classify_main      = 0;
-    uint64_t classify_buf_guided= 0;
-    uint64_t classify_buf_weak  = 0;
-    uint64_t classify_warm_miss        = 0;
-    uint64_t classify_warm_buf_evicted = 0;
-    uint64_t classify_warm_oracle_hit  = 0;
-    uint64_t classify_warm_aged_out    = 0;
-    uint64_t classify_warm_aged_hitsum = 0;
-    uint64_t classify_cold_miss        = 0;
-    uint64_t trans_alive_doa = 0;
-    uint64_t trans_doa_alive = 0;
-  };
-
   HistTable() : unbounded_(true) {}
-  HistTable(uint64_t cap, Policy pol, uint64_t buf_cap = 0, uint64_t shadow_cap = 0);
-
-  void set_hash(unsigned bits) { hash_bits_ = bits; }
-
-  void set_reset_period(uint64_t period) { reset_period_ = period; }
-  void set_bypass_pc_reset(uint64_t period) { bypass_pc_reset_period_ = period; }
-
-  void record_bypass(uint64_t key);
+  HistTable(uint64_t cap);
 
   enum class RecheckMode { Off, Fixed, Backoff };
   void set_recheck(RecheckMode mode, uint64_t base, uint64_t cap) {
@@ -92,24 +54,12 @@ public:
 
   liveness_class classify(uint64_t key, uint64_t thd_doa) const;
 
-  void print_stats(const char* prefix, uint64_t thd_doa = 0) const;
+  void print_stats(const char* prefix) const;
 
-  void update(uint64_t key, liveness_class evict_class, int64_t thd_doa = 0);
+  void update(uint64_t key, liveness_class evict_class);
 
 private:
-  static constexpr uint32_t SRRIP_INS  = 2;
-  static constexpr uint32_t SRRIP_MAX  = 3;
   static constexpr uint64_t FREQ_CAP   = 64;
-  int ma_penalty_ = -2;
-
-  static uint64_t fold_(uint64_t val, unsigned bits) {
-    uint64_t result = 0;
-    const uint64_t mask = (1ULL << bits) - 1;
-    for (unsigned i = 0; i < 32u / bits; ++i, val >>= bits)
-      result ^= (val & mask);
-    return result;
-  }
-  uint64_t hk_(uint64_t key) const { return hash_bits_ ? fold_(key, hash_bits_) : key; }
 
   struct Entry {
     uint64_t key              = 0;
@@ -117,63 +67,26 @@ private:
     uint64_t freq             = 0;
     uint64_t ts               = 0;
     uint64_t last_seen_update = 0;
-    uint64_t ma_loss          = 0;
-    uint64_t hit_count        = 0;
-    uint32_t rrpv             = 0;
     bool          valid    = false;
   };
 
-  struct BufEntry {
-    uint64_t key          = 0;
-    uint64_t dead_count   = 0;
-    uint64_t ts           = 0;
-    bool     valid        = false;
-    bool     second_chance = false;
-  };
-
   bool        unbounded_           = false;
-  uint64_t    reset_period_        = 0;
   uint64_t    update_count_        = 0;
-  uint64_t bypass_pc_reset_period_{0};
-  mutable std::unordered_map<uint64_t, uint64_t> bypass_since_update_;
   RecheckMode recheck_mode_     = RecheckMode::Off;
   uint64_t    recheck_base_     = 0;
   uint64_t    recheck_cap_      = 0;
   std::unordered_map<uint64_t, uint64_t> recheck_count_;
   std::unordered_map<uint64_t, uint64_t> recheck_interval_;
   std::unordered_map<uint64_t, bool>     recheck_probing_;
-  unsigned hash_bits_ = 0;
 
   mutable std::unordered_map<uint64_t, int64_t> unmap_;
   uint64_t cap_          = 0;
-  Policy   pol_          = Policy::LFU_DOA;
   std::vector<Entry>    entries_;
   uint64_t clock_        = 0;
-  uint64_t buf_cap_      = 0;
-  uint64_t buf_clock_    = 0;
-  std::vector<BufEntry> buffer_;
-  std::unordered_set<uint64_t> seen_pcs_;
-  mutable std::unordered_set<uint64_t> buf_evicted_pcs_;
-  std::unordered_map<uint64_t, uint64_t> shadow_map_;
-  std::unordered_map<uint64_t, uint64_t> oracle_buf_;
-  mutable Stats stats_;
-  uint64_t evict_count_          = 0;
-  uint64_t evict_ma_nonzero_     = 0;
-  uint64_t evict_ma_loss_sum_    = 0;
-  uint64_t evict_ma_decisive_    = 0;
-  uint64_t evict_aging_nonzero_  = 0;
-  uint64_t evict_aging_loss_sum_ = 0;
-  uint64_t evict_aging_decisive_ = 0;
-  uint64_t evict_aging_hitsum_   = 0;
-  int64_t  thd_doa_cache_  = 0;
-  std::unordered_map<uint64_t, std::pair<int64_t,uint64_t>> aging_evicted_pcs_;
 
   void on_hit(Entry& e, liveness_class evict_class);
   void on_insert(Entry& e, liveness_class evict_class);
-  void on_promote(Entry& e, uint64_t dead_count);
-  void try_promote();
   Entry& victim_slot();
-  BufEntry& buf_victim();
 };
 
 struct cache_stats {
@@ -249,15 +162,15 @@ class CACHE : public champsim::operable, public MemoryRequestConsumer, public Me
   std::pair<set_type::const_iterator, set_type::const_iterator> get_set_span(uint64_t address) const;
   std::size_t get_set_index(uint64_t address) const;
 
-  uint64_t guidance_thd  = 1;
+  uint64_t guidance_thd = 3;
+  uint64_t bypass_thd   = 6;
 
   uint64_t last_fill_latency = 0;
 
   HistTable liveness_hist;
-  bool use_addr_key{false};
 
-  bool bypass_enabled{false};
-  uint64_t bypass_thd{0};
+  bool use_addr_key   = false;
+  bool bypass_enabled = false;
 
   liveness_class classify_block_liveness(uint64_t block_address, uint64_t pc) const;
 

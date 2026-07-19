@@ -353,6 +353,6 @@ void CACHE::replacement_final_stats()
          pct(st.ins_doa,total_ins), pct(st.ins_alive,total_ins), pct(st.ins_unguided,total_ins));
   printf("  Hit rate/class  : DoA=%.1f%%  Alive=%.1f%%  Unguided=%.1f%%\n",
          pct(st.hit_doa,st.ins_doa), pct(st.hit_alive,st.ins_alive), pct(st.hit_unguided,st.ins_unguided));
-  liveness_hist.print_stats(NAME.c_str(), guidance_thd);
+  liveness_hist.print_stats(NAME.c_str());
   printf("\n");
 }

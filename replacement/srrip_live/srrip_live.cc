@@ -314,6 +314,6 @@ void CACHE::replacement_final_stats()
   printf("  Avg lifespan(cy) : DoA=%.0f  Alive=%.0f  Unguided=%.0f\n",
          avg_life(1), avg_life(2), avg_life(0));
 
-  liveness_hist.print_stats(NAME.c_str(), guidance_thd);
+  liveness_hist.print_stats(NAME.c_str());
   printf("\n");
 }
