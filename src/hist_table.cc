@@ -43,28 +43,40 @@ liveness_class HistTable::classify(uint64_t key, uint64_t thd_doa) const {
 
 void HistTable::print_stats(const char* prefix) const {
   if (const char* d = std::getenv("REPL_HIST_DUMP_PCS"); d && d[0] == '1') {
-    std::vector<std::pair<uint64_t, int64_t>> dump;
-    if (cap_ == 0) {
-      for (const auto& [k, v] : unmap_) {
-        dump.emplace_back(k, v);
-      }
-    } else {
-      for (const auto& e : entries_) {
-        if (e.valid) {
-          dump.emplace_back(e.key, e.score);
-        }
-      }
-    }
-    std::sort(dump.begin(), dump.end());
-    printf("%s repl_hist PCS: count=%zu\n", prefix, dump.size());
-    for (const auto& [k, sc] : dump) {
-      printf("%s repl_hist PC: key=0x%lx doa=%ld\n", prefix, k, sc);
-    }
+    dump_pcs(prefix);
   }
   if (cap_ == 0) {
-    printf("%s repl_hist: unbounded (%zu entries)\n", prefix, unmap_.size());
-    return;
+    print_stats_unbounded(prefix);
+  } else {
+    print_stats_bounded(prefix);
   }
+}
+
+void HistTable::dump_pcs(const char* prefix) const {
+  std::vector<std::pair<uint64_t, int64_t>> dump;
+  if (cap_ == 0) {
+    for (const auto& [k, v] : unmap_) {
+      dump.emplace_back(k, v);
+    }
+  } else {
+    for (const auto& e : entries_) {
+      if (e.valid) {
+        dump.emplace_back(e.key, e.score);
+      }
+    }
+  }
+  std::sort(dump.begin(), dump.end());
+  printf("%s repl_hist PCS: count=%zu\n", prefix, dump.size());
+  for (const auto& [k, sc] : dump) {
+    printf("%s repl_hist PC: key=0x%lx doa=%ld\n", prefix, k, sc);
+  }
+}
+
+void HistTable::print_stats_unbounded(const char* prefix) const {
+  printf("%s repl_hist: unbounded (%zu entries)\n", prefix, unmap_.size());
+}
+
+void HistTable::print_stats_bounded(const char* prefix) const {
   const uint64_t main_occ = static_cast<uint64_t>(
       std::count_if(entries_.begin(), entries_.end(), [](const Entry& e){ return e.valid; }));
   printf("%s repl_hist occupancy : main %lu/%lu (%.0f%%)\n",
