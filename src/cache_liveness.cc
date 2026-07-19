@@ -49,17 +49,6 @@ void CACHE::reset_phase_liveness_stats()
   }
 }
 
-void CACHE::record_fill_eviction_stats(const BLOCK& victim)
-{
-  if (!victim.valid) {
-    return;
-  }
-  sim_stats.back().evictions++;
-  if (!victim.accessed) {
-    sim_stats.back().doa++;
-  }
-}
-
 void CACHE::configure_guidance_thd()
 {
   const char* level_doa  = (NAME == "LLC") ? std::getenv("LLC_THD_DOA") : nullptr;
@@ -134,13 +123,6 @@ liveness_class CACHE::classify_block_liveness(uint64_t block_address, uint64_t p
 {
   const uint64_t key = use_addr_key ? (block_address >> OFFSET_BITS) : pc;
   return liveness_hist.classify(key, guidance_thd);
-}
-
-void CACHE::mark_accessed_on_hit(BLOCK& blk, uint8_t type)
-{
-  if (type != WRITE && (NAME == "cpu0_STLB" || NAME == "LLC")) {
-    blk.accessed = true;
-  }
 }
 
 bool CACHE::should_bypass(uint64_t key, uint64_t bypass_threshold, bool bypass_allowed)

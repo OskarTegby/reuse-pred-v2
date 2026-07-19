@@ -83,7 +83,11 @@ bool CACHE::handle_fill(const PACKET& fill_mshr)
       if (fill_mshr.type == PREFETCH)
         sim_stats.back().pf_fill++;
 
-      record_fill_eviction_stats(*way);
+      if (way->valid) {
+        sim_stats.back().evictions++;
+        if (!way->accessed)
+          sim_stats.back().doa++;
+      }
 
       way->valid = true;
       way->prefetch = fill_mshr.prefetch_from_this;
@@ -167,7 +171,10 @@ bool CACHE::try_hit(const PACKET& handle_pkt)
       ret->return_data(copy);
 
     way->dirty = (handle_pkt.type == WRITE);
-    mark_accessed_on_hit(*way, handle_pkt.type);
+    if (handle_pkt.type != WRITE) {
+      if (NAME == "cpu0_STLB" || NAME == "LLC")
+        way->accessed = true;
+    }
 
     // update prefetch stats and reset prefetch bit
     if (way->prefetch && !handle_pkt.prefetch_from_this) {
