@@ -10,7 +10,20 @@
 
 namespace
 {
+#include "../duel_common.h"
+
 constexpr int maxRRPV = 3;
+
+// SRRIP_LIVE_TARGET=none explicitly disables liveness guidance while still
+// on the LLC (used by the "bypass" condition: raw DoA bypass stays active in
+// cache.cc, but insertion/promotion here falls back to plain SRRIP). Liveness
+// guidance never applies anywhere but the LLC.
+bool liveness_enabled_for(const CACHE& c)
+{
+  const char* target_env = std::getenv("SRRIP_LIVE_TARGET");
+  const bool disabled = target_env && target_env[0] != '\0' && std::string(target_env) != "llc";
+  return (c.NAME == "LLC") && !disabled;
+}
 
 std::unordered_map<CACHE*, std::vector<int>>    rrpv_values;
 std::unordered_map<CACHE*, std::vector<int8_t>> slot_class; // 0=unguided 1=doa 2=alive
@@ -39,9 +52,6 @@ int doa_ins_rrpv() { if (g_doa_ins_rrpv < 0) g_doa_ins_rrpv = parse_env_rrpv("SR
 int doa_hit_rrpv() { if (g_doa_hit_rrpv < 0) g_doa_hit_rrpv = parse_env_rrpv("SRRIP_DOA_HIT_RRPV", 2); return g_doa_hit_rrpv; }
 
 // --- Set dueling ------------------------------------------------------
-// Config B: default is ins3/hit0 for DoA (opposite of default A's ins2/hit2).
-// Override via SRRIP_DOA_INS_RRPV_B / SRRIP_DOA_HIT_RRPV_B. DUEL_N_SAMPLERS=N
-// picks A or B per workload via PSEL counter.
 constexpr int PSEL_BITS = 10;
 constexpr int PSEL_MAX  = (1 << PSEL_BITS) - 1;
 constexpr int PSEL_MID  = 1 << (PSEL_BITS - 1);
@@ -82,10 +92,40 @@ int duel_metric()
   }
   return g_duel_metric;
 }
+
+bool duel_b_wins(CACHE* c)
+{
+  return (duel_metric() == 1) ? (miss_lat_a[c] - miss_lat_b[c] > hyst())
+                               : (psel[c] > PSEL_MID + static_cast<int>(hyst()));
+}
+
+void update_duel_signal(CACHE* c, Stats& st, SamplerRole role, bool hit, uint32_t type, int64_t fill_latency)
+{
+  if (duel_metric() == 1) {
+    if (!hit && type != WRITE) {
+      if (role.is_a) miss_lat_a[c] += fill_latency;
+      if (role.is_b) miss_lat_b[c] += fill_latency;
+    }
+  } else {
+    if (hit && type != WRITE) {
+      if (role.is_a) { psel[c] = std::max(0,        psel[c] - 1); st.sampler_a_hits++; }
+      if (role.is_b) { psel[c] = std::min(PSEL_MAX, psel[c] + 1); st.sampler_b_hits++; }
+    }
+  }
+}
+
+struct DuelContext { SamplerRole role; bool use_b; };
+
+DuelContext make_duel_context(CACHE* c, Stats& st, uint32_t set, uint32_t num_set, bool hit, uint32_t type, int64_t fill_latency)
+{
+  DuelContext ctx;
+  ctx.role = sampler_role(set, num_set, n_samplers());
+  update_duel_signal(c, st, ctx.role, hit, type, fill_latency);
+  ctx.use_b = ctx.role.is_b || (!ctx.role.is_a && ctx.role.dueling && duel_b_wins(c));
+  return ctx;
+}
 // --- end set dueling ----------------------------------------------------
 
-// The only place liveness classification/duel choice becomes an RRPV.
-// slot_class: 0=unguided 1=doa 2=alive.
 int rrpv_for_insert(liveness_class lc, bool use_cfg_b)
 {
   if (lc != liveness_class::doa) return maxRRPV - 1;
@@ -95,6 +135,54 @@ int rrpv_for_hit(int8_t cls, bool use_cfg_b)
 {
   if (cls != 1) return 0;
   return use_cfg_b ? doa_hit_b() : doa_hit_rrpv();
+}
+
+void record_hit(Stats& st, int8_t cls)
+{
+  if (cls == 1) st.hit_doa++; else st.hit_alive++;
+}
+
+int8_t record_insertion(Stats& st, liveness_class lc)
+{
+  if (lc == liveness_class::doa) { st.ins_doa++; return 1; }
+  st.ins_alive++;
+  return 2;
+}
+
+void record_eviction(Stats& st, int8_t cls, int rrpv)
+{
+  switch (cls) {
+    case 1:  st.evict_rrpv_doa[rrpv]++; break;
+    case 2:  st.evict_rrpv_alive[rrpv]++; break;
+    default: st.evict_rrpv_unguided[rrpv]++; break;
+  }
+}
+
+void record_lifespan(Stats& st, int8_t cls, uint64_t ins_cycle, uint64_t current_cycle)
+{
+  if (ins_cycle == 0 || current_cycle < ins_cycle) return;
+  const int ci = (cls >= 0 && cls <= 2) ? cls : 0;
+  st.lifespan_sum[ci] += current_cycle - ins_cycle;
+  st.lifespan_count[ci] += 1;
+}
+
+void handle_hit(int& rrpv, int8_t cls, uint8_t cfg_b, uint32_t type, Stats& st)
+{
+  // Use the config stored at insertion time — do not re-classify.
+  if (type != WRITE) rrpv = rrpv_for_hit(cls, cfg_b);
+  record_hit(st, cls);
+}
+
+int8_t handle_fill(int& rrpv, liveness_class lc, bool use_b, Stats& st)
+{
+  rrpv = rrpv_for_insert(lc, use_b);
+  return record_insertion(st, lc);
+}
+
+void handle_unguided(int& rrpv, int8_t& cls, bool hit, uint32_t type, Stats& st)
+{
+  if (hit) { if (type != WRITE) rrpv = 0; st.hit_unguided++; }
+  else     { rrpv = maxRRPV - 1; cls = 0; st.ins_unguided++; }
 }
 } // namespace
 
@@ -128,18 +216,8 @@ uint32_t CACHE::find_victim(uint32_t triggering_cpu, uint64_t instr_id, uint32_t
   const int8_t cls  = ::slot_class[this][idx];
   const int    rrpv = ::rrpv_values[this][idx];
 
-  switch (cls) {
-    case 1:  st.evict_rrpv_doa[rrpv]++; break;
-    case 2:  st.evict_rrpv_alive[rrpv]++; break;
-    default: st.evict_rrpv_unguided[rrpv]++; break;
-  }
-
-  const uint64_t ins_cycle = current_set[way].install_cycle;
-  if (ins_cycle > 0 && current_cycle >= ins_cycle) {
-    const int ci = (cls >= 0 && cls <= 2) ? cls : 0;
-    st.lifespan_sum[ci] += current_cycle - ins_cycle;
-    st.lifespan_count[ci] += 1;
-  }
+  ::record_eviction(st, cls, rrpv);
+  ::record_lifespan(st, cls, current_set[way].install_cycle, current_cycle);
   return way;
 }
 
@@ -156,55 +234,20 @@ void CACHE::update_replacement_state(uint32_t triggering_cpu, uint32_t set, uint
   auto& cls  = ::slot_class[this][idx];
   auto& st   = ::stats[this];
 
-  // SRRIP_LIVE_TARGET=none explicitly disables liveness guidance while still
-  // on the LLC (used by the "bypass" condition: raw DoA bypass stays active
-  // in cache.cc, but insertion/promotion here falls back to plain SRRIP).
-  // Liveness guidance never applies anywhere but the LLC.
-  const char* target_env = std::getenv("SRRIP_LIVE_TARGET");
-  const bool disabled = target_env && target_env[0] != '\0' && std::string(target_env) != "llc";
-  const bool use_liveness = (NAME == "LLC") && !disabled;
+  if (!::liveness_enabled_for(*this)) {
+    ::handle_unguided(rrpv, cls, hit, type, st);
+    return;
+  }
 
-  if (use_liveness) {
-    // Set dueling: classify set as sampler_a, sampler_b, or follower. Sampler
-    // A always uses config A; sampler B always uses config B. Followers
-    // adopt whichever config has more hits (PSEL > MID -> B wins). With
-    // DUEL_N_SAMPLERS=0 (default), step=0, every set is a follower using A.
-    const int ns   = ::n_samplers();
-    const int step = ns > 0 ? static_cast<int>(NUM_SET) / ns : 0;
-    const bool is_a = step > 0 && static_cast<int>(set) % step == 0;
-    const bool is_b = step > 0 && static_cast<int>(set) % step == step / 2;
+  const ::DuelContext duel = ::make_duel_context(this, st, set, NUM_SET, hit, type, static_cast<int64_t>(this->last_fill_latency));
+  auto& cfg_b = ::slot_cfg_b[this][idx];
 
-    if (duel_metric() == 1) { // Latency mode: accumulate fill latency per config; argmin wins
-      if (!hit && type != WRITE) {
-        if (is_a) ::miss_lat_a[this] += static_cast<int64_t>(this->last_fill_latency);
-        if (is_b) ::miss_lat_b[this] += static_cast<int64_t>(this->last_fill_latency);
-      }
-    } else { // Hit-count mode: PSEL increments toward the sampler with more demand hits
-      if (hit && type != WRITE) {
-        if (is_a) { ::psel[this] = std::max(0,        ::psel[this] - 1); st.sampler_a_hits++; }
-        if (is_b) { ::psel[this] = std::min(PSEL_MAX, ::psel[this] + 1); st.sampler_b_hits++; }
-      }
-    }
-    // ub: this slot should use config B
-    const bool b_wins = (duel_metric() == 1) ? (::miss_lat_a[this] - ::miss_lat_b[this] > ::hyst())
-                                              : (::psel[this] > PSEL_MID + static_cast<int>(::hyst()));
-    const bool ub = is_b || (!is_a && step > 0 && b_wins);
-
-    auto& cfg_b = ::slot_cfg_b[this][idx];
-    if (hit) {
-      // Use the config stored at insertion time — do not re-classify.
-      if (type != WRITE) rrpv = rrpv_for_hit(cls, cfg_b);
-      if (cls == 1) st.hit_doa++; else st.hit_alive++;
-    } else {
-      const liveness_class lc = classify_block_liveness(full_addr, ip);
-      cfg_b = ub;
-      rrpv = rrpv_for_insert(lc, ub);
-      if (lc == liveness_class::doa) { cls = 1; st.ins_doa++; } else { cls = 2; st.ins_alive++; }
-    }
+  if (hit) {
+    ::handle_hit(rrpv, cls, cfg_b, type, st);
   } else {
-    // No liveness signal: behave exactly like baseline SRRIP.
-    if (hit) { if (type != WRITE) rrpv = 0; st.hit_unguided++; }
-    else     { rrpv = ::maxRRPV - 1; cls = 0; st.ins_unguided++; }
+    const liveness_class lc = classify_block_liveness(full_addr, ip);
+    cfg_b = duel.use_b;
+    cls = ::handle_fill(rrpv, lc, duel.use_b, st);
   }
 }
 
