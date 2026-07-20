@@ -11,8 +11,7 @@
 
 namespace
 {
-constexpr int MAX_DUEL_CFGS = 8;
-
+#include "../duel_common.h"
 #include "../ipv_common.h"
 
 std::vector<int> clamp_ipv(const std::vector<int>& base, std::size_t k, int floor)
@@ -56,14 +55,15 @@ const std::vector<int>& ipv_for_hit(int8_t cls, const std::vector<int>& alive, c
 }
 
 // --- Set dueling ------------------------------------------------------
-std::unordered_map<CACHE*, std::array<std::vector<int>, MAX_DUEL_CFGS>> g_duel_doa;
-std::unordered_map<CACHE*, std::vector<uint8_t>>               g_slot_cfg_idx; // duel config active at insertion
-std::unordered_map<CACHE*, std::array<int64_t, MAX_DUEL_CFGS>> g_hit_counts;
-std::unordered_map<CACHE*, std::array<int64_t, MAX_DUEL_CFGS>> g_miss_latency;
+// Config B: overrides IPV_DOA via IPV_DOA_B, defaulting to the most
+// aggressive tail-insert vector. DUEL_N_SAMPLERS=N picks A or B per
+// workload via demand-hit count or accumulated fill latency (DUEL_METRIC).
+std::unordered_map<CACHE*, std::array<std::vector<int>, 2>> g_duel_doa;     // [0]=A [1]=B
+std::unordered_map<CACHE*, std::vector<uint8_t>>             g_slot_cfg_idx; // which config (0=A,1=B) was active at insertion
+std::unordered_map<CACHE*, std::array<int64_t, 2>>           g_hit_counts;
+std::unordered_map<CACHE*, std::array<int64_t, 2>>           g_miss_latency;
 
-int g_n_configs   = -1;
 int g_n_samplers  = -1;
-int g_hit_filter  = -1;
 int g_duel_metric = -1;
 int64_t g_hyst    = -1;
 
@@ -79,22 +79,6 @@ int64_t parse_env_i64(const char* var, int64_t dflt)
   return (e && *e) ? static_cast<int64_t>(std::atoll(e)) : dflt;
 }
 
-int parse_n_configs(int n_samplers)
-{
-  int n = parse_env_int("DUEL_N_CONFIGS", 0);
-  if (n < 2 && n_samplers > 0) n = 2;
-  return std::min(n, MAX_DUEL_CFGS);
-}
-
-int parse_hit_filter()
-{
-  const char* hf = std::getenv("DUEL_HIT_FILTER");
-  if (!hf || !*hf) return 0;
-  if (std::strcmp(hf, "alive") == 0 || std::strcmp(hf, "2") == 0) return 2;
-  if (std::strcmp(hf, "live")  == 0 || std::strcmp(hf, "1") == 0) return 1;
-  return 0;
-}
-
 int parse_duel_metric()
 {
   const char* dm = std::getenv("DUEL_METRIC");
@@ -103,91 +87,46 @@ int parse_duel_metric()
 
 void ensure_parsed_duel()
 {
-  if (g_n_configs >= 0) return;
+  if (g_n_samplers >= 0) return;
   g_n_samplers  = parse_env_int("DUEL_N_SAMPLERS", 0);
-  g_n_configs   = parse_n_configs(g_n_samplers);
   g_hyst        = parse_env_i64("DUEL_HYST", 0);
-  g_hit_filter  = parse_hit_filter();
   g_duel_metric = parse_duel_metric();
 }
 
-int best_config_by_metric(const std::array<int64_t, MAX_DUEL_CFGS>& m, int n_configs, bool lat)
-{
-  int best = 0;
-  for (int i = 1; i < n_configs; ++i) {
-    const bool better = lat ? (m[i] < m[best]) : (m[i] > m[best]);
-    if (better) best = i;
-  }
-  return best;
-}
-
-bool clears_hysteresis(const std::array<int64_t, MAX_DUEL_CFGS>& m, int n_configs, bool lat, int best, int64_t hyst)
-{
-  for (int i = 0; i < n_configs; ++i) {
-    if (i == best) continue;
-    const int64_t margin = lat ? (m[i] - m[best]) : (m[best] - m[i]);
-    if (margin <= hyst) return false;
-  }
-  return true;
-}
-
-int winner_config(CACHE* c)
+// Whether config B is currently winning for follower sets: higher hit
+// count, or lower miss latency in latency mode -- reverting to config A
+// if the margin doesn't clear the hysteresis threshold.
+bool winner_is_b(CACHE* c)
 {
   const bool lat = (g_duel_metric == 1);
   const auto& m = lat ? g_miss_latency[c] : g_hit_counts[c];
-  const int best = best_config_by_metric(m, g_n_configs, lat);
-  if (g_hyst > 0 && !clears_hysteresis(m, g_n_configs, lat, best, g_hyst)) return 0;
-  return best;
+  const bool best_is_b = lat ? (m[1] < m[0]) : (m[1] > m[0]);
+  if (!best_is_b) return false;
+  const int64_t margin = lat ? (m[0] - m[1]) : (m[1] - m[0]);
+  return g_hyst <= 0 || margin > g_hyst;
 }
 
-int sampler_config_of(int set, int step, int n_configs)
+// The only place sampler/follower role becomes a concrete duel config (0=A,
+// 1=B) for a fill.
+int decide_fill_config(CACHE* c, SamplerRole role)
 {
-  const int j = set % step;
-  for (int i = 0; i < n_configs; ++i)
-    if (j == (i * step) / n_configs) return i;
-  return -1;
+  if (!role.dueling) return 0;
+  if (role.is_a) return 0;
+  if (role.is_b) return 1;
+  return winner_is_b(c) ? 1 : 0;
 }
 
-bool should_count_hit(int8_t cls, int hit_filter)
+void update_duel_hit_signal(CACHE* c, SamplerRole role)
 {
-  if (hit_filter == 1) return cls != 1;
-  if (hit_filter == 2) return cls == 2;
-  return true;
+  if (role.is_a) g_hit_counts[c][0]++;
+  if (role.is_b) g_hit_counts[c][1]++;
 }
 
-int duel_step(bool targeted, int n_configs, int n_samplers, uint32_t num_set)
+void record_fill_latency(CACHE* c, SamplerRole role, uint32_t type, int64_t fill_latency)
 {
-  return (targeted && n_configs >= 2 && n_samplers > 0) ? static_cast<int>(num_set) / n_samplers : 0;
-}
-
-struct FillConfig { int cfg; int sampler_idx; };
-FillConfig decide_fill_config(CACHE* c, int set, int step, int n_configs)
-{
-  if (step <= 0) return {0, -1};
-  const int sc = sampler_config_of(set, step, n_configs);
-  return {(sc >= 0) ? sc : winner_config(c), sc};
-}
-
-void update_duel_hit_signal(CACHE* c, int set, int step, int n_configs, int8_t cls, int hit_filter)
-{
-  if (step <= 0) return;
-  const int sc = sampler_config_of(set, step, n_configs);
-  if (sc >= 0 && should_count_hit(cls, hit_filter)) g_hit_counts[c][sc]++;
-}
-
-void record_fill_latency(CACHE* c, int sampler_idx, uint32_t type, int64_t fill_latency)
-{
-  if (type != WRITE && sampler_idx >= 0) g_miss_latency[c][sampler_idx] += fill_latency;
-}
-
-void init_duel_doa_configs(std::array<std::vector<int>, MAX_DUEL_CFGS>& duel, std::size_t k, const std::vector<int>& dflt_b)
-{
-  for (int i = 1; i < MAX_DUEL_CFGS; ++i) {
-    char var[32];
-    std::snprintf(var, sizeof(var), "IPV_DOA_%d", i);
-    const std::vector<int>& dflt = (i == 1) ? parse_ipv_env("IPV_DOA_B", k, dflt_b) : dflt_b;
-    duel[i] = parse_ipv_env(var, k, dflt);
-  }
+  if (type == WRITE) return;
+  if (role.is_a) g_miss_latency[c][0] += fill_latency;
+  if (role.is_b) g_miss_latency[c][1] += fill_latency;
 }
 // --- end set dueling ----------------------------------------------------
 
@@ -200,7 +139,7 @@ void init_ipv_vectors(CACHE* c, std::size_t k)
   const int floor_a = static_cast<int>(2 * k / 3);
   duel[0] = parse_ipv_env("IPV_DOA", k, clamp_ipv(alive, k, floor_a));
   const int floor_b = static_cast<int>(k) - 1; // most aggressive: insert at the tail
-  init_duel_doa_configs(duel, k, clamp_ipv(alive, k, floor_b));
+  duel[1] = parse_ipv_env("IPV_DOA_B", k, clamp_ipv(alive, k, floor_b));
 }
 
 void init_ipv_stack(CACHE* c, uint32_t num_set, uint32_t num_way)
@@ -238,25 +177,23 @@ struct SlotContext {
   uint16_t* order;
   uint16_t* rank;
   bool targeted;
-  int  n_configs;
-  int  step;
+  SamplerRole role; // only meaningful when targeted
 };
 
 SlotContext make_slot_context(CACHE* c, uint32_t set, uint32_t num_set, uint32_t num_way)
 {
   const std::size_t base = static_cast<std::size_t>(set) * num_way;
   SlotContext ctx;
-  ctx.order     = g_order[c].data() + base;
-  ctx.rank      = g_rank[c].data() + base;
-  ctx.targeted  = is_targeted(*c);
-  ctx.n_configs = g_n_configs;
-  ctx.step      = duel_step(ctx.targeted, ctx.n_configs, g_n_samplers, num_set);
+  ctx.order    = g_order[c].data() + base;
+  ctx.rank     = g_rank[c].data() + base;
+  ctx.targeted = is_targeted(*c);
+  ctx.role     = ctx.targeted ? sampler_role(set, num_set, g_n_samplers) : SamplerRole{false, false, false};
   return ctx;
 }
 
-void handle_hit(CACHE* c, const SlotContext& ctx, uint32_t set, uint32_t way, int8_t cls, uint8_t cfg_stored, Stats& st)
+void handle_hit(CACHE* c, const SlotContext& ctx, uint32_t way, int8_t cls, uint8_t cfg_stored, Stats& st)
 {
-  update_duel_hit_signal(c, static_cast<int>(set), ctx.step, ctx.n_configs, cls, g_hit_filter);
+  update_duel_hit_signal(c, ctx.role);
   const std::vector<int>& ipv = ipv_for_hit(cls, g_ipv_alive[c], g_duel_doa[c][cfg_stored]);
   record_hit(st, cls);
   move_to(ctx.order, ctx.rank, ctx.rank[way], ipv[ctx.rank[way]]);
@@ -264,16 +201,16 @@ void handle_hit(CACHE* c, const SlotContext& ctx, uint32_t set, uint32_t way, in
 
 struct FillOutcome { int8_t cls; uint8_t cfg_stored; };
 
-FillOutcome handle_targeted_fill(CACHE* c, const SlotContext& ctx, uint32_t set, uint32_t num_way, liveness_class lc, uint32_t type,
+FillOutcome handle_targeted_fill(CACHE* c, const SlotContext& ctx, uint32_t num_way, liveness_class lc, uint32_t type,
                                   int64_t fill_latency, Stats& st)
 {
-  const FillConfig fc = decide_fill_config(c, static_cast<int>(set), ctx.step, ctx.n_configs);
-  record_fill_latency(c, fc.sampler_idx, type, fill_latency);
+  const int cfg = decide_fill_config(c, ctx.role);
+  record_fill_latency(c, ctx.role, type, fill_latency);
 
-  const std::vector<int>& ipv = ipv_for_insert(lc, g_ipv_alive[c], g_duel_doa[c][fc.cfg]);
+  const std::vector<int>& ipv = ipv_for_insert(lc, g_ipv_alive[c], g_duel_doa[c][cfg]);
   const int8_t cls = record_insertion(st, lc);
   move_to(ctx.order, ctx.rank, static_cast<int>(num_way) - 1, ipv[num_way]);
-  return {cls, static_cast<uint8_t>(fc.cfg)};
+  return {cls, static_cast<uint8_t>(cfg)};
 }
 
 FillOutcome handle_unguided_fill(CACHE* c, const SlotContext& ctx, uint32_t num_way, Stats& st)
@@ -314,12 +251,12 @@ void CACHE::update_replacement_state(uint32_t triggering_cpu, uint32_t set, uint
 
   if (hit) {
     if (type == WRITE) return; // store hits don't trigger promotion
-    ::handle_hit(this, ctx, set, way, cls, cfg_stored, st);
+    ::handle_hit(this, ctx, way, cls, cfg_stored, st);
     return;
   }
 
   const ::FillOutcome outcome = ctx.targeted
-      ? ::handle_targeted_fill(this, ctx, set, NUM_WAY, classify_block_liveness(full_addr, ip), type,
+      ? ::handle_targeted_fill(this, ctx, NUM_WAY, classify_block_liveness(full_addr, ip), type,
                                 static_cast<int64_t>(this->last_fill_latency), st)
       : ::handle_unguided_fill(this, ctx, NUM_WAY, st);
   cls        = outcome.cls;
@@ -339,14 +276,13 @@ void CACHE::replacement_final_stats()
 
   printf("%s IPV-Live STATS:\n", NAME.c_str());
 
-  if (::g_n_configs >= 2) {
-    const int winner = ::winner_config(this);
-    const char* filt = ::g_hit_filter == 2 ? "alive" : ::g_hit_filter == 1 ? "live" : "all";
+  if (::g_n_samplers > 0) {
+    const bool winner_b = ::winner_is_b(this);
     const char* metric = ::g_duel_metric == 1 ? "latency" : "hits";
-    printf("  Set dueling     : N=%d  samplers/cfg=%d  hyst=%ld  metric=%s  hit_filter=%s  winner=config_%d\n", ::g_n_configs, ::g_n_samplers, ::g_hyst,
-           metric, filt, winner);
-    for (int i = 0; i < ::g_n_configs; ++i) {
-      printf("  Config %d%s: DoA=[", i, (i == winner ? "*" : " "));
+    printf("  Set dueling     : N=2  samplers/cfg=%d  hyst=%ld  metric=%s  hit_filter=all  winner=config_%d\n", ::g_n_samplers, ::g_hyst,
+           metric, winner_b ? 1 : 0);
+    for (int i = 0; i < 2; ++i) {
+      printf("  Config %d%s: DoA=[", i, ((i == 1) == winner_b ? "*" : " "));
       print_vec(::g_duel_doa[this][i]);
       printf("]  sampler_hits=%ld  miss_latency=%ld\n", ::g_hit_counts[this][i], ::g_miss_latency[this][i]);
     }

@@ -52,14 +52,8 @@ int doa_ins_rrpv() { if (g_doa_ins_rrpv < 0) g_doa_ins_rrpv = parse_env_rrpv("SR
 int doa_hit_rrpv() { if (g_doa_hit_rrpv < 0) g_doa_hit_rrpv = parse_env_rrpv("SRRIP_DOA_HIT_RRPV", 2); return g_doa_hit_rrpv; }
 
 // --- Set dueling ------------------------------------------------------
-constexpr int PSEL_BITS = 10;
-constexpr int PSEL_MAX  = (1 << PSEL_BITS) - 1;
-constexpr int PSEL_MID  = 1 << (PSEL_BITS - 1);
-
-std::unordered_map<CACHE*, int>                  psel;
+std::unordered_map<CACHE*, PselState>            duel;
 std::unordered_map<CACHE*, std::vector<uint8_t>> slot_cfg_b;
-std::unordered_map<CACHE*, int64_t>              miss_lat_a;
-std::unordered_map<CACHE*, int64_t>              miss_lat_b;
 
 int g_duel_metric = -1;  // 0=hits (PSEL), 1=latency (argmin)
 int g_doa_ins_b = -1, g_doa_hit_b = -1;
@@ -93,35 +87,20 @@ int duel_metric()
   return g_duel_metric;
 }
 
-bool duel_b_wins(CACHE* c)
-{
-  return (duel_metric() == 1) ? (miss_lat_a[c] - miss_lat_b[c] > hyst())
-                               : (psel[c] > PSEL_MID + static_cast<int>(hyst()));
-}
-
-void update_duel_signal(CACHE* c, Stats& st, SamplerRole role, bool hit, uint32_t type, int64_t fill_latency)
-{
-  if (duel_metric() == 1) {
-    if (!hit && type != WRITE) {
-      if (role.is_a) miss_lat_a[c] += fill_latency;
-      if (role.is_b) miss_lat_b[c] += fill_latency;
-    }
-  } else {
-    if (hit && type != WRITE) {
-      if (role.is_a) { psel[c] = std::max(0,        psel[c] - 1); st.sampler_a_hits++; }
-      if (role.is_b) { psel[c] = std::min(PSEL_MAX, psel[c] + 1); st.sampler_b_hits++; }
-    }
-  }
-}
-
 struct DuelContext { SamplerRole role; bool use_b; };
 
 DuelContext make_duel_context(CACHE* c, Stats& st, uint32_t set, uint32_t num_set, bool hit, uint32_t type, int64_t fill_latency)
 {
   DuelContext ctx;
   ctx.role = sampler_role(set, num_set, n_samplers());
-  update_duel_signal(c, st, ctx.role, hit, type, fill_latency);
-  ctx.use_b = ctx.role.is_b || (!ctx.role.is_a && ctx.role.dueling && duel_b_wins(c));
+  const bool use_latency = (duel_metric() == 1);
+  auto& d = duel[c];
+  psel_update(d, ctx.role, use_latency, hit, type, fill_latency);
+  if (!use_latency && hit && type != WRITE) {
+    if (ctx.role.is_a) st.sampler_a_hits++;
+    if (ctx.role.is_b) st.sampler_b_hits++;
+  }
+  ctx.use_b = ctx.role.is_b || (!ctx.role.is_a && ctx.role.dueling && psel_b_wins(d, use_latency, hyst()));
   return ctx;
 }
 // --- end set dueling ----------------------------------------------------
@@ -193,9 +172,7 @@ void CACHE::initialize_replacement()
   ::slot_class[this]  = std::vector<int8_t>(n, 0);
   ::slot_cfg_b[this]  = std::vector<uint8_t>(n, 0);
   ::stats[this]       = Stats{};
-  ::psel[this]        = PSEL_MID;
-  ::miss_lat_a[this]  = 0;
-  ::miss_lat_b[this]  = 0;
+  ::duel[this]        = PselState{};
   (void)doa_ins_rrpv(); (void)doa_hit_rrpv();
   (void)doa_ins_b();    (void)doa_hit_b();
   (void)n_samplers();   (void)duel_metric();  (void)hyst();
@@ -268,13 +245,13 @@ void CACHE::replacement_final_stats()
   printf("%s SRRIP-Live STATS:\n", NAME.c_str());
   if (::n_samplers() > 0) {
     const bool lat = (::duel_metric() == 1);
-    const bool b_wins = lat ? (::miss_lat_b[this] < ::miss_lat_a[this]) : (::psel[this] > PSEL_MID);
+    const auto& d = ::duel[this];
+    const bool b_wins = ::psel_b_wins(d, lat, ::hyst());
     if (lat) {
-      printf("  Set dueling      : metric=latency  winner=%s  lat_a=%ld  lat_b=%ld\n", b_wins ? "config_B" : "config_A", ::miss_lat_a[this],
-             ::miss_lat_b[this]);
+      printf("  Set dueling      : metric=latency  winner=%s  lat_a=%ld  lat_b=%ld\n", b_wins ? "config_B" : "config_A", d.miss_lat_a,
+             d.miss_lat_b);
     } else {
-      const int p = ::psel[this];
-      printf("  Set dueling      : metric=hits  PSEL=%d/%d  winner=%s  sampler_a_hits=%lu  sampler_b_hits=%lu\n", p, PSEL_MAX,
+      printf("  Set dueling      : metric=hits  PSEL=%d/%d  winner=%s  sampler_a_hits=%lu  sampler_b_hits=%lu\n", d.psel, ::PSEL_MAX,
              b_wins ? "config_B" : "config_A", st.sampler_a_hits, st.sampler_b_hits);
     }
     printf("  Config A: DoA ins=%d hit=%d\n", ::doa_ins_rrpv(), ::doa_hit_rrpv());

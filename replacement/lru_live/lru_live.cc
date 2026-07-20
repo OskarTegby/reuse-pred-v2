@@ -53,6 +53,7 @@
 
 namespace
 {
+#include "../duel_common.h"
 
 // DoA insertion mode constants
 enum class DoAIns { Pos2N3, LRUpos, Bypass };
@@ -101,16 +102,8 @@ std::unordered_map<CACHE*, std::vector<bool>>      bypassed;
 // which config (A=false, B=true) was used at insertion for this slot
 std::unordered_map<CACHE*, std::vector<bool>>      slot_cfg_b;
 
-// PSEL counter and per-cache hit counts for dueling (hit-count mode)
-constexpr int PSEL_BITS = 10;
-constexpr int PSEL_MAX  = (1 << PSEL_BITS) - 1;
-constexpr int PSEL_MID  = 1 << (PSEL_BITS - 1);
-std::unordered_map<CACHE*, int>      psel;
-std::unordered_map<CACHE*, uint64_t> sampler_a_hits;
-std::unordered_map<CACHE*, uint64_t> sampler_b_hits;
-// Latency accumulators for dueling (latency mode)
-std::unordered_map<CACHE*, int64_t>  miss_lat_a;
-std::unordered_map<CACHE*, int64_t>  miss_lat_b;
+// PSEL counter + latency accumulators for dueling
+std::unordered_map<CACHE*, PselState> duel;
 
 // Residency instrumentation. Time is measured in per-set "ticks": one tick per
 // update_replacement_state call for that set (every access touching the set).
@@ -133,6 +126,7 @@ struct Stats {
     uint64_t promo_capped_doa = 0;
     uint64_t evict_doa = 0, evict_alive = 0, evict_unguided = 0;
     uint64_t evict_doa_bypass = 0; // bypass-mode DoA evictions
+    uint64_t sampler_a_hits = 0, sampler_b_hits = 0;
     double   res_sum[3][2] = {};
     uint64_t res_cnt[3][2] = {};
     double   afterhit_sum[3] = {};
@@ -158,11 +152,7 @@ void CACHE::initialize_replacement()
     ::last_hit_time[this] = std::vector<uint64_t>(n, 0);
     ::hit_cnt[this]       = std::vector<uint32_t>(n, 0);
     ::set_clock[this]     = std::vector<uint64_t>(NUM_SET, 0);
-    ::psel[this]           = PSEL_MID;
-    ::sampler_a_hits[this] = 0;
-    ::sampler_b_hits[this] = 0;
-    ::miss_lat_a[this]     = 0;
-    ::miss_lat_b[this]     = 0;
+    ::duel[this]  = PselState{};
     ::stats[this] = Stats{};
 }
 
@@ -279,15 +269,11 @@ void CACHE::update_replacement_state(uint32_t triggering_cpu, uint32_t set, uint
 
         if (use_liveness) {
             // Duel signal update on demand hits (sampler sets only).
-            const int ns   = ::g_n_samplers;
-            const int step = ns > 0 ? static_cast<int>(NUM_SET) / ns : 0;
-            if (type != WRITE && step > 0) {
-                const bool is_a = static_cast<int>(set) % step == 0;
-                const bool is_b = static_cast<int>(set) % step == step / 2;
-                if (::g_ll_duel_metric == 0) {
-                    if (is_a) { ::psel[this] = std::max(0,        ::psel[this] - 1); ::sampler_a_hits[this]++; }
-                    if (is_b) { ::psel[this] = std::min(PSEL_MAX, ::psel[this] + 1); ::sampler_b_hits[this]++; }
-                }
+            const ::SamplerRole role = ::sampler_role(set, NUM_SET, ::g_n_samplers);
+            ::psel_update(::duel[this], role, ::g_ll_duel_metric == 1, /*hit=*/true, type, 0);
+            if (::g_ll_duel_metric == 0 && type != WRITE) {
+                if (role.is_a) st.sampler_a_hits++;
+                if (role.is_b) st.sampler_b_hits++;
             }
             // A bypass-flagged DoA slot that gets a hit proved itself: demote the
             // bypass flag so it is no longer eviction-priority and can age normally.
@@ -310,22 +296,14 @@ void CACHE::update_replacement_state(uint32_t triggering_cpu, uint32_t set, uint
         ::bypassed[this][slot] = false;
         if (use_liveness) {
             // Determine which config to use for this set.
-            const int ns   = ::g_n_samplers;
-            const int step = ns > 0 ? static_cast<int>(NUM_SET) / ns : 0;
-            const bool is_a = step > 0 && static_cast<int>(set) % step == 0;
-            const bool is_b = step > 0 && static_cast<int>(set) % step == step / 2;
-            const bool b_wins = (::g_ll_duel_metric == 1)
-                ? (::miss_lat_a[this] - ::miss_lat_b[this] > ::g_hyst)
-                : (::psel[this] > PSEL_MID);
-            const bool use_b = is_b || (!is_a && step > 0 && b_wins);
+            const ::SamplerRole role = ::sampler_role(set, NUM_SET, ::g_n_samplers);
+            const bool use_latency = (::g_ll_duel_metric == 1);
+            const bool use_b = role.is_b || (!role.is_a && role.dueling && ::psel_b_wins(::duel[this], use_latency, ::g_hyst));
             ::slot_cfg_b[this][slot] = use_b;
             const DoAIns ins_mode = use_b ? ::g_ins_b : ::g_ins_a;
 
             // Latency duel: accumulate fill latency per sampler config.
-            if (::g_ll_duel_metric == 1 && type != WRITE) {
-                if (is_a) ::miss_lat_a[this] += static_cast<int64_t>(this->last_fill_latency);
-                if (is_b) ::miss_lat_b[this] += static_cast<int64_t>(this->last_fill_latency);
-            }
+            ::psel_update(::duel[this], role, use_latency, /*hit=*/false, type, static_cast<int64_t>(this->last_fill_latency));
 
             const liveness_class lc = classify_block_liveness(full_addr, ip);
             if (lc == liveness_class::doa) {
@@ -400,19 +378,18 @@ void CACHE::replacement_final_stats()
     printf("%s LRU-Live STATS:\n", NAME.c_str());
     if (::g_n_samplers > 0) {
         const bool lat = (::g_ll_duel_metric == 1);
-        const bool b_wins = lat ? (::miss_lat_a[this] - ::miss_lat_b[this] > ::g_hyst)
-                                : (::psel[this] > PSEL_MID);
+        const auto& d = ::duel[this];
+        const bool b_wins = ::psel_b_wins(d, lat, ::g_hyst);
         if (lat) {
             printf("  Set dueling      : metric=latency  hyst=%ld  winner=%s"
                    "  lat_a=%ld  lat_b=%ld\n",
                    ::g_hyst, b_wins ? "cfgB" : "cfgA",
-                   ::miss_lat_a[this], ::miss_lat_b[this]);
+                   d.miss_lat_a, d.miss_lat_b);
         } else {
-            const int p = ::psel[this];
             printf("  Set dueling      : metric=hits  PSEL=%d/%d  winner=%s"
                    "  sampler_a_hits=%lu  sampler_b_hits=%lu\n",
-                   p, PSEL_MAX, b_wins ? "cfgB" : "cfgA",
-                   ::sampler_a_hits[this], ::sampler_b_hits[this]);
+                   d.psel, ::PSEL_MAX, b_wins ? "cfgB" : "cfgA",
+                   st.sampler_a_hits, st.sampler_b_hits);
         }
         printf("  cfgA DoA ins     : %s\n", ins_str(::g_ins_a));
         printf("  cfgB DoA ins     : %s\n", ins_str(::g_ins_b));
