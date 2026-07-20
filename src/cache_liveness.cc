@@ -38,13 +38,8 @@ void CACHE::configure_guidance_thd()
 
 void CACHE::configure_repl_hist_table()
 {
-  const uint64_t rh_cap = (NAME == "LLC") ? getenv_uint64("REPL_HIST_LLC_CAP", 0) : 0;
-  if (rh_cap > 0) {
-    liveness_hist = HistTable(rh_cap);
-  } else if (NAME == "LLC" && std::getenv("REPL_HIST_LLC_CAP")) {
-    liveness_hist = HistTable(0);
-  }
-
+  // pc_counters is now a fixed-size hashed counter table (see HistTable) --
+  // nothing to size at runtime, so REPL_HIST_LLC_CAP is no longer read.
   if (const char* v = std::getenv("REPL_HIST_MODE"); v && std::string_view(v) == "addr") {
     use_addr_key = true;
   }
@@ -71,7 +66,7 @@ void CACHE::load_predictor_settings()
 liveness_class CACHE::classify_block_liveness(uint64_t block_address, uint64_t pc) const
 {
   const uint64_t key = use_addr_key ? (block_address >> OFFSET_BITS) : pc;
-  return liveness_hist.classify(key, guidance_thd);
+  return pc_counters.classify(key, guidance_thd);
 }
 
 bool CACHE::should_bypass(uint64_t key, uint64_t bypass_threshold, bool bypass_allowed)
@@ -80,7 +75,7 @@ bool CACHE::should_bypass(uint64_t key, uint64_t bypass_threshold, bool bypass_a
     return false;
   }
 
-  const bool bypass = liveness_hist.classify(key, bypass_threshold) == liveness_class::doa;
+  const bool bypass = pc_counters.classify(key, bypass_threshold) == liveness_class::doa;
   if (bypass) {
     sim_stats.back().cache_bypasses++;
   }
@@ -96,7 +91,7 @@ void CACHE::update_eviction_counters(const BLOCK& victim, liveness_class evict_l
   const uint64_t block_addr = victim.address >> OFFSET_BITS;
   const uint64_t key = use_addr_key ? block_addr : victim.ip;
 
-  liveness_hist.update(key, evict_lv);
+  pc_counters.update(key, evict_lv);
 }
 
 bool CACHE::resolve_fill_bypass(const PACKET& fill_mshr, set_type::iterator& way, set_type::iterator set_end)

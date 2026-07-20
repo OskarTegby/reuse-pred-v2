@@ -42,7 +42,6 @@ enum class liveness_class { doa, alive };
 class HistTable {
 public:
   HistTable() = default;
-  HistTable(uint64_t cap);
 
   liveness_class classify(uint64_t key, uint64_t thd_doa) const;
 
@@ -51,28 +50,12 @@ public:
   void update(uint64_t key, liveness_class evict_class);
 
 private:
-  static constexpr uint64_t FREQ_CAP   = 64;
+  static constexpr unsigned PRED_COUNTERS = 256;
+  static constexpr unsigned COUNTER_MAX   = 1023;
 
-  struct Entry {
-    uint64_t key              = 0;
-    int64_t  score            = 0;
-    uint64_t freq             = 0;
-    uint64_t last_seen_update = 0;
-    bool          valid    = false;
-  };
+  static uint64_t hash_pc(uint64_t pc);
 
-  uint64_t    update_count_        = 0;
-
-  mutable std::unordered_map<uint64_t, int64_t> unmap_;
-  uint64_t cap_          = 0;
-  std::vector<Entry>    entries_;
-
-  void dump_pcs(const char* prefix) const;
-  void print_stats_unbounded(const char* prefix) const;
-  void print_stats_bounded(const char* prefix) const;
-  void update_unbounded(uint64_t key, liveness_class evict_class);
-  void update_bounded(uint64_t key, liveness_class evict_class);
-  Entry& victim_slot();
+  unsigned counters_[PRED_COUNTERS] = {};
 };
 
 struct cache_stats {
@@ -152,7 +135,7 @@ class CACHE : public champsim::operable, public MemoryRequestConsumer, public Me
 
   uint64_t last_fill_latency = 0;
 
-  HistTable liveness_hist;
+  HistTable pc_counters;
 
   bool use_addr_key   = false;
   bool bypass_enabled = false;
