@@ -1,4 +1,5 @@
 #include "cache.h"
+#include "../srrip_common.h"
 #include <unordered_map>
 
 namespace
@@ -13,16 +14,9 @@ void CACHE::initialize_replacement() { ::rrpv_values[this] = std::vector<int>(NU
 // find replacement victim
 uint32_t CACHE::find_victim(uint32_t triggering_cpu, uint64_t instr_id, uint32_t set, const BLOCK* current_set, uint64_t ip, uint64_t full_addr, uint32_t type)
 {
-  // look for the maxRRPV line
   auto begin = std::next(std::begin(::rrpv_values[this]), set * NUM_WAY);
   auto end = std::next(begin, NUM_WAY);
-  auto victim = std::find(begin, end, ::maxRRPV); // hijack the lru field
-  while (victim == end) {
-    for (auto it = begin; it != end; ++it)
-      ++(*it);
-
-    victim = std::find(begin, end, ::maxRRPV);
-  }
+  auto victim = srrip_common::find_rrpv_victim(begin, end, ::maxRRPV, []{});
 
   assert(begin <= victim);
   assert(victim < end);
