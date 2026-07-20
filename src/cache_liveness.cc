@@ -30,8 +30,6 @@ uint64_t getenv_uint64(const char* var, uint64_t fallback)
   return val ? static_cast<uint64_t>(std::stoull(val)) : fallback;
 }
 
-// No tag is stored, so two PCs that hash to the same counter alias --
-// whichever last updated it wins, with no way to detect the collision.
 uint64_t hash_pc(uint64_t pc)
 {
   return (pc ^ (pc >> 2) ^ (pc >> 5)) % PRED_COUNTERS;
@@ -47,8 +45,6 @@ void CACHE::configure_guidance_thd()
 
 void CACHE::configure_repl_hist_table()
 {
-  // pc_counters is a fixed-size hashed counter array -- nothing to size at
-  // runtime, so REPL_HIST_LLC_CAP is no longer read.
   if (const char* v = std::getenv("REPL_HIST_MODE"); v && std::string_view(v) == "addr") {
     use_addr_key = true;
   }
