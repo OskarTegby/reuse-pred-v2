@@ -39,24 +39,7 @@
 
 enum class liveness_class { doa, alive };
 
-class HistTable {
-public:
-  HistTable() = default;
-
-  liveness_class classify(uint64_t key, uint64_t thd_doa) const;
-
-  void print_stats(const char* prefix) const;
-
-  void update(uint64_t key, liveness_class evict_class);
-
-private:
-  static constexpr unsigned PRED_COUNTERS = 256;
-  static constexpr unsigned COUNTER_MAX   = 1023;
-
-  static uint64_t hash_pc(uint64_t pc);
-
-  unsigned counters_[PRED_COUNTERS] = {};
-};
+constexpr unsigned PRED_COUNTERS = 256;
 
 struct cache_stats {
   std::string name;
@@ -135,7 +118,7 @@ class CACHE : public champsim::operable, public MemoryRequestConsumer, public Me
 
   uint64_t last_fill_latency = 0;
 
-  HistTable pc_counters;
+  unsigned pc_counters[PRED_COUNTERS] = {};
 
   bool use_addr_key   = false;
   bool bypass_enabled = false;
@@ -148,6 +131,7 @@ class CACHE : public champsim::operable, public MemoryRequestConsumer, public Me
   void configure_bypass_llc();
   bool should_bypass(uint64_t key, uint64_t bypass_threshold, bool bypass_allowed);
   void update_eviction_counters(const BLOCK& victim, liveness_class lv);
+  void print_pc_counter_stats(const char* prefix) const;
   bool resolve_fill_bypass(const PACKET& fill_mshr, set_type::iterator& way, set_type::iterator set_end);
 
 public:

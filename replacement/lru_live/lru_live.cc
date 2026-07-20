@@ -425,6 +425,6 @@ void CACHE::replacement_final_stats()
                mean(st.res_sum[c][1], st.res_cnt[c][1]), st.res_cnt[c][1],
                mean(st.afterhit_sum[c], st.afterhit_cnt[c]), st.afterhit_cnt[c]);
 
-    pc_counters.print_stats(NAME.c_str());
+    print_pc_counter_stats(NAME.c_str());
     printf("\n");
 }

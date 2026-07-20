@@ -275,6 +275,6 @@ void CACHE::replacement_final_stats()
   auto avg_life = [&](int ci) -> double { return st.lifespan_count[ci] ? static_cast<double>(st.lifespan_sum[ci]) / st.lifespan_count[ci] : 0.0; };
   printf("  Avg lifespan(cy) : DoA=%.0f  Alive=%.0f  Unguided=%.0f\n", avg_life(1), avg_life(2), avg_life(0));
 
-  pc_counters.print_stats(NAME.c_str());
+  print_pc_counter_stats(NAME.c_str());
   printf("\n");
 }

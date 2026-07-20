@@ -22,10 +22,19 @@
 
 namespace {
 
+constexpr unsigned COUNTER_MAX = 1023;
+
 uint64_t getenv_uint64(const char* var, uint64_t fallback)
 {
   const char* val = std::getenv(var);
   return val ? static_cast<uint64_t>(std::stoull(val)) : fallback;
+}
+
+// No tag is stored, so two PCs that hash to the same counter alias --
+// whichever last updated it wins, with no way to detect the collision.
+uint64_t hash_pc(uint64_t pc)
+{
+  return (pc ^ (pc >> 2) ^ (pc >> 5)) % PRED_COUNTERS;
 }
 
 } // namespace
@@ -38,8 +47,8 @@ void CACHE::configure_guidance_thd()
 
 void CACHE::configure_repl_hist_table()
 {
-  // pc_counters is now a fixed-size hashed counter table (see HistTable) --
-  // nothing to size at runtime, so REPL_HIST_LLC_CAP is no longer read.
+  // pc_counters is a fixed-size hashed counter array -- nothing to size at
+  // runtime, so REPL_HIST_LLC_CAP is no longer read.
   if (const char* v = std::getenv("REPL_HIST_MODE"); v && std::string_view(v) == "addr") {
     use_addr_key = true;
   }
@@ -66,7 +75,7 @@ void CACHE::load_predictor_settings()
 liveness_class CACHE::classify_block_liveness(uint64_t block_address, uint64_t pc) const
 {
   const uint64_t key = use_addr_key ? (block_address >> OFFSET_BITS) : pc;
-  return pc_counters.classify(key, guidance_thd);
+  return pc_counters[hash_pc(key)] >= guidance_thd ? liveness_class::doa : liveness_class::alive;
 }
 
 bool CACHE::should_bypass(uint64_t key, uint64_t bypass_threshold, bool bypass_allowed)
@@ -75,7 +84,7 @@ bool CACHE::should_bypass(uint64_t key, uint64_t bypass_threshold, bool bypass_a
     return false;
   }
 
-  const bool bypass = pc_counters.classify(key, bypass_threshold) == liveness_class::doa;
+  const bool bypass = pc_counters[hash_pc(key)] >= bypass_threshold;
   if (bypass) {
     sim_stats.back().cache_bypasses++;
   }
@@ -91,7 +100,27 @@ void CACHE::update_eviction_counters(const BLOCK& victim, liveness_class evict_l
   const uint64_t block_addr = victim.address >> OFFSET_BITS;
   const uint64_t key = use_addr_key ? block_addr : victim.ip;
 
-  pc_counters.update(key, evict_lv);
+  unsigned& ctr = pc_counters[hash_pc(key)];
+  if (evict_lv == liveness_class::doa) {
+    if (ctr < COUNTER_MAX) {
+      ++ctr;
+    }
+  } else {
+    ctr = 0;
+  }
+}
+
+void CACHE::print_pc_counter_stats(const char* prefix) const
+{
+  unsigned nonzero = 0;
+  for (unsigned i = 0; i < PRED_COUNTERS; ++i) {
+    if (pc_counters[i] > 0) {
+      ++nonzero;
+    }
+  }
+  printf("%s repl_hist occupancy : main %u/%u (%.0f%%)\n",
+         prefix, nonzero, PRED_COUNTERS,
+         100.0 * nonzero / PRED_COUNTERS);
 }
 
 bool CACHE::resolve_fill_bypass(const PACKET& fill_mshr, set_type::iterator& way, set_type::iterator set_end)
