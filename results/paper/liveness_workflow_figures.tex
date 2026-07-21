@@ -9,24 +9,26 @@
 
 \tikzset{
   wfstart/.style   = {rectangle, rounded corners, draw=black, thick, fill=gray!15,
-                       minimum width=2.6cm, minimum height=0.55cm, text width=2.4cm,
-                       align=center, font=\scriptsize, inner sep=2pt},
+                       minimum width=3.0cm, minimum height=0.75cm, text width=2.8cm,
+                       align=center, font=\small, inner sep=2pt},
   wfproc/.style    = {rectangle, draw=black, fill=blue!8,
-                       minimum width=2.6cm, minimum height=0.6cm, text width=2.4cm,
-                       align=center, font=\scriptsize, inner sep=2pt},
+                       minimum width=3.0cm, minimum height=0.8cm, text width=2.8cm,
+                       align=center, font=\small, inner sep=2pt},
   wfdoa/.style     = {rectangle, draw=black, fill=red!10,
-                       minimum width=2.4cm, minimum height=0.6cm, text width=2.2cm,
-                       align=center, font=\scriptsize, inner sep=2pt},
+                       minimum width=2.8cm, minimum height=0.8cm, text width=2.6cm,
+                       align=center, font=\small, inner sep=2pt},
   wfbypass/.style  = {rectangle, draw=black, thick, fill=red!35,
-                       minimum width=2.4cm, minimum height=0.6cm, text width=2.2cm,
-                       align=center, font=\scriptsize, inner sep=2pt},
+                       minimum width=2.8cm, minimum height=0.8cm, text width=2.6cm,
+                       align=center, font=\small, inner sep=2pt},
   wfalive/.style   = {rectangle, draw=black, fill=green!10,
-                       minimum width=2.4cm, minimum height=0.6cm, text width=2.2cm,
-                       align=center, font=\scriptsize, inner sep=2pt},
+                       minimum width=2.8cm, minimum height=0.8cm, text width=2.6cm,
+                       align=center, font=\small, inner sep=2pt},
   wfdecision/.style = {diamond, draw=black, fill=orange!12, aspect=2.2,
-                       text width=2.6cm, align=center, font=\scriptsize, inner sep=1pt},
+                       text width=3.0cm, align=center, font=\small, inner sep=1pt},
   wfarrow/.style   = {thick, -{Latex[length=1.8mm]}},
-  wflabel/.style   = {font=\tiny, fill=white, inner sep=1pt}
+  wflabel/.style   = {font=\normalsize, draw=black, fill=white, inner sep=2pt},
+  wflabelpos/.style = {font=\normalsize\bfseries, draw=green!50!black, fill=white, inner sep=2pt, text=green!50!black},
+  wflabelneg/.style = {font=\normalsize\bfseries, draw=red!70!black, fill=white, inner sep=2pt, text=red!70!black}
 }
 
 % ============================================================================
@@ -44,25 +46,25 @@
 \begin{tikzpicture}[node distance=0.28cm and 0.5cm]
 % --- (a) Lookup -------------------------------------------------------------
   \node (astart) [wfstart] {A cache lookup occurs};
-  \node (acomputehash) [wfproc, below=of astart] {Compute the hash of\\this access's PC};
-  \node (alookup) [wfproc, below left=of acomputehash] {Lookup its counter\\in the table};
-  \node (amshr) [wfproc, below right=of acomputehash] {Store it in the MSHR};
+  \node (acomputehash) [wfproc, below=0.7cm of astart] {Compute the hash of\\this access's PC};
+  \node (alookup) [wfproc, below=1.1cm of acomputehash, xshift=-2.3cm] {Lookup its counter\\in the table};
+  \node (amshr) [wfproc, below=1.1cm of acomputehash, xshift=2.3cm] {Store it in the MSHR};
   \node (adram) [wfproc, below=of amshr] {Initiate the\\DRAM access};
   \node (aclsdec) [wfdecision, below=of alookup] {Has the counter\\saturated the\\restriction threshold?};
   \node (adoahit) [wfdoa, left=of aclsdec] {Promote it using\\the policy's active\\restriction rule};
   \node (aalivehit) [wfalive, below=of aclsdec] {Promote it in the\\policy's default way};
 
   \draw [wfarrow] (astart) -- (acomputehash);
-  \draw [wfarrow] (acomputehash) -- node[wflabel,pos=0.35] {hit} (alookup);
-  \draw [wfarrow] (acomputehash) -- node[wflabel,pos=0.35] {miss} (amshr);
+  \draw [wfarrow] (acomputehash) -- node[wflabelpos,pos=0.5,xshift=-4mm] {hit} (alookup);
+  \draw [wfarrow] (acomputehash) -- node[wflabelneg,pos=0.5,xshift=4mm] {miss} (amshr);
   \draw [wfarrow] (amshr) -- (adram);
   \draw [wfarrow] (alookup) -- (aclsdec);
-  \draw [wfarrow] (aclsdec) -- node[wflabel,above] {yes} (adoahit);
-  \draw [wfarrow] (aclsdec) -- node[wflabel,left] {no} (aalivehit);
+  \draw [wfarrow] (aclsdec) -- node[wflabelpos,above=1mm] {yes} (adoahit);
+  \draw [wfarrow] (aclsdec) -- node[wflabelneg,left=1mm] {no} (aalivehit);
 
 % --- (b) Fill ----------------------------------------------------------------
   \node (bstart) [wfstart, right=6.8cm of astart] {A cache miss completes};
-  \node (bretrieve) [wfproc, below=of bstart] {Retrieve the hash\\from that MSHR entry};
+  \node (bretrieve) [wfproc, below=0.5cm of bstart] {Retrieve the hash\\from that MSHR entry};
   \node (blookup) [wfproc, below=of bretrieve] {Lookup its counter\\in the table};
   \node (bstrongdec) [wfdecision, below=of blookup] {Has the counter\\saturated the bypass\\threshold?};
   \node (bbypass) [wfbypass, right=of bstrongdec] {Bypass: don't\\insert this block\\at all};
@@ -73,36 +75,32 @@
   \draw [wfarrow] (bstart) -- (bretrieve);
   \draw [wfarrow] (bretrieve) -- (blookup);
   \draw [wfarrow] (blookup) -- (bstrongdec);
-  \draw [wfarrow] (bstrongdec) -- node[wflabel] {yes} (bbypass);
-  \draw [wfarrow] (bstrongdec) -- node[wflabel,left] {no} (bweakdec);
-  \draw [wfarrow] (bweakdec) -- node[wflabel] {yes} (bdoains);
-  \draw [wfarrow] (bweakdec) -- node[wflabel,left] {no} (baliveins);
+  \draw [wfarrow] (bstrongdec) -- node[wflabelpos,above=1mm] {yes} (bbypass);
+  \draw [wfarrow] (bstrongdec) -- node[wflabelneg,left=1mm] {no} (bweakdec);
+  \draw [wfarrow] (bweakdec) -- node[wflabelpos,above=1mm] {yes} (bdoains);
+  \draw [wfarrow] (bweakdec) -- node[wflabelneg,left=1mm] {no} (baliveins);
 
 % --- (c) Eviction --------------------------------------------------------------
   \node (cstart) [wfstart, right=6.8cm of bstart] {A block must be evicted};
-  \node (cpick) [wfproc, below=of cstart] {Choose the victim\\using the policy's\\eviction rule};
-  \node (cretrieve) [wfproc, below=of cpick] {Read the PC\\stored on this block};
-  \node (ccomputehash) [wfproc, below=of cretrieve] {Compute the hash\\of its PC};
-  \node (clookup) [wfproc, below=of ccomputehash] {Lookup its counter\\in the table};
+  \node (cretrieve) [wfproc, below=1.4cm of cstart] {Read the PC hash\\stored on this block};
+  \node (clookup) [wfproc, below=of cretrieve] {Lookup its counter\\in the table};
   \node (cacc) [wfdecision, below=of clookup] {Was the\\Accessed bit set?};
   \node (creset) [wfalive, right=of cacc] {Reset the\\counter to zero};
   \node (cinc) [wfdoa, below=of cacc] {Increase the\\\doa counter};
 
-  \draw [wfarrow] (cstart) -- (cpick);
-  \draw [wfarrow] (cpick) -- (cretrieve);
-  \draw [wfarrow] (cretrieve) -- (ccomputehash);
-  \draw [wfarrow] (ccomputehash) -- (clookup);
+  \draw [wfarrow] (cstart) -- (cretrieve);
+  \draw [wfarrow] (cretrieve) -- (clookup);
   \draw [wfarrow] (clookup) -- (cacc);
-  \draw [wfarrow] (cacc) -- node[wflabel] {yes} (creset);
-  \draw [wfarrow] (cacc) -- node[wflabel,left] {no} (cinc);
+  \draw [wfarrow] (cacc) -- node[wflabelpos,above=1mm] {yes} (creset);
+  \draw [wfarrow] (cacc) -- node[wflabelneg,left=1mm] {no} (cinc);
 
 % --- panel labels, bottom-aligned to the tallest panel (Fill) ---------------
   \coordinate (arowmid) at ($(aclsdec)!0.5!(adoahit)$);
   \coordinate (crowmid) at ($(cacc)!0.5!(creset)$);
   \coordinate (labelrow) at (baliveins.south);
-  \node [font=\footnotesize, yshift=-0.5cm] at (arowmid |- labelrow) {(a) Lookup};
-  \node [font=\footnotesize, below=0.5cm of baliveins] {(b) Fill};
-  \node [font=\footnotesize, yshift=-0.5cm] at (crowmid |- labelrow) {(c) Eviction};
+  \node [font=\Large, yshift=-0.5cm] at (arowmid |- labelrow) {(a) Lookup};
+  \node [font=\Large, below=0.5cm of baliveins] {(b) Fill};
+  \node [font=\Large, yshift=-0.5cm] at (crowmid |- labelrow) {(c) Eviction};
 \end{tikzpicture}}
 \caption{Shared operation of liveness guidance across \lru-Live, \srrip-Live, and \ipv-Live. Each PC has a per-PC \doa counter, checked against two thresholds: saturating the restriction threshold still inserts the block, but with reduced protection, while saturating the higher bypass threshold skips insertion entirely. An eviction updates the counter based on whether the Accessed bit was set. The three policies share this exact flow and differ only in their concrete insertion and promotion rules.}
 \label{fig:liveness_workflow}
