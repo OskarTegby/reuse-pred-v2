@@ -78,6 +78,13 @@ it's dropped here because it's no longer read anywhere in the codebase
 consumed it) — the 60 outputs above were regenerated without it and are
 unaffected, since it was already a no-op before removal too.
 
+As of the 2026-07-21 regeneration (see Provenance below), `REPL_HIST_LLC_CAP`
+and `REPL_HIST_REPL` in the `addr` fragment are also no-ops: the history
+table is now a fixed-size 256-entry array with no runtime-configurable size
+or eviction policy, so neither env var is read. They're kept in the
+fragment above only so the `addr` scenarios' full env-var history stays
+visible; removing them would change nothing.
+
 ### IPV mechanism
 
 `champsim_ipv`/`champsim_ipv_live` implement IPV as a **full k-way
@@ -121,4 +128,26 @@ the classification decision for a currently-tracked key. Every diff
 across all 48 outputs is confined to the `repl_hist` block shrinking to
 reflect the removed instrumentation; the 12 `base` outputs remain
 untouched.
+
+The 48 `_live`-active outputs were regenerated once more on **2026-07-21**
+(commit **`a555e8508152`**, branch `hist-table-hashing`) after replacing
+`HistTable` entirely: the tagged `unordered_map`/`vector<Entry>` storage
+(with real recency/frequency-weighted eviction) was dropped in favor of a
+single fixed **256-entry array of flat, tag-less saturating counters**,
+indexed by `(pc ^ (pc>>2) ^ (pc>>5)) % 256`. This is **not**
+behavior-preserving by design: two PCs that hash to the same slot now
+silently alias (whichever last updated it wins), and there is no more
+eviction policy for the table itself — direct-indexed writes just
+overwrite in place. Every one of the 48 outputs differs from the prior
+pinned version as a result, but the differences are small and consistent
+with hash aliasing rather than a broken predictor: IPC/cycle counts shift
+by roughly 0.01–0.02% (e.g. `lru_fixed_pr`: cycles 75883372 → 75894352,
+cumulative IPC 1.31782 → 1.31763), and the printed `repl_hist` block's
+*format* changed completely (from `unbounded (N entries)` /
+`bounded (N/cap)` to a flat `occupancy: main N/256 (P%)`), independent of
+any actual behavior change. The 12 `base` outputs are unaffected, as
+always. If a future diff against these 48 files shows changes far
+larger than this — a different policy's IPC moving by more than a
+fraction of a percent, for instance — that's a signal to look for an
+actual regression, not this rewrite.
 
