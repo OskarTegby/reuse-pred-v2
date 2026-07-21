@@ -16,6 +16,7 @@
 
 #include "cache.h"
 
+#include <algorithm>
 #include <cstdio>
 #include <cstdlib>
 #include <string_view>
@@ -33,6 +34,22 @@ uint64_t getenv_uint64(const char* var, uint64_t fallback)
 uint64_t hash_pc(uint64_t pc)
 {
   return (pc ^ (pc >> 2) ^ (pc >> 5)) % PRED_COUNTERS;
+}
+
+constexpr int DUEL_BYPASS_PSEL_BITS = 10;
+constexpr int DUEL_BYPASS_PSEL_MAX  = (1 << DUEL_BYPASS_PSEL_BITS) - 1;
+constexpr int DUEL_BYPASS_PSEL_MID  = 1 << (DUEL_BYPASS_PSEL_BITS - 1);
+
+struct DuelBypassRole { bool is_no, is_yes, dueling; };
+
+DuelBypassRole duel_bypass_role(uint32_t set, uint32_t num_set, int n_samplers)
+{
+  const int step = n_samplers > 0 ? static_cast<int>(num_set) / n_samplers : 0;
+  if (step <= 0) {
+    return {false, false, false};
+  }
+  const int j = static_cast<int>(set) % step;
+  return {j == 0, j == step / 2, true};
 }
 
 } // namespace
@@ -61,11 +78,27 @@ void CACHE::configure_bypass_llc()
   bypass_thd = getenv_uint64("BYPASS_THD", 6);
 }
 
+void CACHE::configure_duel_bypass()
+{
+  if (NAME != "LLC") {
+    return;
+  }
+  if (const char* v = std::getenv("DUEL_BYPASS"); v && std::stoull(v)) {
+    duel_bypass_enabled = true;
+  }
+  duel_bypass_n_samplers = static_cast<int>(getenv_uint64("DUEL_N_SAMPLERS", 0));
+  duel_bypass_hyst = static_cast<int64_t>(getenv_uint64("DUEL_HYST", 0));
+  if (const char* m = std::getenv("DUEL_METRIC"); m && std::string_view(m) == "latency") {
+    duel_bypass_use_latency = true;
+  }
+}
+
 void CACHE::load_predictor_settings()
 {
   configure_guidance_thd();
   configure_repl_hist_table();
   configure_bypass_llc();
+  configure_duel_bypass();
 }
 
 liveness_class CACHE::classify_block_liveness(uint64_t block_address, uint64_t pc) const
@@ -119,6 +152,54 @@ void CACHE::print_pc_counter_stats(const char* prefix) const
          100.0 * nonzero / PRED_COUNTERS);
 }
 
+bool CACHE::duel_wants_bypass(uint32_t set) const
+{
+  if (!duel_bypass_enabled) {
+    return false;
+  }
+  const DuelBypassRole role = duel_bypass_role(set, static_cast<uint32_t>(NUM_SET), duel_bypass_n_samplers);
+  if (!role.dueling) {
+    return false;
+  }
+  if (role.is_no) {
+    return false;
+  }
+  if (role.is_yes) {
+    return true;
+  }
+  return duel_bypass_use_latency
+      ? (duel_bypass_lat_no - duel_bypass_lat_yes > duel_bypass_hyst)
+      : (duel_bypass_psel > DUEL_BYPASS_PSEL_MID + static_cast<int>(duel_bypass_hyst));
+}
+
+void CACHE::update_duel_bypass_hit_signal(uint32_t set, uint32_t type)
+{
+  if (!duel_bypass_enabled || duel_bypass_use_latency || type == WRITE) {
+    return;
+  }
+  const DuelBypassRole role = duel_bypass_role(set, static_cast<uint32_t>(NUM_SET), duel_bypass_n_samplers);
+  if (role.is_no) {
+    duel_bypass_psel = std::max(0, duel_bypass_psel - 1);
+  }
+  if (role.is_yes) {
+    duel_bypass_psel = std::min(DUEL_BYPASS_PSEL_MAX, duel_bypass_psel + 1);
+  }
+}
+
+void CACHE::update_duel_bypass_fill_signal(uint32_t set, uint32_t type, int64_t fill_latency)
+{
+  if (!duel_bypass_enabled || !duel_bypass_use_latency || type == WRITE) {
+    return;
+  }
+  const DuelBypassRole role = duel_bypass_role(set, static_cast<uint32_t>(NUM_SET), duel_bypass_n_samplers);
+  if (role.is_no) {
+    duel_bypass_lat_no += fill_latency;
+  }
+  if (role.is_yes) {
+    duel_bypass_lat_yes += fill_latency;
+  }
+}
+
 bool CACHE::resolve_fill_bypass(const PACKET& fill_mshr, set_type::iterator& way, set_type::iterator set_end)
 {
   if (way == set_end || !way->valid) {
@@ -127,8 +208,10 @@ bool CACHE::resolve_fill_bypass(const PACKET& fill_mshr, set_type::iterator& way
 
   const uint64_t bypass_key = use_addr_key
       ? (fill_mshr.address >> OFFSET_BITS) : fill_mshr.ip;
-  const bool bypassed = should_bypass(bypass_key, bypass_thd,
-      bypass_enabled && NAME == "LLC" && fill_mshr.type != TRANSLATION);
+  const uint32_t set = static_cast<uint32_t>(get_set_index(fill_mshr.address));
+  const bool bypass_allowed = NAME == "LLC" && fill_mshr.type != TRANSLATION
+      && (bypass_enabled || duel_wants_bypass(set));
+  const bool bypassed = should_bypass(bypass_key, bypass_thd, bypass_allowed);
 
   if (bypassed) {
     way = set_end;

@@ -216,15 +216,17 @@ void CACHE::update_replacement_state(uint32_t triggering_cpu, uint32_t set, uint
     return;
   }
 
-  const ::DuelContext duel = ::make_duel_context(this, st, set, NUM_SET, hit, type, static_cast<int64_t>(this->last_fill_latency));
+  const bool use_b = duel_bypass_enabled
+      ? true
+      : ::make_duel_context(this, st, set, NUM_SET, hit, type, static_cast<int64_t>(this->last_fill_latency)).use_b;
   auto& cfg_b = ::slot_cfg_b[this][idx];
 
   if (hit) {
     ::handle_hit(rrpv, cls, cfg_b, type, st);
   } else {
     const liveness_class lc = classify_block_liveness(full_addr, ip);
-    cfg_b = duel.use_b;
-    cls = ::handle_fill(rrpv, lc, duel.use_b, st);
+    cfg_b = use_b;
+    cls = ::handle_fill(rrpv, lc, use_b, st);
   }
 }
 

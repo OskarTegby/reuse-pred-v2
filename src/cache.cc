@@ -57,6 +57,8 @@ bool CACHE::handle_fill(const PACKET& fill_mshr)
 
   bool success = true;
   const uint64_t fill_latency = current_cycle - (fill_mshr.cycle_enqueued + 1);
+  if (NAME == "LLC")
+    update_duel_bypass_fill_signal(static_cast<uint32_t>(get_set_index(fill_mshr.address)), fill_mshr.type, static_cast<int64_t>(fill_latency));
   auto metadata_thru = fill_mshr.pf_metadata;
   auto pkt_address = (virtual_prefetch ? fill_mshr.v_address : fill_mshr.address) & ~champsim::bitmask(match_offset_bits ? 0 : OFFSET_BITS);
   if (way != set_end) {
@@ -159,6 +161,9 @@ bool CACHE::try_hit(const PACKET& handle_pkt)
 
   if (hit) {
     sim_stats.back().hits[handle_pkt.type][handle_pkt.cpu]++;
+
+    if (NAME == "LLC")
+      update_duel_bypass_hit_signal(static_cast<uint32_t>(get_set_index(handle_pkt.address)), handle_pkt.type);
 
     // update replacement policy
     const auto way_idx = static_cast<std::size_t>(std::distance(set_begin, way)); // cast protected by earlier assertion

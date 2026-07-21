@@ -123,16 +123,27 @@ class CACHE : public champsim::operable, public MemoryRequestConsumer, public Me
   bool use_addr_key   = false;
   bool bypass_enabled = false;
 
+  int  duel_bypass_n_samplers   = 0;
+  bool duel_bypass_use_latency  = false;
+  int64_t duel_bypass_hyst      = 0;
+  int  duel_bypass_psel         = 512;
+  int64_t duel_bypass_lat_no    = 0;
+  int64_t duel_bypass_lat_yes   = 0;
+
   liveness_class classify_block_liveness(uint64_t block_address, uint64_t pc) const;
 
   void load_predictor_settings();
   void configure_guidance_thd();
   void configure_repl_hist_table();
   void configure_bypass_llc();
+  void configure_duel_bypass();
   bool should_bypass(uint64_t key, uint64_t bypass_threshold, bool bypass_allowed);
   void update_eviction_counters(const BLOCK& victim, liveness_class lv);
   void print_pc_counter_stats(const char* prefix) const;
   bool resolve_fill_bypass(const PACKET& fill_mshr, set_type::iterator& way, set_type::iterator set_end);
+  bool duel_wants_bypass(uint32_t set) const;
+  void update_duel_bypass_hit_signal(uint32_t set, uint32_t type);
+  void update_duel_bypass_fill_signal(uint32_t set, uint32_t type, int64_t fill_latency);
 
 public:
   struct NonTranslatingQueues : public champsim::operable {
@@ -197,6 +208,7 @@ public:
 
   uint32_t cpu = 0;
   const std::string NAME;
+  bool duel_bypass_enabled = false;
   const uint32_t NUM_SET, NUM_WAY, MSHR_SIZE;
   const uint32_t FILL_LATENCY;
   const unsigned OFFSET_BITS;

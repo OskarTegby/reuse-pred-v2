@@ -193,7 +193,7 @@ SlotContext make_slot_context(CACHE* c, uint32_t set, uint32_t num_set, uint32_t
 
 void handle_hit(CACHE* c, const SlotContext& ctx, uint32_t way, int8_t cls, uint8_t cfg_stored, Stats& st)
 {
-  update_duel_hit_signal(c, ctx.role);
+  if (!c->duel_bypass_enabled) update_duel_hit_signal(c, ctx.role);
   const std::vector<int>& ipv = ipv_for_hit(cls, g_ipv_alive[c], g_duel_doa[c][cfg_stored]);
   record_hit(st, cls);
   move_to(ctx.order, ctx.rank, ctx.rank[way], ipv[ctx.rank[way]]);
@@ -204,8 +204,8 @@ struct FillOutcome { int8_t cls; uint8_t cfg_stored; };
 FillOutcome handle_targeted_fill(CACHE* c, const SlotContext& ctx, uint32_t num_way, liveness_class lc, uint32_t type,
                                   int64_t fill_latency, Stats& st)
 {
-  const int cfg = decide_fill_config(c, ctx.role);
-  record_fill_latency(c, ctx.role, type, fill_latency);
+  const int cfg = c->duel_bypass_enabled ? 1 : decide_fill_config(c, ctx.role);
+  if (!c->duel_bypass_enabled) record_fill_latency(c, ctx.role, type, fill_latency);
 
   const std::vector<int>& ipv = ipv_for_insert(lc, g_ipv_alive[c], g_duel_doa[c][cfg]);
   const int8_t cls = record_insertion(st, lc);

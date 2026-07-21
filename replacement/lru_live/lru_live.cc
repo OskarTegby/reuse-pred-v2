@@ -269,11 +269,13 @@ void CACHE::update_replacement_state(uint32_t triggering_cpu, uint32_t set, uint
 
         if (use_liveness) {
             // Duel signal update on demand hits (sampler sets only).
-            const ::SamplerRole role = ::sampler_role(set, NUM_SET, ::g_n_samplers);
-            ::psel_update(::duel[this], role, ::g_ll_duel_metric == 1, /*hit=*/true, type, 0);
-            if (::g_ll_duel_metric == 0 && type != WRITE) {
-                if (role.is_a) st.sampler_a_hits++;
-                if (role.is_b) st.sampler_b_hits++;
+            if (!duel_bypass_enabled) {
+                const ::SamplerRole role = ::sampler_role(set, NUM_SET, ::g_n_samplers);
+                ::psel_update(::duel[this], role, ::g_ll_duel_metric == 1, /*hit=*/true, type, 0);
+                if (::g_ll_duel_metric == 0 && type != WRITE) {
+                    if (role.is_a) st.sampler_a_hits++;
+                    if (role.is_b) st.sampler_b_hits++;
+                }
             }
             // A bypass-flagged DoA slot that gets a hit proved itself: demote the
             // bypass flag so it is no longer eviction-priority and can age normally.
@@ -295,15 +297,15 @@ void CACHE::update_replacement_state(uint32_t triggering_cpu, uint32_t set, uint
         uint32_t R;
         ::bypassed[this][slot] = false;
         if (use_liveness) {
-            // Determine which config to use for this set.
-            const ::SamplerRole role = ::sampler_role(set, NUM_SET, ::g_n_samplers);
-            const bool use_latency = (::g_ll_duel_metric == 1);
-            const bool use_b = role.is_b || (!role.is_a && role.dueling && ::psel_b_wins(::duel[this], use_latency, ::g_hyst));
+            const bool use_b = duel_bypass_enabled ? true : [&]{
+                const ::SamplerRole role = ::sampler_role(set, NUM_SET, ::g_n_samplers);
+                const bool use_latency = (::g_ll_duel_metric == 1);
+                const bool b = role.is_b || (!role.is_a && role.dueling && ::psel_b_wins(::duel[this], use_latency, ::g_hyst));
+                ::psel_update(::duel[this], role, use_latency, /*hit=*/false, type, static_cast<int64_t>(this->last_fill_latency));
+                return b;
+            }();
             ::slot_cfg_b[this][slot] = use_b;
-            const DoAIns ins_mode = use_b ? ::g_ins_b : ::g_ins_a;
-
-            // Latency duel: accumulate fill latency per sampler config.
-            ::psel_update(::duel[this], role, use_latency, /*hit=*/false, type, static_cast<int64_t>(this->last_fill_latency));
+            const DoAIns ins_mode = duel_bypass_enabled ? DoAIns::LRUpos : (use_b ? ::g_ins_b : ::g_ins_a);
 
             const liveness_class lc = classify_block_liveness(full_addr, ip);
             if (lc == liveness_class::doa) {
