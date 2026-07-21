@@ -3,7 +3,7 @@
 % into (a) lookup, (b) fill, and (c) eviction sub-flowcharts. Set dueling is
 % intentionally omitted here for clarity; the three policies share this exact
 % shape and differ only in the concrete action taken at each policy-specific
-% step, listed in Table~\ref{tab:mechanism_actions}.
+% step, listed in Table~\ref{tab:policy_actions}.
 % Wrapped in \resizebox so it always fits its minipage column.
 \usetikzlibrary{shapes.geometric, arrows.meta, positioning, fit, calc}
 
@@ -106,26 +106,3 @@
 \label{fig:liveness_workflow}
 \end{figure*}
 
-% ============================================================================
-% Table: concrete per-policy actions
-% ============================================================================
-\begin{table}[t]
-\centering
-\caption{Concrete action per policy for each step of Figure~\ref{fig:liveness_workflow}. $N = \text{NUM\_WAY}$; maxRRPV $=3$. Values shown are each policy's default (non-dueling) configuration.}
-\label{tab:mechanism_actions}
-\footnotesize
-\begin{tabular}{@{}l l l l@{}}
-\toprule
-Step & \lru-Live & \srrip-Live & \ipv-Live \\
-\midrule
-\doa insert   & $N{-}1{-}\lfloor 2N/3\rfloor$ & $2$ & $\text{ipv}_{\doa}[N]$ \\
-Alive insert  & $N{-}1$          & $2$ & $\text{ipv}_{\text{alive}}[N]$ \\
-\doa hit      & $N{-}1$ (or capped$^{*}$) & $\to 2$ (partial) & $\text{ipv}_{\doa}[\text{rank}]$ \\
-Alive hit     & $N{-}1$          & $\to 0$ (full) & $\text{ipv}_{\text{alive}}[\text{rank}]$ \\
-Victim pick   & lowest rank      & first @ maxRRPV & tail \\
-\bottomrule
-\end{tabular}
-
-\vspace{2pt}
-\raggedright\footnotesize *With \texttt{LRU\_LIVE\_HIT\_INIT=1}, a \doa hit promotes only to the class's initial insertion position rather than to MRU; default is full MRU promotion for all hits.
-\end{table}
