@@ -32,76 +32,78 @@
 % ============================================================================
 % Figure: shared liveness-guidance workflow
 % ============================================================================
+% All three sub-diagrams live in ONE tikzpicture, wrapped in a single
+% \resizebox. This guarantees one uniform scale factor for the whole figure
+% (font size stays consistent across panels) regardless of how wide any one
+% panel's natural layout is -- independent per-panel resizing would instead
+% shrink whichever panel is naturally widest the most, making its text
+% smaller than the others.
 \begin{figure*}[t]
 \centering
-% --- (a) Hit --------------------------------------------------------------
-\begin{minipage}[t]{0.32\textwidth}
-\centering
-\resizebox{\linewidth}{!}{%
+\resizebox{\textwidth}{!}{%
 \begin{tikzpicture}[node distance=0.28cm and 0.5cm]
-  \node (start) [wfstart] {A cache lookup occurs};
-  \node (readcls) [wfproc, below=of start] {Read the classification\\stored on this slot\\at fill time};
-  \node (missbox) [wfproc, right=of readcls] {Enqueue the miss\\into the MSHR, along\\with this access's PC};
-  \node (clsdec) [wfdecision, below=of readcls] {Was it stored as\\weakly \doa?};
-  \node (doahit) [wfdoa, right=of clsdec] {Promote it using\\the policy's\\restriction rule};
-  \node (alivehit) [wfalive, below=of clsdec] {Promote it in the\\policy's default way};
+% --- (a) Lookup -------------------------------------------------------------
+  \node (astart) [wfstart] {A cache lookup occurs};
+  \node (acomputehash) [wfproc, below=of astart] {Compute the hash of\\this access's PC};
+  \node (alookup) [wfproc, below left=of acomputehash] {Lookup its counter\\in the table};
+  \node (amshr) [wfproc, below right=of acomputehash] {Store it in the MSHR};
+  \node (adram) [wfproc, below=of amshr] {Initiate the\\DRAM access};
+  \node (aclsdec) [wfdecision, below=of alookup] {Has the counter\\saturated the\\restriction threshold?};
+  \node (adoahit) [wfdoa, left=of aclsdec] {Promote it using\\the policy's active\\restriction rule};
+  \node (aalivehit) [wfalive, below=of aclsdec] {Promote it in the\\policy's default way};
 
-  \draw [wfarrow] (start) -- node[wflabel,pos=0.35] {hit} (readcls);
-  \draw [wfarrow] (start) -- node[wflabel,pos=0.35] {miss} (missbox);
-  \draw [wfarrow] (readcls) -- (clsdec);
-  \draw [wfarrow] (clsdec) -- node[wflabel] {yes} (doahit);
-  \draw [wfarrow] (clsdec) -- node[wflabel,left] {no} (alivehit);
-\end{tikzpicture}}
-\footnotesize (a) Lookup
-\end{minipage}
-\hfill
-% --- (b) Fill --------------------------------------------------------------
-\begin{minipage}[t]{0.32\textwidth}
-\centering
-\resizebox{\linewidth}{!}{%
-\begin{tikzpicture}[node distance=0.32cm and 0.5cm]
-  \node (start) [wfstart] {A cache miss completes};
-  \node (retrieve) [wfproc, below=of start] {Retrieve the PC from\\that MSHR entry};
-  \node (lookup) [wfproc, below=of retrieve] {1. Compute the hash\\of this PC\\2. Lookup its counter\\in the table};
-  \node (strongdec) [wfdecision, below=of lookup] {Has the counter\\saturated the bypass\\threshold?};
-  \node (bypass) [wfbypass, right=of strongdec] {Bypass: don't\\insert this block\\at all};
-  \node (weakdec) [wfdecision, below=of strongdec] {...or just the\\restriction\\threshold?};
-  \node (doains) [wfdoa, right=of weakdec] {Insert it using\\the policy's\\restriction rule};
-  \node (aliveins) [wfalive, below=of weakdec] {Insert it in the\\policy's default way};
+  \draw [wfarrow] (astart) -- (acomputehash);
+  \draw [wfarrow] (acomputehash) -- node[wflabel,pos=0.35] {hit} (alookup);
+  \draw [wfarrow] (acomputehash) -- node[wflabel,pos=0.35] {miss} (amshr);
+  \draw [wfarrow] (amshr) -- (adram);
+  \draw [wfarrow] (alookup) -- (aclsdec);
+  \draw [wfarrow] (aclsdec) -- node[wflabel,above] {yes} (adoahit);
+  \draw [wfarrow] (aclsdec) -- node[wflabel,left] {no} (aalivehit);
 
-  \draw [wfarrow] (start) -- (retrieve);
-  \draw [wfarrow] (retrieve) -- (lookup);
-  \draw [wfarrow] (lookup) -- (strongdec);
-  \draw [wfarrow] (strongdec) -- node[wflabel] {yes} (bypass);
-  \draw [wfarrow] (strongdec) -- node[wflabel,left] {no} (weakdec);
-  \draw [wfarrow] (weakdec) -- node[wflabel] {yes} (doains);
-  \draw [wfarrow] (weakdec) -- node[wflabel,left] {no} (aliveins);
-\end{tikzpicture}}
-\footnotesize (b) Fill
-\end{minipage}
-\hfill
-% --- (c) Eviction ------------------------------------------------------------
-\begin{minipage}[t]{0.32\textwidth}
-\centering
-\resizebox{\linewidth}{!}{%
-\begin{tikzpicture}[node distance=0.32cm and 0.5cm]
-  \node (start) [wfstart] {A block must be evicted};
-  \node (pick) [wfproc, below=of start] {Choose the victim\\using the policy's\\eviction rule};
-  \node (retrieve) [wfproc, below=of pick] {Retrieve the PC\\stored on this block\\since fill};
-  \node (lookup) [wfproc, below=of retrieve] {1. Compute the hash\\of its PC\\2. Lookup its counter\\in the table};
-  \node (acc) [wfdecision, below=of lookup] {Was the\\Accessed bit set?};
-  \node (reset) [wfalive, right=of acc] {Reset the\\counter to zero};
-  \node (inc) [wfdoa, below=of acc] {Increase the\\\doa counter};
+% --- (b) Fill ----------------------------------------------------------------
+  \node (bstart) [wfstart, right=6.8cm of astart] {A cache miss completes};
+  \node (bretrieve) [wfproc, below=of bstart] {Retrieve the hash\\from that MSHR entry};
+  \node (blookup) [wfproc, below=of bretrieve] {Lookup its counter\\in the table};
+  \node (bstrongdec) [wfdecision, below=of blookup] {Has the counter\\saturated the bypass\\threshold?};
+  \node (bbypass) [wfbypass, right=of bstrongdec] {Bypass: don't\\insert this block\\at all};
+  \node (bweakdec) [wfdecision, below=of bstrongdec] {...or just the\\restriction\\threshold?};
+  \node (bdoains) [wfdoa, right=of bweakdec] {Insert it using\\the policy's active\\restriction rule};
+  \node (baliveins) [wfalive, below=of bweakdec] {Insert it in the\\policy's default way};
 
-  \draw [wfarrow] (start) -- (pick);
-  \draw [wfarrow] (pick) -- (retrieve);
-  \draw [wfarrow] (retrieve) -- (lookup);
-  \draw [wfarrow] (lookup) -- (acc);
-  \draw [wfarrow] (acc) -- node[wflabel] {yes} (reset);
-  \draw [wfarrow] (acc) -- node[wflabel,left] {no} (inc);
+  \draw [wfarrow] (bstart) -- (bretrieve);
+  \draw [wfarrow] (bretrieve) -- (blookup);
+  \draw [wfarrow] (blookup) -- (bstrongdec);
+  \draw [wfarrow] (bstrongdec) -- node[wflabel] {yes} (bbypass);
+  \draw [wfarrow] (bstrongdec) -- node[wflabel,left] {no} (bweakdec);
+  \draw [wfarrow] (bweakdec) -- node[wflabel] {yes} (bdoains);
+  \draw [wfarrow] (bweakdec) -- node[wflabel,left] {no} (baliveins);
+
+% --- (c) Eviction --------------------------------------------------------------
+  \node (cstart) [wfstart, right=6.8cm of bstart] {A block must be evicted};
+  \node (cpick) [wfproc, below=of cstart] {Choose the victim\\using the policy's\\eviction rule};
+  \node (cretrieve) [wfproc, below=of cpick] {Read the PC\\stored on this block};
+  \node (ccomputehash) [wfproc, below=of cretrieve] {Compute the hash\\of its PC};
+  \node (clookup) [wfproc, below=of ccomputehash] {Lookup its counter\\in the table};
+  \node (cacc) [wfdecision, below=of clookup] {Was the\\Accessed bit set?};
+  \node (creset) [wfalive, right=of cacc] {Reset the\\counter to zero};
+  \node (cinc) [wfdoa, below=of cacc] {Increase the\\\doa counter};
+
+  \draw [wfarrow] (cstart) -- (cpick);
+  \draw [wfarrow] (cpick) -- (cretrieve);
+  \draw [wfarrow] (cretrieve) -- (ccomputehash);
+  \draw [wfarrow] (ccomputehash) -- (clookup);
+  \draw [wfarrow] (clookup) -- (cacc);
+  \draw [wfarrow] (cacc) -- node[wflabel] {yes} (creset);
+  \draw [wfarrow] (cacc) -- node[wflabel,left] {no} (cinc);
+
+% --- panel labels, bottom-aligned to the tallest panel (Fill) ---------------
+  \coordinate (arowmid) at ($(aclsdec)!0.5!(adoahit)$);
+  \coordinate (crowmid) at ($(cacc)!0.5!(creset)$);
+  \coordinate (labelrow) at (baliveins.south);
+  \node [font=\footnotesize, yshift=-0.5cm] at (arowmid |- labelrow) {(a) Lookup};
+  \node [font=\footnotesize, below=0.5cm of baliveins] {(b) Fill};
+  \node [font=\footnotesize, yshift=-0.5cm] at (crowmid |- labelrow) {(c) Eviction};
 \end{tikzpicture}}
-\footnotesize (c) Eviction
-\end{minipage}
 \caption{Shared operation of liveness guidance across \lru-Live, \srrip-Live, and \ipv-Live. Each PC has a per-PC \doa counter, checked against two thresholds: saturating the restriction threshold still inserts the block, but with reduced protection, while saturating the higher bypass threshold skips insertion entirely. An eviction updates the counter based on whether the Accessed bit was set. The three policies share this exact flow and differ only in their concrete insertion and promotion rules.}
 \label{fig:liveness_workflow}
 \end{figure*}
