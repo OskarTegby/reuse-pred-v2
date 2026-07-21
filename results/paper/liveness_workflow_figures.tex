@@ -26,9 +26,9 @@
   wfdecision/.style = {diamond, draw=black, fill=orange!12, aspect=2.2,
                        text width=3.0cm, align=center, font=\small, inner sep=1pt},
   wfarrow/.style   = {thick, -{Latex[length=1.8mm]}},
-  wflabel/.style   = {font=\normalsize, fill=white, inner sep=2pt},
-  wflabelpos/.style = {font=\normalsize\bfseries, fill=white, inner sep=2pt, text=green!50!black},
-  wflabelneg/.style = {font=\normalsize\bfseries, fill=white, inner sep=2pt, text=red!70!black}
+  wflabel/.style   = {font=\normalsize, draw=black, fill=white, inner sep=2pt},
+  wflabelpos/.style = {font=\normalsize\bfseries, draw=green!50!black, fill=white, inner sep=2pt, text=green!50!black},
+  wflabelneg/.style = {font=\normalsize\bfseries, draw=red!70!black, fill=white, inner sep=2pt, text=red!70!black}
 }
 
 % ============================================================================
@@ -47,20 +47,20 @@
 % --- (a) Lookup -------------------------------------------------------------
   \node (astart) [wfstart] {A cache lookup occurs};
   \node (acomputehash) [wfproc, below=0.7cm of astart] {Compute the hash of\\this access's PC};
-  \node (alookup) [wfproc, below=of acomputehash, xshift=-2.3cm] {Lookup its counter\\in the table};
-  \node (amshr) [wfproc, below=of acomputehash, xshift=2.3cm] {Store it in the MSHR};
+  \node (alookup) [wfproc, below=1.1cm of acomputehash, xshift=-2.3cm] {Lookup its counter\\in the table};
+  \node (amshr) [wfproc, below=1.1cm of acomputehash, xshift=2.3cm] {Store it in the MSHR};
   \node (adram) [wfproc, below=of amshr] {Initiate the\\DRAM access};
   \node (aclsdec) [wfdecision, below=of alookup] {Has the counter\\saturated the\\restriction threshold?};
   \node (adoahit) [wfdoa, left=of aclsdec] {Promote it using\\the policy's active\\restriction rule};
   \node (aalivehit) [wfalive, below=of aclsdec] {Promote it in the\\policy's default way};
 
   \draw [wfarrow] (astart) -- (acomputehash);
-  \draw [wfarrow] (acomputehash) -- node[wflabelpos,pos=0.35] {hit} (alookup);
-  \draw [wfarrow] (acomputehash) -- node[wflabelneg,pos=0.35] {miss} (amshr);
+  \draw [wfarrow] (acomputehash) -- node[wflabelpos,pos=0.5,xshift=-4mm] {hit} (alookup);
+  \draw [wfarrow] (acomputehash) -- node[wflabelneg,pos=0.5,xshift=4mm] {miss} (amshr);
   \draw [wfarrow] (amshr) -- (adram);
   \draw [wfarrow] (alookup) -- (aclsdec);
-  \draw [wfarrow] (aclsdec) -- node[wflabelpos,above] {yes} (adoahit);
-  \draw [wfarrow] (aclsdec) -- node[wflabelneg,left] {no} (aalivehit);
+  \draw [wfarrow] (aclsdec) -- node[wflabelpos,above=1mm] {yes} (adoahit);
+  \draw [wfarrow] (aclsdec) -- node[wflabelneg,left=1mm] {no} (aalivehit);
 
 % --- (b) Fill ----------------------------------------------------------------
   \node (bstart) [wfstart, right=6.8cm of astart] {A cache miss completes};
@@ -75,10 +75,10 @@
   \draw [wfarrow] (bstart) -- (bretrieve);
   \draw [wfarrow] (bretrieve) -- (blookup);
   \draw [wfarrow] (blookup) -- (bstrongdec);
-  \draw [wfarrow] (bstrongdec) -- node[wflabelpos] {yes} (bbypass);
-  \draw [wfarrow] (bstrongdec) -- node[wflabelneg,left] {no} (bweakdec);
-  \draw [wfarrow] (bweakdec) -- node[wflabelpos] {yes} (bdoains);
-  \draw [wfarrow] (bweakdec) -- node[wflabelneg,left] {no} (baliveins);
+  \draw [wfarrow] (bstrongdec) -- node[wflabelpos,above=1mm] {yes} (bbypass);
+  \draw [wfarrow] (bstrongdec) -- node[wflabelneg,left=1mm] {no} (bweakdec);
+  \draw [wfarrow] (bweakdec) -- node[wflabelpos,above=1mm] {yes} (bdoains);
+  \draw [wfarrow] (bweakdec) -- node[wflabelneg,left=1mm] {no} (baliveins);
 
 % --- (c) Eviction --------------------------------------------------------------
   \node (cstart) [wfstart, right=6.8cm of bstart] {A block must be evicted};
@@ -91,16 +91,16 @@
   \draw [wfarrow] (cstart) -- (cretrieve);
   \draw [wfarrow] (cretrieve) -- (clookup);
   \draw [wfarrow] (clookup) -- (cacc);
-  \draw [wfarrow] (cacc) -- node[wflabelpos] {yes} (creset);
-  \draw [wfarrow] (cacc) -- node[wflabelneg,left] {no} (cinc);
+  \draw [wfarrow] (cacc) -- node[wflabelpos,above=1mm] {yes} (creset);
+  \draw [wfarrow] (cacc) -- node[wflabelneg,left=1mm] {no} (cinc);
 
 % --- panel labels, bottom-aligned to the tallest panel (Fill) ---------------
   \coordinate (arowmid) at ($(aclsdec)!0.5!(adoahit)$);
   \coordinate (crowmid) at ($(cacc)!0.5!(creset)$);
   \coordinate (labelrow) at (baliveins.south);
-  \node [font=\footnotesize, yshift=-0.5cm] at (arowmid |- labelrow) {(a) Lookup};
-  \node [font=\footnotesize, below=0.5cm of baliveins] {(b) Fill};
-  \node [font=\footnotesize, yshift=-0.5cm] at (crowmid |- labelrow) {(c) Eviction};
+  \node [font=\Large, yshift=-0.5cm] at (arowmid |- labelrow) {(a) Lookup};
+  \node [font=\Large, below=0.5cm of baliveins] {(b) Fill};
+  \node [font=\Large, yshift=-0.5cm] at (crowmid |- labelrow) {(c) Eviction};
 \end{tikzpicture}}
 \caption{Shared operation of liveness guidance across \lru-Live, \srrip-Live, and \ipv-Live. Each PC has a per-PC \doa counter, checked against two thresholds: saturating the restriction threshold still inserts the block, but with reduced protection, while saturating the higher bypass threshold skips insertion entirely. An eviction updates the counter based on whether the Accessed bit was set. The three policies share this exact flow and differ only in their concrete insertion and promotion rules.}
 \label{fig:liveness_workflow}
