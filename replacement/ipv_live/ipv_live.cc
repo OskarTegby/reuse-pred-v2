@@ -167,7 +167,7 @@ void CACHE::update_replacement_state(uint32_t triggering_cpu, uint32_t set, uint
   }
 
   cls = ctx.targeted
-      ? ::handle_targeted_fill(this, ctx, NUM_WAY, classify_block_liveness(full_addr, ip), st)
+      ? ::handle_targeted_fill(this, ctx, NUM_WAY, classify_block_liveness(full_addr, ip, set), st)
       : ::handle_unguided_fill(this, ctx, NUM_WAY, st);
 }
 

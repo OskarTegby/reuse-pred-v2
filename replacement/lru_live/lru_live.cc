@@ -317,7 +317,7 @@ void CACHE::update_replacement_state(uint32_t triggering_cpu, uint32_t set, uint
         return;
     }
 
-    const liveness_class lc = use_liveness ? classify_block_liveness(full_addr, ip) : liveness_class::alive;
+    const liveness_class lc = use_liveness ? classify_block_liveness(full_addr, ip, set) : liveness_class::alive;
     const ::FillDecision fill = ::handle_fill(ranks, NUM_WAY, way, use_liveness, lc, st);
     cls = fill.cls;
     ::bypassed[this][slot] = fill.bypass;

@@ -123,16 +123,32 @@ class CACHE : public champsim::operable, public MemoryRequestConsumer, public Me
   bool use_addr_key   = false;
   bool bypass_enabled = false;
 
-  liveness_class classify_block_liveness(uint64_t block_address, uint64_t pc) const;
+  // Dynamic DoA-threshold set-dueling (opt-in, THD_DOA_DYNAMIC=1): a small
+  // fraction of sets sample guidance_thd-1/guidance_thd/guidance_thd+1, and
+  // every DOA_DUEL_EPOCH DoA evictions, guidance_thd steps toward whichever
+  // sampled value had the best demand hit rate. Disabled (guidance_thd is
+  // static) unless explicitly enabled.
+  bool doa_duel_enabled          = false;
+  uint32_t doa_duel_epoch_size    = 10000;
+  uint32_t doa_duel_cur           = 2;
+  uint64_t doa_duel_epoch_evictions = 0;
+  uint64_t doa_duel_hits[3]      = {0, 0, 0};
+  uint64_t doa_duel_accesses[3]  = {0, 0, 0};
+
+  liveness_class classify_block_liveness(uint64_t block_address, uint64_t pc, uint32_t set) const;
+  uint32_t effective_guidance_thd(uint32_t set) const;
 
   void load_predictor_settings();
   void configure_guidance_thd();
   void configure_repl_hist_table();
   void configure_bypass_llc();
+  void configure_doa_duel();
   bool should_bypass(uint64_t key, uint64_t bypass_threshold, bool bypass_allowed);
   void update_eviction_counters(const BLOCK& victim, liveness_class lv);
   void print_pc_counter_stats(const char* prefix) const;
   bool resolve_fill_bypass(const PACKET& fill_mshr, set_type::iterator& way, set_type::iterator set_end);
+  void doa_duel_record_access(uint32_t set, bool hit);
+  void doa_duel_on_doa_eviction();
 
 public:
   struct NonTranslatingQueues : public champsim::operable {

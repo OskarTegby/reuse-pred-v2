@@ -35,7 +35,32 @@ uint64_t hash_pc(uint64_t pc)
   return (pc ^ (pc >> 2) ^ (pc >> 5)) % PRED_COUNTERS;
 }
 
+// Sampler-set assignment for DoA-threshold dueling: one set in every 64
+// samples each of the three candidate thresholds; everything else is a
+// follower that just runs doa_duel_cur.
+int doa_duel_arm_for_set(uint32_t set)
+{
+  switch (set % 64) {
+    case 0:  return 0; // guidance_thd - 1
+    case 1:  return 1; // guidance_thd (unchanged)
+    case 2:  return 2; // guidance_thd + 1
+    default: return -1; // follower
+  }
+}
+
 } // namespace
+
+uint32_t CACHE::effective_guidance_thd(uint32_t set) const
+{
+  if (!doa_duel_enabled) {
+    return static_cast<uint32_t>(guidance_thd);
+  }
+  switch (doa_duel_arm_for_set(set)) {
+    case 0:  return doa_duel_cur > 0 ? doa_duel_cur - 1 : 0;
+    case 2:  return doa_duel_cur + 1;
+    default: return doa_duel_cur; // arm 1 (same) or a follower set
+  }
+}
 
 void CACHE::configure_guidance_thd()
 {
@@ -61,17 +86,73 @@ void CACHE::configure_bypass_llc()
   bypass_thd = getenv_uint64("BYPASS_THD", 6);
 }
 
+void CACHE::configure_doa_duel()
+{
+  if (const char* v = std::getenv("THD_DOA_DYNAMIC"); v && std::stoull(v)) {
+    doa_duel_enabled = true;
+  }
+  if (!doa_duel_enabled) {
+    return;
+  }
+  doa_duel_epoch_size = static_cast<uint32_t>(getenv_uint64("DOA_DUEL_EPOCH", 10000));
+  doa_duel_cur         = static_cast<uint32_t>(getenv_uint64("DOA_DUEL_START", 2));
+}
+
 void CACHE::load_predictor_settings()
 {
   configure_guidance_thd();
   configure_repl_hist_table();
   configure_bypass_llc();
+  configure_doa_duel();
 }
 
-liveness_class CACHE::classify_block_liveness(uint64_t block_address, uint64_t pc) const
+liveness_class CACHE::classify_block_liveness(uint64_t block_address, uint64_t pc, uint32_t set) const
 {
   const uint64_t key = use_addr_key ? (block_address >> OFFSET_BITS) : pc;
-  return pc_counters[hash_pc(key)] >= guidance_thd ? liveness_class::doa : liveness_class::alive;
+  return pc_counters[hash_pc(key)] >= effective_guidance_thd(set) ? liveness_class::doa : liveness_class::alive;
+}
+
+void CACHE::doa_duel_record_access(uint32_t set, bool hit)
+{
+  if (!doa_duel_enabled) {
+    return;
+  }
+  const int arm = doa_duel_arm_for_set(set);
+  if (arm < 0) {
+    return;
+  }
+  ++doa_duel_accesses[arm];
+  if (hit) {
+    ++doa_duel_hits[arm];
+  }
+}
+
+void CACHE::doa_duel_on_doa_eviction()
+{
+  if (!doa_duel_enabled) {
+    return;
+  }
+  if (++doa_duel_epoch_evictions < doa_duel_epoch_size) {
+    return;
+  }
+
+  auto hit_rate = [this](int arm) {
+    return doa_duel_accesses[arm] ? static_cast<double>(doa_duel_hits[arm]) / static_cast<double>(doa_duel_accesses[arm]) : 0.0;
+  };
+  const double hr_decrease = hit_rate(0), hr_same = hit_rate(1), hr_increase = hit_rate(2);
+
+  if (hr_decrease > hr_same && hr_decrease > hr_increase) {
+    if (doa_duel_cur > 0) {
+      --doa_duel_cur;
+    }
+  } else if (hr_increase > hr_same && hr_increase > hr_decrease) {
+    ++doa_duel_cur;
+  }
+  // else: "same" wins (or a tie) -- leave doa_duel_cur unchanged.
+
+  doa_duel_epoch_evictions = 0;
+  for (auto& h : doa_duel_hits) h = 0;
+  for (auto& a : doa_duel_accesses) a = 0;
 }
 
 bool CACHE::should_bypass(uint64_t key, uint64_t bypass_threshold, bool bypass_allowed)
@@ -101,6 +182,7 @@ void CACHE::update_eviction_counters(const BLOCK& victim, liveness_class evict_l
     if (ctr < COUNTER_MAX) {
       ++ctr;
     }
+    doa_duel_on_doa_eviction();
   } else {
     ctr = 0;
   }

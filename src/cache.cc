@@ -139,6 +139,10 @@ bool CACHE::try_hit(const PACKET& handle_pkt)
   auto way = std::find_if(set_begin, set_end, eq_addr<BLOCK>(handle_pkt.address, OFFSET_BITS));
   const auto hit = (way != set_end);
 
+  if (NAME == "LLC" && handle_pkt.type != WRITE) {
+    doa_duel_record_access(static_cast<uint32_t>(get_set_index(handle_pkt.address)), hit);
+  }
+
   if constexpr (champsim::debug_print) {
     std::cout << "[" << NAME << "] " << __func__;
     std::cout << " instr_id: " << handle_pkt.instr_id << " address: " << std::hex << (handle_pkt.address >> OFFSET_BITS);

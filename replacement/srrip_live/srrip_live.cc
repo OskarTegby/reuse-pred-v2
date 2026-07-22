@@ -163,7 +163,7 @@ void CACHE::update_replacement_state(uint32_t triggering_cpu, uint32_t set, uint
   if (hit) {
     ::handle_hit(rrpv, cls, type, st);
   } else {
-    const liveness_class lc = classify_block_liveness(full_addr, ip);
+    const liveness_class lc = classify_block_liveness(full_addr, ip, set);
     cls = ::handle_fill(rrpv, lc, st);
   }
 }
