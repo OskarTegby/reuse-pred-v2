@@ -33,11 +33,21 @@ bool CACHE::handle_fill(const PACKET& fill_mshr)
   // find victim
   auto [set_begin, set_end] = get_set_span(fill_mshr.address);
   auto way = std::find_if_not(set_begin, set_end, [](auto x) { return x.valid; });
-  if (way == set_end)
-    way = std::next(set_begin, impl_find_victim(fill_mshr.cpu, fill_mshr.instr_id, get_set_index(fill_mshr.address), &*set_begin, fill_mshr.ip,
-                                                fill_mshr.address, fill_mshr.type));
+  bool policy_skipped_fill = false;
+  if (way == set_end) {
+    // A replacement policy may return NUM_WAY (never a real way index) to mean
+    // "no victim -- bypass this fill entirely," independent of the shared
+    // LIVENESS_BYPASS/resolve_fill_bypass mechanism below (every existing
+    // policy always returns 0..NUM_WAY-1, so this is inert for all of them).
+    const auto victim_idx = impl_find_victim(fill_mshr.cpu, fill_mshr.instr_id, get_set_index(fill_mshr.address), &*set_begin, fill_mshr.ip,
+                                                fill_mshr.address, fill_mshr.type);
+    if (victim_idx < NUM_WAY)
+      way = std::next(set_begin, victim_idx);
+    else
+      policy_skipped_fill = true; // way stays == set_end
+  }
 
-  const bool fill_bypassed = resolve_fill_bypass(fill_mshr, way, set_end);
+  const bool fill_bypassed = resolve_fill_bypass(fill_mshr, way, set_end) || policy_skipped_fill;
 
   assert(set_begin <= way);
   assert(way <= set_end);
