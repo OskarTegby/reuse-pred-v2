@@ -1,6 +1,6 @@
 # Reference outputs (manual diff, no harness)
 
-`outputs/<policy>_<condition>_<trace>.out` are 60 pinned full-report outputs
+`outputs/<policy>_<condition>_<trace>.out` are 48 pinned full-report outputs
 from the liveness-replacement-policy work, kept so a suspicious code change
 can be checked by hand (`diff` a fresh run against the matching file here).
 There is deliberately no test runner, CMake integration, or CI wiring around
@@ -9,14 +9,14 @@ needed to reproduce a run.
 
 ## Scenario naming
 
-`<policy>_<condition>_<trace>`, e.g. `lru_duel_cactus`. 3 policies × 5
-conditions × 4 traces = 60 files.
+`<policy>_<condition>_<trace>`, e.g. `lru_fixed_cactus`. 3 policies × 4
+conditions × 4 traces = 48 files.
 
 - **policy**: `lru`, `srrip`, `ipv`
 - **condition**: `base` (non-liveness baseline), `fixed` (liveness, fixed
-  insertion config), `bypass` (DoA blocks bypass the LLC), `duel` (set
-  dueling against the base arm), `addr` (per-address history indexing,
-  `REPL_HIST_MODE=addr`, bounded 4K table + `lfu_doa` eviction)
+  insertion config), `bypass` (DoA blocks bypass the LLC), `addr` (per-address
+  history indexing, `REPL_HIST_MODE=addr`, bounded 4K table + `lfu_doa`
+  eviction)
 - **trace**: `pr` (ligra PageRank), `cactus` (607.cactuBSSN), `bwaves`
   (603.bwaves), `qmm` (srv_12) — chosen so every mechanism is actually active
   on at least one trace, not just exercised as an isolated knob
@@ -29,8 +29,8 @@ them:
 
 | key | path | why this one |
 |---|---|---|
-| `pr` | `trace-files/ligra/ligra_PageRank.com-lj.ungraph.gcc_6.3.0_O3.drop_51000M.length_250M.champsimtrace.xz` | Graph workload where dead-on-arrival blocks are common — exercises LLC bypass and the aggressive duel arm. |
-| `cactus` | `<dpc3 shared mount>/607.cactuBSSN_s-3477B.champsimtrace.xz` | Many distinct PCs keep the history table genuinely active (not just idle), and its temporal-reuse pattern is where the gentle, non-bypass arm wins — the counterweight to `pr`. |
+| `pr` | `trace-files/ligra/ligra_PageRank.com-lj.ungraph.gcc_6.3.0_O3.drop_51000M.length_250M.champsimtrace.xz` | Graph workload where dead-on-arrival blocks are common — exercises LLC bypass and aggressive insertion. |
+| `cactus` | `<dpc3 shared mount>/607.cactuBSSN_s-3477B.champsimtrace.xz` | Many distinct PCs keep the history table genuinely active (not just idle) — the counterweight to `pr`. |
 | `bwaves` | `<dpc3 shared mount>/603.bwaves_s-891B.champsimtrace.xz` | Streaming access pattern where LLC bypass has its largest impact; also ~4x faster to simulate than the lbm trace originally used for this role, same coverage. |
 | `qmm` | `trace-files/QMM/srv_12.champsimtrace.xz` | Many-PC workload structurally different from `cactus` — guards against the history-table behavior being an artifact of one trace's specific PC distribution. |
 
@@ -56,18 +56,24 @@ everything else is deterministic given the same binary + trace.
 | lru | base | `champsim_lru` | (none) |
 | lru | fixed | `champsim_lru_live` | `THD_DOA=6 SRRIP_LIVE_TARGET=llc LRU_LIVE_DOA_INS=2n3` |
 | lru | bypass | `champsim_lru_live` | above `base` fragment + `LRU_LIVE_DOA_INS=bypass` |
-| lru | duel | `champsim_lru_live` | `base` fragment + `LRU_LIVE_DOA_INS=2n3 LRU_LIVE_DOA_INS_B=lru DUEL_N_SAMPLERS=32 DUEL_METRIC=latency` |
 | lru | addr | `champsim_lru_live` | `base` fragment + `LRU_LIVE_DOA_INS=2n3` + `REPL_HIST_MODE=addr REPL_HIST_LLC_CAP=4096 REPL_HIST_REPL=lfu_doa` |
 | srrip | base | `champsim_srrip` | (none) |
 | srrip | fixed | `champsim_srrip_live` | `base` fragment |
 | srrip | bypass | `champsim_srrip_live` | `base` fragment + `SRRIP_LIVE_TARGET=none LIVENESS_BYPASS=1` |
-| srrip | duel | `champsim_srrip_live` | `base` fragment + `SRRIP_DOA_INS_RRPV=2 SRRIP_DOA_HIT_RRPV=2 SRRIP_DOA_INS_RRPV_B=3 SRRIP_DOA_HIT_RRPV_B=0 DUEL_N_SAMPLERS=32` |
 | srrip | addr | `champsim_srrip_live` | `base` fragment + `addr` fragment |
 | ipv | base | `champsim_ipv` | (none) |
 | ipv | fixed | `champsim_ipv_live` | `base` fragment |
 | ipv | bypass | `champsim_ipv_live` | `SRRIP_LIVE_TARGET=none LIVENESS_BYPASS=1` |
-| ipv | duel | `champsim_ipv_live` | `base` fragment + `DUEL_N_CONFIGS=2 DUEL_N_SAMPLERS=32 DUEL_METRIC=latency` |
 | ipv | addr | `champsim_ipv_live` | `base` fragment + `addr` fragment |
+
+Note: `fixed`/`addr` explicitly pass `LRU_LIVE_DOA_INS=2n3` for `lru` — this
+was the conservative option, pinned here as an explicit override so these
+scenarios keep testing that specific configuration regardless of what the
+code's own default happens to be (see Provenance: the default changed to
+the aggressive option, `lru`/rank-0, on 2026-07-21, but explicit overrides
+are unaffected by that change). `srrip`/`ipv`'s `fixed` scenarios don't
+override the insertion RRPV/floor at all, so they now exercise whatever the
+current default is — the aggressive option, as of the same change.
 
 `base` fragment = `THD_DOA=6 SRRIP_LIVE_TARGET=llc`. `addr`
 fragment = `REPL_HIST_MODE=addr REPL_HIST_LLC_CAP=4096 REPL_HIST_REPL=lfu_doa`.

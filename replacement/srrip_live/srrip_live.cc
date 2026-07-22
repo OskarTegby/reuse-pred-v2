@@ -10,7 +10,6 @@
 
 namespace
 {
-#include "../duel_common.h"
 
 constexpr int maxRRPV = 3;
 
@@ -33,7 +32,6 @@ struct Stats {
   uint64_t hit_unguided = 0, hit_doa = 0, hit_alive = 0;
   std::array<uint64_t, 4> evict_rrpv_doa = {}, evict_rrpv_alive = {}, evict_rrpv_unguided = {};
   uint64_t aging_loops = 0;
-  uint64_t sampler_a_hits = 0, sampler_b_hits = 0;
   // Cycles ins->evict per insertion class; [0]=unguided [1]=doa [2]=alive
   std::array<uint64_t, 3> lifespan_sum = {}, lifespan_count = {};
 };
@@ -48,72 +46,23 @@ int parse_env_rrpv(const char* var, int dflt)
   return (e && *e) ? std::atoi(e) : dflt;
 }
 
-int doa_ins_rrpv() { if (g_doa_ins_rrpv < 0) g_doa_ins_rrpv = parse_env_rrpv("SRRIP_DOA_INS_RRPV", 2); return g_doa_ins_rrpv; }
-int doa_hit_rrpv() { if (g_doa_hit_rrpv < 0) g_doa_hit_rrpv = parse_env_rrpv("SRRIP_DOA_HIT_RRPV", 2); return g_doa_hit_rrpv; }
+// Aggressive DoA insertion/promotion (RRPV=maxRRPV, no promotion credit on
+// hit) won outright against the conservative alternative (RRPV=2/2) on every
+// suite tested, and set dueling between them only ever won by a small
+// margin overall -- so this is now the sole default, still overridable via
+// env var for experimentation.
+int doa_ins_rrpv() { if (g_doa_ins_rrpv < 0) g_doa_ins_rrpv = parse_env_rrpv("SRRIP_DOA_INS_RRPV", 3); return g_doa_ins_rrpv; }
+int doa_hit_rrpv() { if (g_doa_hit_rrpv < 0) g_doa_hit_rrpv = parse_env_rrpv("SRRIP_DOA_HIT_RRPV", 0); return g_doa_hit_rrpv; }
 
-// --- Set dueling ------------------------------------------------------
-std::unordered_map<CACHE*, PselState>            duel;
-std::unordered_map<CACHE*, std::vector<uint8_t>> slot_cfg_b;
-
-int g_duel_metric = -1;  // 0=hits (PSEL), 1=latency (argmin)
-int g_doa_ins_b = -1, g_doa_hit_b = -1;
-int     g_n_samplers = -1;
-int64_t g_hyst       = -1;  // cfgB must lead cfgA by this margin to win followers
-
-int doa_ins_b() { if (g_doa_ins_b < 0) g_doa_ins_b = parse_env_rrpv("SRRIP_DOA_INS_RRPV_B", 3); return g_doa_ins_b; }
-int doa_hit_b() { if (g_doa_hit_b < 0) g_doa_hit_b = parse_env_rrpv("SRRIP_DOA_HIT_RRPV_B", 0); return g_doa_hit_b; }
-int n_samplers()
-{
-  if (g_n_samplers < 0) {
-    const char* e = std::getenv("DUEL_N_SAMPLERS");
-    g_n_samplers = (e && *e) ? std::atoi(e) : 0;
-  }
-  return g_n_samplers;
-}
-int64_t hyst()
-{
-  if (g_hyst < 0) {
-    const char* e = std::getenv("DUEL_HYST");
-    g_hyst = (e && *e) ? static_cast<int64_t>(std::atoll(e)) : 0;
-  }
-  return g_hyst;
-}
-int duel_metric()
-{
-  if (g_duel_metric < 0) {
-    const char* e = std::getenv("DUEL_METRIC");
-    g_duel_metric = (e && (std::string(e) == "latency" || std::string(e) == "1")) ? 1 : 0;
-  }
-  return g_duel_metric;
-}
-
-struct DuelContext { SamplerRole role; bool use_b; };
-
-DuelContext make_duel_context(CACHE* c, Stats& st, uint32_t set, uint32_t num_set, bool hit, uint32_t type, int64_t fill_latency)
-{
-  DuelContext ctx;
-  ctx.role = sampler_role(set, num_set, n_samplers());
-  const bool use_latency = (duel_metric() == 1);
-  auto& d = duel[c];
-  psel_update(d, ctx.role, use_latency, hit, type, fill_latency);
-  if (!use_latency && hit && type != WRITE) {
-    if (ctx.role.is_a) st.sampler_a_hits++;
-    if (ctx.role.is_b) st.sampler_b_hits++;
-  }
-  ctx.use_b = ctx.role.is_b || (!ctx.role.is_a && ctx.role.dueling && psel_b_wins(d, use_latency, hyst()));
-  return ctx;
-}
-// --- end set dueling ----------------------------------------------------
-
-int rrpv_for_insert(liveness_class lc, bool use_cfg_b)
+int rrpv_for_insert(liveness_class lc)
 {
   if (lc != liveness_class::doa) return maxRRPV - 1;
-  return use_cfg_b ? doa_ins_b() : doa_ins_rrpv();
+  return doa_ins_rrpv();
 }
-int rrpv_for_hit(int8_t cls, bool use_cfg_b)
+int rrpv_for_hit(int8_t cls)
 {
   if (cls != 1) return 0;
-  return use_cfg_b ? doa_hit_b() : doa_hit_rrpv();
+  return doa_hit_rrpv();
 }
 
 void record_hit(Stats& st, int8_t cls)
@@ -145,16 +94,15 @@ void record_lifespan(Stats& st, int8_t cls, uint64_t ins_cycle, uint64_t current
   st.lifespan_count[ci] += 1;
 }
 
-void handle_hit(int& rrpv, int8_t cls, uint8_t cfg_b, uint32_t type, Stats& st)
+void handle_hit(int& rrpv, int8_t cls, uint32_t type, Stats& st)
 {
-  // Use the config stored at insertion time — do not re-classify.
-  if (type != WRITE) rrpv = rrpv_for_hit(cls, cfg_b);
+  if (type != WRITE) rrpv = rrpv_for_hit(cls);
   record_hit(st, cls);
 }
 
-int8_t handle_fill(int& rrpv, liveness_class lc, bool use_b, Stats& st)
+int8_t handle_fill(int& rrpv, liveness_class lc, Stats& st)
 {
-  rrpv = rrpv_for_insert(lc, use_b);
+  rrpv = rrpv_for_insert(lc);
   return record_insertion(st, lc);
 }
 
@@ -170,12 +118,8 @@ void CACHE::initialize_replacement()
   const std::size_t n = NUM_SET * NUM_WAY;
   ::rrpv_values[this] = std::vector<int>(n, ::maxRRPV);
   ::slot_class[this]  = std::vector<int8_t>(n, 0);
-  ::slot_cfg_b[this]  = std::vector<uint8_t>(n, 0);
   ::stats[this]       = Stats{};
-  ::duel[this]        = PselState{};
   (void)doa_ins_rrpv(); (void)doa_hit_rrpv();
-  (void)doa_ins_b();    (void)doa_hit_b();
-  (void)n_samplers();   (void)duel_metric();  (void)hyst();
 }
 
 uint32_t CACHE::find_victim(uint32_t triggering_cpu, uint64_t instr_id, uint32_t set, const BLOCK* current_set, uint64_t ip, uint64_t full_addr,
@@ -216,17 +160,11 @@ void CACHE::update_replacement_state(uint32_t triggering_cpu, uint32_t set, uint
     return;
   }
 
-  const bool use_b = duel_bypass_enabled
-      ? true
-      : ::make_duel_context(this, st, set, NUM_SET, hit, type, static_cast<int64_t>(this->last_fill_latency)).use_b;
-  auto& cfg_b = ::slot_cfg_b[this][idx];
-
   if (hit) {
-    ::handle_hit(rrpv, cls, cfg_b, type, st);
+    ::handle_hit(rrpv, cls, type, st);
   } else {
     const liveness_class lc = classify_block_liveness(full_addr, ip);
-    cfg_b = use_b;
-    cls = ::handle_fill(rrpv, lc, use_b, st);
+    cls = ::handle_fill(rrpv, lc, st);
   }
 }
 
@@ -245,23 +183,8 @@ void CACHE::replacement_final_stats()
   const uint64_t evict_total = evict_doa + evict_alive + evict_ung;
 
   printf("%s SRRIP-Live STATS:\n", NAME.c_str());
-  if (::n_samplers() > 0) {
-    const bool lat = (::duel_metric() == 1);
-    const auto& d = ::duel[this];
-    const bool b_wins = ::psel_b_wins(d, lat, ::hyst());
-    if (lat) {
-      printf("  Set dueling      : metric=latency  winner=%s  lat_a=%ld  lat_b=%ld\n", b_wins ? "config_B" : "config_A", d.miss_lat_a,
-             d.miss_lat_b);
-    } else {
-      printf("  Set dueling      : metric=hits  PSEL=%d/%d  winner=%s  sampler_a_hits=%lu  sampler_b_hits=%lu\n", d.psel, ::PSEL_MAX,
-             b_wins ? "config_B" : "config_A", st.sampler_a_hits, st.sampler_b_hits);
-    }
-    printf("  Config A: DoA ins=%d hit=%d\n", ::doa_ins_rrpv(), ::doa_hit_rrpv());
-    printf("  Config B: DoA ins=%d hit=%d  (SRRIP_DOA_INS_RRPV_B / _HIT_RRPV_B)\n", ::doa_ins_b(), ::doa_hit_b());
-  } else {
-    printf("  DoA ins RRPV     : %d  (SRRIP_DOA_INS_RRPV; 2=default, 3=legacy)\n", ::doa_ins_rrpv());
-    printf("  DoA hit RRPV     : %d  (SRRIP_DOA_HIT_RRPV; 2=reset-to-ins, 1=mild)\n", ::doa_hit_rrpv());
-  }
+  printf("  DoA ins RRPV     : %d  (SRRIP_DOA_INS_RRPV; default 3)\n", ::doa_ins_rrpv());
+  printf("  DoA hit RRPV     : %d  (SRRIP_DOA_HIT_RRPV; default 0)\n", ::doa_hit_rrpv());
   printf("  Activation rate  : %.1f%%  (%lu guided / %lu total insertions)\n", pct(guided_ins, total_ins), guided_ins, total_ins);
   printf("  guided_insertions=%lu\n", guided_ins);
   printf("  Insert mix       : DoA=%.1f%%  Alive=%.1f%%  Unguided=%.1f%%\n", pct(st.ins_doa, total_ins), pct(st.ins_alive, total_ins),

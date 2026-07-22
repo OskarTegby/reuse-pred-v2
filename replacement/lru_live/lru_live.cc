@@ -4,106 +4,123 @@
 // eviction? "mostly-dead" — an intermediate, wall-clock-halflife-based third
 // class — was tried and removed: no configuration tested showed it
 // contributing a real, reproducible IPC benefit, and it was actively costing
-// IPC on some suites.)
+// IPC on some suites. Set dueling between conservative (2N/3) and aggressive
+// (rank 0) DoA insertion was tried too and removed: aggressive won outright
+// on every suite tested.)
 // --------------------------------------
-//   DoA fill:   position floor(2N/3) from MRU — near eviction end
-//   Alive fill: position 0 (MRU)              — standard LRU
+//   DoA fill:   position 0 (LRU end) — immediate eviction candidate
+//   Alive fill: position N-1 (MRU)   — standard LRU
 //   All hits:   full promotion to MRU
 //
 // Capped-promotion variant (env LRU_LIVE_HIT_INIT=1)
 // ---------------------------------------------------
 //   On a (read) hit, instead of promoting every block to MRU, a DoA-classified
-//   block is instead moved to its class's initial insertion position (2N/3
-//   from MRU) rather than earning full credit. Default off (=0): full MRU
-//   promotion on every hit.
+//   block is instead moved to its class's initial insertion position (rank 0)
+//   rather than earning full credit. Default off (=0): full MRU promotion on
+//   every hit.
 //
 // Internal representation: per-slot rank, 0=LRU, N-1=MRU.
 // All N ranks in a set are always a permutation of [0, N-1].
-//
-// On fill at rank R (0=LRU, N-1=MRU), after eviction of the rank-0 slot:
-//   Remaining ways had ranks 1..N-1.
-//   Ways with old rank in [1, R]:   new rank = old rank - 1   (shift down)
-//   Ways with old rank in [R+1, N-1]: new rank = old rank     (stay)
-//   New way: rank = R
-//
-// On hit (promote to MRU = rank N-1):
-//   Ways with rank > old rank of hit way: new rank = old rank - 1
-//   Hit way: rank = N-1
 
 #include <cassert>
 #include <cstdint>
+#include <optional>
 #include <string>
 #include <unordered_map>
 #include <vector>
 
 #include "cache.h"
 
-// DoA insertion modes (LRU_LIVE_DOA_INS env var):
-//   "2n3"    (default): insert DoA at 2N/3 from MRU — current behaviour
-//   "lru"            : insert DoA at rank 0 (LRU position, evicted on next fill)
+// DoA insertion mode (LRU_LIVE_DOA_INS env var):
+//   "lru"    (default): insert DoA at rank 0 (LRU position, evicted on next fill)
+//   "2n3"            : insert DoA at 2N/3 from MRU
 //   "bypass"         : insert DoA at rank 0 AND mark as bypass-priority, so
 //                      find_victim always returns bypass slots before any other
-//
-// Set dueling (DUEL_N_SAMPLERS=N):
-//   Partition LLC sets into sampler-A, sampler-B, and follower sets.
-//   Sampler A always uses the cfgA insertion mode (LRU_LIVE_DOA_INS).
-//   Sampler B always uses the cfgB insertion mode (LRU_LIVE_DOA_INS_B).
-//   Follower sets adopt whichever sampler accumulates more demand hits (PSEL).
-//   LRU_LIVE_DOA_INS_B defaults to "bypass" when dueling is on.
 
 namespace
 {
-#include "../duel_common.h"
 
-// DoA insertion mode constants
 enum class DoAIns { Pos2N3, LRUpos, Bypass };
 
-static bool bypass_allowed()
+bool bypass_allowed()
 {
     const char* e = std::getenv("LRU_LIVE_ALLOW_BYPASS");
     // Default: bypass allowed. Set LRU_LIVE_ALLOW_BYPASS=0 to disable globally.
     return !(e && e[0] == '0');
 }
 
-static DoAIns parse_ins_mode(const char* env, const char* dflt_str)
+DoAIns parse_ins_mode()
 {
-    const char* v = std::getenv(env);
-    if (!v || !v[0]) v = dflt_str;
-    if (std::string(v) == "lru")    return DoAIns::LRUpos;
-    if (std::string(v) == "bypass") return bypass_allowed() ? DoAIns::Bypass : DoAIns::LRUpos;
-    return DoAIns::Pos2N3;
+    const char* v = std::getenv("LRU_LIVE_DOA_INS");
+    const std::string mode = (v && v[0]) ? v : "lru";
+    if (mode == "2n3")    return DoAIns::Pos2N3;
+    if (mode == "bypass") return bypass_allowed() ? DoAIns::Bypass : DoAIns::LRUpos;
+    return DoAIns::LRUpos;
 }
 
-static DoAIns g_ins_a = DoAIns::Pos2N3;  // cfgA (default: 2n3)
-static DoAIns g_ins_b = DoAIns::Bypass;  // cfgB (default: bypass when dueling)
-static int    g_n_samplers = -1;
-static int64_t g_hyst = 0;  // cfgB must beat cfgA by this margin to win followers
+DoAIns g_ins = DoAIns::LRUpos;
 
-static int g_ll_duel_metric = -1;
-
-static void ensure_parsed()
+bool hit_init_enabled()
 {
-    if (g_n_samplers >= 0) return;
-    const char* e = std::getenv("DUEL_N_SAMPLERS");
-    g_n_samplers = (e && *e) ? std::atoi(e) : 0;
-    const char* h = std::getenv("DUEL_HYST");
-    g_hyst = (h && *h) ? static_cast<int64_t>(std::atoll(h)) : 0;
-    g_ins_a = parse_ins_mode("LRU_LIVE_DOA_INS",   "2n3");
-    g_ins_b = parse_ins_mode("LRU_LIVE_DOA_INS_B", "bypass");
-    const char* dm = std::getenv("DUEL_METRIC");
-    g_ll_duel_metric = (dm && (std::string(dm) == "latency" || std::string(dm) == "1")) ? 1 : 0;
+    const char* e = std::getenv("LRU_LIVE_HIT_INIT");
+    return e && e[0] != '\0' && e[0] != '0';
 }
+
+// SRRIP_LIVE_TARGET=none explicitly disables liveness guidance while still
+// on the LLC (used by the "bypass" condition: raw DoA bypass stays active in
+// cache.cc, but insertion/promotion here falls back to plain LRU). Liveness
+// guidance never applies anywhere but the LLC.
+bool liveness_enabled_for(const CACHE& c)
+{
+    const char* target_env = std::getenv("SRRIP_LIVE_TARGET");
+    const bool disabled = target_env && target_env[0] != '\0' && std::string(target_env) != "llc";
+    return (c.NAME == "LLC") && !disabled;
+}
+
+// --- Rank permutation --------------------------------------------------------
+// rank[way] in [0, N-1]; 0 = LRU (next victim), N-1 = MRU. Always a
+// permutation of [0, N-1] across all ways in a set.
+
+// Moves `way` from `old_rank` to `new_rank`, shifting every way in between
+// by one to keep the set a valid permutation.
+void shift_rank(uint32_t* ranks, uint32_t N, uint32_t way, uint32_t old_rank, uint32_t new_rank)
+{
+    if (new_rank > old_rank) {
+        for (uint32_t w = 0; w < N; ++w)
+            if (w != way && ranks[w] > old_rank && ranks[w] <= new_rank)
+                --ranks[w];
+    } else if (new_rank < old_rank) {
+        for (uint32_t w = 0; w < N; ++w)
+            if (w != way && ranks[w] >= new_rank && ranks[w] < old_rank)
+                ++ranks[w];
+    }
+    ranks[way] = new_rank;
+}
+
+// --- DoA insertion/promotion rules --------------------------------------------
+
+struct DoAInsertion { uint32_t rank; bool bypass; };
+
+DoAInsertion doa_insertion(uint32_t N)
+{
+    switch (g_ins) {
+        case DoAIns::LRUpos: return {0, false};
+        case DoAIns::Bypass: return {0, true};
+        default:             return {N - 1 - (2 * N / 3), false}; // Pos2N3
+    }
+}
+
+uint32_t hit_promotion_target(int8_t cls, uint32_t N)
+{
+    if (hit_init_enabled() && cls == 1) return 0; // DoA: capped to initial position
+    return N - 1;                                  // full promotion to MRU
+}
+
+// --- Per-CACHE* state ---------------------------------------------------------
 
 std::unordered_map<CACHE*, std::vector<uint32_t>> lru_rank;
-// 0=unguided  1=doa  2=alive
-std::unordered_map<CACHE*, std::vector<int8_t>>   slot_class;
-// true if slot was inserted in bypass mode (always evicted first)
-std::unordered_map<CACHE*, std::vector<bool>>      bypassed;
-// which config (A=false, B=true) was used at insertion for this slot
-std::unordered_map<CACHE*, std::vector<bool>>      slot_cfg_b;
-
-// PSEL counter + latency accumulators for dueling
-std::unordered_map<CACHE*, PselState> duel;
+std::unordered_map<CACHE*, std::vector<int8_t>>   slot_class; // 0=unguided 1=doa 2=alive
+std::unordered_map<CACHE*, std::vector<bool>>     bypassed;   // true = evict-first
 
 // Residency instrumentation. Time is measured in per-set "ticks": one tick per
 // update_replacement_state call for that set (every access touching the set).
@@ -114,19 +131,10 @@ std::unordered_map<CACHE*, std::vector<uint32_t>> hit_cnt;
 std::unordered_map<CACHE*, std::vector<uint64_t>> set_clock;
 
 struct Stats {
-    uint64_t ins_unguided = 0, ins_doa = 0, ins_alive = 0;
-    uint64_t ins_doa_bypass = 0;   // DoA fills inserted in bypass mode
-    uint64_t hit_unguided = 0, hit_doa = 0, hit_alive = 0;
-    uint64_t hit_doa_bypass = 0;   // hits on bypass-mode DoA slots (before eviction)
-    // Promotion guidance actually applied: hit landed on a doa-classified slot
-    // AND LRU_LIVE_HIT_INIT capped its promotion target below full MRU.
-    // Distinct from hit_doa, which counts hits on classified slots regardless
-    // of whether capping is enabled (LRU_LIVE_HIT_INIT=0 still increments that
-    // but never caps anything).
+    uint64_t ins_unguided = 0, ins_doa = 0, ins_alive = 0, ins_doa_bypass = 0;
+    uint64_t hit_unguided = 0, hit_doa = 0, hit_alive = 0, hit_doa_bypass = 0;
     uint64_t promo_capped_doa = 0;
-    uint64_t evict_doa = 0, evict_alive = 0, evict_unguided = 0;
-    uint64_t evict_doa_bypass = 0; // bypass-mode DoA evictions
-    uint64_t sampler_a_hits = 0, sampler_b_hits = 0;
+    uint64_t evict_doa = 0, evict_alive = 0, evict_unguided = 0, evict_doa_bypass = 0;
     double   res_sum[3][2] = {};
     uint64_t res_cnt[3][2] = {};
     double   afterhit_sum[3] = {};
@@ -134,25 +142,132 @@ struct Stats {
 };
 std::unordered_map<CACHE*, Stats> stats;
 
+// --- Victim selection ----------------------------------------------------------
+
+uint32_t find_lru_victim(const uint32_t* ranks, uint32_t N)
+{
+    uint32_t victim = 0;
+    for (uint32_t w = 1; w < N; ++w)
+        if (ranks[w] < ranks[victim])
+            victim = w;
+    return victim;
+}
+
+void record_eviction(Stats& st, int8_t cls)
+{
+    switch (cls) {
+        case 1:  st.evict_doa++;      break;
+        case 2:  st.evict_alive++;    break;
+        default: st.evict_unguided++; break;
+    }
+}
+
+// Residency: ticks the victim survived. `now` is the count of set accesses so
+// far; the imminent fill (a hit=false update) will advance it.
+void record_residency(Stats& st, int8_t cls, uint64_t now, uint64_t fill_t, uint64_t last_hit_t, uint32_t hits)
+{
+    const int c  = (cls >= 0 && cls < 3) ? cls : 0;
+    const int hb = hits > 0 ? 1 : 0;
+    st.res_sum[c][hb] += static_cast<double>(now - fill_t);
+    st.res_cnt[c][hb] += 1;
+    if (hits > 0) {
+        st.afterhit_sum[c] += static_cast<double>(now - last_hit_t);
+        st.afterhit_cnt[c] += 1;
+    }
+}
+
+// --- Hit handling ----------------------------------------------------------
+
+void record_hit_class(Stats& st, int8_t cls)
+{
+    switch (cls) {
+        case 1:  st.hit_doa++;   break;
+        case 2:  st.hit_alive++; break;
+        default: st.hit_unguided++; break;
+    }
+}
+
+// Promotes the hit way to its class's target rank; a DoA hit only earns full
+// MRU credit unless capped by LRU_LIVE_HIT_INIT.
+void promote_on_hit(uint32_t* ranks, uint32_t N, uint32_t way, int8_t cls, Stats& st)
+{
+    const uint32_t target = hit_promotion_target(cls, N);
+    if (target != N - 1 && cls == 1)
+        st.promo_capped_doa++;
+    shift_rank(ranks, N, way, ranks[way], target);
+}
+
+// No write-hit special-case: keep the no-liveness default path identical to
+// baseline LRU so any speedup is attributable to liveness alone (matches the
+// fix applied to srrip_live/ipv_live). Returns the slot's bypass flag after
+// this hit (std::vector<bool> doesn't support real references, so the
+// caller assigns the result back rather than passing one in).
+bool handle_hit(uint32_t* ranks, uint32_t N, uint32_t way, int8_t cls, uint32_t type, bool use_liveness,
+                 Stats& st, bool was_bypassed, uint64_t& last_hit_t, uint32_t& hits, uint64_t clk)
+{
+    if (type != WRITE) {
+        promote_on_hit(ranks, N, way, cls, st);
+        last_hit_t = clk;
+        ++hits;
+    }
+    if (!use_liveness) {
+        st.hit_unguided++;
+        return was_bypassed;
+    }
+    // A bypass-flagged DoA slot that gets a hit proved itself: demote the
+    // bypass flag so it is no longer eviction-priority and can age normally.
+    if (cls == 1 && was_bypassed) {
+        st.hit_doa_bypass++;
+        record_hit_class(st, cls);
+        return false;
+    }
+    record_hit_class(st, cls);
+    return was_bypassed;
+}
+
+// --- Fill handling ---------------------------------------------------------
+
+struct FillDecision { int8_t cls; uint32_t rank; bool bypass; };
+
+FillDecision decide_fill(liveness_class lc, uint32_t N, Stats& st)
+{
+    if (lc == liveness_class::doa) {
+        const DoAInsertion ins = doa_insertion(N);
+        st.ins_doa++;
+        if (ins.bypass) st.ins_doa_bypass++;
+        return {1, ins.rank, ins.bypass};
+    }
+    st.ins_alive++;
+    return {2, N - 1, false};
+}
+
+FillDecision handle_fill(uint32_t* ranks, uint32_t N, uint32_t way, bool use_liveness, liveness_class lc, Stats& st)
+{
+    const FillDecision d = use_liveness
+        ? decide_fill(lc, N, st)
+        : FillDecision{0, N - 1, false};
+    if (!use_liveness) st.ins_unguided++;
+    shift_rank(ranks, N, way, /*old_rank=*/0, d.rank); // evicted way just vacated rank 0
+    return d;
+}
+
 } // namespace
 
 void CACHE::initialize_replacement()
 {
-    ensure_parsed();
+    ::g_ins = ::parse_ins_mode();
     const std::size_t n = NUM_SET * NUM_WAY;
     auto& ranks = ::lru_rank[this];
     ranks.resize(n);
     for (uint32_t set = 0; set < NUM_SET; ++set)
         for (uint32_t way = 0; way < NUM_WAY; ++way)
             ranks[set * NUM_WAY + way] = way;
-    ::slot_class[this]   = std::vector<int8_t>(n, 0);
-    ::bypassed[this]     = std::vector<bool>(n, false);
-    ::slot_cfg_b[this]   = std::vector<bool>(n, false);
+    ::slot_class[this]    = std::vector<int8_t>(n, 0);
+    ::bypassed[this]      = std::vector<bool>(n, false);
     ::fill_time[this]     = std::vector<uint64_t>(n, 0);
     ::last_hit_time[this] = std::vector<uint64_t>(n, 0);
     ::hit_cnt[this]       = std::vector<uint32_t>(n, 0);
     ::set_clock[this]     = std::vector<uint64_t>(NUM_SET, 0);
-    ::duel[this]  = PselState{};
     ::stats[this] = Stats{};
 }
 
@@ -160,48 +275,24 @@ uint32_t CACHE::find_victim(uint32_t triggering_cpu, uint64_t instr_id, uint32_t
                              const BLOCK* current_set, uint64_t ip, uint64_t full_addr,
                              uint32_t type)
 {
-    const auto* ranks   = ::lru_rank[this].data() + set * NUM_WAY;
-    const auto& bypass_ = ::bypassed[this];
+    const auto* ranks = ::lru_rank[this].data() + set * NUM_WAY;
+    auto& st = ::stats[this];
 
-    // Bypass-priority: always evict a bypass-flagged slot before any regular slot.
-    for (uint32_t w = 0; w < NUM_WAY; ++w) {
-        if (bypass_[set * NUM_WAY + w]) {
-            uint32_t victim = w;
-            // among multiple bypass slots pick the one with lowest rank
-            for (uint32_t w2 = w + 1; w2 < NUM_WAY; ++w2)
-                if (bypass_[set * NUM_WAY + w2] && ranks[w2] < ranks[victim])
-                    victim = w2;
-                ::stats[this].evict_doa_bypass++;
-            return victim;
-        }
+    const std::vector<bool>& bypass_vec = ::bypassed[this];
+    std::optional<uint32_t> bypass_victim;
+    for (uint32_t w = 0; w < NUM_WAY; ++w)
+        if (bypass_vec[set * NUM_WAY + w] && (!bypass_victim || ranks[w] < ranks[*bypass_victim]))
+            bypass_victim = w;
+    if (bypass_victim) {
+        st.evict_doa_bypass++;
+        return *bypass_victim;
     }
 
-    uint32_t victim = 0;
-    for (uint32_t w = 1; w < NUM_WAY; ++w)
-        if (ranks[w] < ranks[victim])
-            victim = w;
-
+    const uint32_t victim = ::find_lru_victim(ranks, NUM_WAY);
     const std::size_t vi = set * NUM_WAY + victim;
     const int8_t cls = ::slot_class[this][vi];
-    auto& st = ::stats[this];
-    switch (cls) {
-        case 1:  st.evict_doa++;      break;
-        case 2:  st.evict_alive++;    break;
-        default: st.evict_unguided++; break;
-    }
-
-    // Residency: ticks the victim survived. set_clock is the count of set accesses
-    // so far; the imminent fill (update with hit=0) will advance it.
-    const uint64_t now = ::set_clock[this][set];
-    const uint32_t hc  = ::hit_cnt[this][vi];
-    const int c  = (cls >= 0 && cls < 3) ? cls : 0;
-    const int hb = hc > 0 ? 1 : 0;
-    st.res_sum[c][hb] += static_cast<double>(now - ::fill_time[this][vi]);
-    st.res_cnt[c][hb] += 1;
-    if (hc > 0) {
-        st.afterhit_sum[c] += static_cast<double>(now - ::last_hit_time[this][vi]);
-        st.afterhit_cnt[c] += 1;
-    }
+    ::record_eviction(st, cls);
+    ::record_residency(st, cls, ::set_clock[this][set], ::fill_time[this][vi], ::last_hit_time[this][vi], ::hit_cnt[this][vi]);
     return victim;
 }
 
@@ -209,9 +300,6 @@ void CACHE::update_replacement_state(uint32_t triggering_cpu, uint32_t set, uint
                                       uint64_t full_addr, uint64_t ip, uint64_t victim_addr,
                                       uint32_t type, uint8_t hit)
 {
-    // No write-hit special-case: keep the no-liveness default path identical to
-    // baseline LRU so any speedup is attributable to liveness alone (matches the
-    // fix applied to srrip_live/ipv_live).
     const std::size_t base = set * NUM_WAY;
     const std::size_t slot = base + way;
     auto* ranks = ::lru_rank[this].data() + base;
@@ -220,136 +308,23 @@ void CACHE::update_replacement_state(uint32_t triggering_cpu, uint32_t set, uint
 
     // One tick per set access (hit or fill) — the residency clock.
     const uint64_t clk = ++::set_clock[this][set];
-
-    // SRRIP_LIVE_TARGET=none explicitly disables liveness guidance while
-    // still on the LLC (used by the "bypass" condition: raw DoA bypass stays
-    // active in cache.cc, but insertion/promotion here falls back to plain
-    // LRU). Liveness guidance never applies anywhere but the LLC.
-    const char* target_env = std::getenv("SRRIP_LIVE_TARGET");
-    const bool disabled = target_env && target_env[0] != '\0' && std::string(target_env) != "llc";
-    const bool use_liveness = (NAME == "LLC") && !disabled;
-
-    const uint32_t N = NUM_WAY;
+    const bool use_liveness = ::liveness_enabled_for(*this);
 
     if (hit) {
-        // Promote unless this is a writeback hit (matches the baseline LRU
-        // convention of not promoting on writebacks). Standard behaviour promotes
-        // to MRU; with LRU_LIVE_HIT_INIT a DoA-classified block is instead moved
-        // back to its class's initial insertion position (capped promotion).
-        if (type != WRITE) {
-            const bool cap_doa = []{
-                const char* e = std::getenv("LRU_LIVE_HIT_INIT");
-                return e && e[0] != '\0' && e[0] != '0';
-            }();
-
-            uint32_t target = N - 1;  // default: full promotion to MRU
-            if (use_liveness && cap_doa && cls == 1)
-                target = N - 1 - (2 * N / 3);  // DoA initial pos
-
-            if (target != N - 1 && cls == 1)
-                st.promo_capped_doa++;
-
-            const uint32_t old_r = ranks[way];
-            if (target > old_r) {           // move up toward MRU
-                for (uint32_t w = 0; w < N; ++w)
-                    if (w != way && ranks[w] > old_r && ranks[w] <= target)
-                        --ranks[w];
-                ranks[way] = target;
-            } else if (target < old_r) {    // move down toward LRU
-                for (uint32_t w = 0; w < N; ++w)
-                    if (w != way && ranks[w] >= target && ranks[w] < old_r)
-                        ++ranks[w];
-                ranks[way] = target;
-            }
-            // target == old_r: already in place, no reshuffle
-
-            ::last_hit_time[this][slot] = clk;   // residency: record reuse
-            ++::hit_cnt[this][slot];
-        }
-
-        if (use_liveness) {
-            // Duel signal update on demand hits (sampler sets only).
-            if (!duel_bypass_enabled) {
-                const ::SamplerRole role = ::sampler_role(set, NUM_SET, ::g_n_samplers);
-                ::psel_update(::duel[this], role, ::g_ll_duel_metric == 1, /*hit=*/true, type, 0);
-                if (::g_ll_duel_metric == 0 && type != WRITE) {
-                    if (role.is_a) st.sampler_a_hits++;
-                    if (role.is_b) st.sampler_b_hits++;
-                }
-            }
-            // A bypass-flagged DoA slot that gets a hit proved itself: demote the
-            // bypass flag so it is no longer eviction-priority and can age normally.
-            if (cls == 1 && ::bypassed[this][slot]) {
-                ::bypassed[this][slot] = false;
-                st.hit_doa_bypass++;
-            }
-            switch (cls) {
-                case 1:  st.hit_doa++;   break;
-                case 2:  st.hit_alive++; break;
-                default: st.hit_unguided++; break;
-            }
-        } else {
-            st.hit_unguided++;
-        }
-    } else {
-        // Fill: evicted block had rank 0.  Remaining ways are at ranks 1..N-1.
-        // Insert new block at rank R (0=LRU, N-1=MRU).
-        uint32_t R;
-        ::bypassed[this][slot] = false;
-        if (use_liveness) {
-            const bool use_b = duel_bypass_enabled ? true : [&]{
-                const ::SamplerRole role = ::sampler_role(set, NUM_SET, ::g_n_samplers);
-                const bool use_latency = (::g_ll_duel_metric == 1);
-                const bool b = role.is_b || (!role.is_a && role.dueling && ::psel_b_wins(::duel[this], use_latency, ::g_hyst));
-                ::psel_update(::duel[this], role, use_latency, /*hit=*/false, type, static_cast<int64_t>(this->last_fill_latency));
-                return b;
-            }();
-            ::slot_cfg_b[this][slot] = use_b;
-            const DoAIns ins_mode = duel_bypass_enabled ? DoAIns::LRUpos : (use_b ? ::g_ins_b : ::g_ins_a);
-
-            const liveness_class lc = classify_block_liveness(full_addr, ip);
-            if (lc == liveness_class::doa) {
-                cls = 1;
-                switch (ins_mode) {
-                    case DoAIns::LRUpos:
-                        R = 0;
-                        st.ins_doa++;
-                        break;
-                    case DoAIns::Bypass:
-                        R = 0;
-                        ::bypassed[this][slot] = true;
-                        st.ins_doa++;
-                        st.ins_doa_bypass++;
-                        break;
-                    default:  // Pos2N3
-                        R = N - 1 - (2 * N / 3);
-                        st.ins_doa++;
-                        break;
-                }
-            } else {
-                R = N - 1;
-                cls = 2; st.ins_alive++;
-            }
-        } else {
-            R = N - 1;
-            cls = 0; st.ins_unguided++;
-            ::slot_cfg_b[this][slot] = false;
-        }
-
-        // Adjust remaining ways: those with old rank in [1, R] shift down by 1.
-        // Those with old rank in [R+1, N-1] stay.
-        // (Old ranks are 1..N-1 since rank 0 was just evicted.)
-        for (uint32_t w = 0; w < N; ++w) {
-            if (w == way) continue;
-            if (ranks[w] <= static_cast<uint32_t>(R))
-                --ranks[w];
-        }
-        ranks[way] = R;
-
-        ::fill_time[this][slot]     = clk;
-        ::last_hit_time[this][slot] = clk;
-        ::hit_cnt[this][slot]       = 0;
+        ::bypassed[this][slot] = ::handle_hit(ranks, NUM_WAY, way, cls, type, use_liveness, st,
+                                               ::bypassed[this][slot], ::last_hit_time[this][slot],
+                                               ::hit_cnt[this][slot], clk);
+        return;
     }
+
+    const liveness_class lc = use_liveness ? classify_block_liveness(full_addr, ip) : liveness_class::alive;
+    const ::FillDecision fill = ::handle_fill(ranks, NUM_WAY, way, use_liveness, lc, st);
+    cls = fill.cls;
+    ::bypassed[this][slot] = fill.bypass;
+
+    ::fill_time[this][slot]     = clk;
+    ::last_hit_time[this][slot] = clk;
+    ::hit_cnt[this][slot]       = 0;
 }
 
 void CACHE::replacement_final_stats()
@@ -364,41 +339,21 @@ void CACHE::replacement_final_stats()
     };
 
     const uint32_t N = NUM_WAY;
-    const uint32_t pos_doa = 2 * N / 3;
 
-    const char* hi = std::getenv("LRU_LIVE_HIT_INIT");
-    const bool cap_doa = hi && hi[0] != '\0' && hi[0] != '0';
+    const bool cap_doa = ::hit_init_enabled();
 
     auto ins_str = [](DoAIns m) -> const char* {
         switch (m) {
-            case DoAIns::LRUpos: return "lru (rank 0)";
+            case DoAIns::LRUpos: return "lru (rank 0, default)";
             case DoAIns::Bypass: return "bypass (rank 0, priority eviction)";
-            default:             return "2n3 (default)";
+            default:             return "2n3";
         }
     };
 
     printf("%s LRU-Live STATS:\n", NAME.c_str());
-    if (::g_n_samplers > 0) {
-        const bool lat = (::g_ll_duel_metric == 1);
-        const auto& d = ::duel[this];
-        const bool b_wins = ::psel_b_wins(d, lat, ::g_hyst);
-        if (lat) {
-            printf("  Set dueling      : metric=latency  hyst=%ld  winner=%s"
-                   "  lat_a=%ld  lat_b=%ld\n",
-                   ::g_hyst, b_wins ? "cfgB" : "cfgA",
-                   d.miss_lat_a, d.miss_lat_b);
-        } else {
-            printf("  Set dueling      : metric=hits  PSEL=%d/%d  winner=%s"
-                   "  sampler_a_hits=%lu  sampler_b_hits=%lu\n",
-                   d.psel, ::PSEL_MAX, b_wins ? "cfgB" : "cfgA",
-                   st.sampler_a_hits, st.sampler_b_hits);
-        }
-        printf("  cfgA DoA ins     : %s\n", ins_str(::g_ins_a));
-        printf("  cfgB DoA ins     : %s\n", ins_str(::g_ins_b));
-    } else {
-        printf("  DoA ins mode     : %s  (LRU_LIVE_DOA_INS)\n", ins_str(::g_ins_a));
-    }
-    printf("  Insertion positions: DoA=%u/MRU  Alive=0/MRU  (N=%u)\n", pos_doa, N);
+    printf("  DoA ins mode     : %s  (LRU_LIVE_DOA_INS)\n", ins_str(::g_ins));
+    printf("  Insertion positions: DoA=%s  Alive=%u/MRU  (N=%u)\n",
+           ins_str(::g_ins), N - 1, N);
     printf("  Hit promotion    : %s\n",
            cap_doa ? "DoA capped to class initial position (LRU_LIVE_HIT_INIT=1)"
                    : "full to MRU");

@@ -74,9 +74,9 @@ Standard policies like \lru and \srrip ignore this signal entirely.
 This paper introduces \lru-Live, \srrip-Live, and \ipv-Live: a family of
 liveness-guided replacement policies using a per-PC counter to classify fills
 as \doa or alive. Each policy maps these classes to insertion positions and
-promotion rules in accordance to the base policy, with set dueling choosing at
-runtime between conservative and aggressive \doa placement. Full bypass ---
-skipping \llc insertion entirely --- is the extreme of this idea.
+promotion rules in accordance to the base policy, inserting \doa blocks
+aggressively close to the eviction end. Full bypass --- skipping \llc
+insertion entirely --- is the extreme of this idea.
 
 \begin{figure*}[b!]
 \centering
@@ -225,31 +225,33 @@ re-referenced \doa block back to only its class's insertion position rather
 than to full \textsc{MRU}, reflecting that a single hit does not yet mean the
 block should be treated as fully alive.
 
-A more aggressive option for \doa blocks is to insert them as LRU --- the
-very bottom of the recency stack --- making them immediate eviction candidates
-that are displaced on the very next fill, regardless of set pressure.
+\doa blocks are inserted as LRU --- the very bottom of the recency stack ---
+making them immediate eviction candidates that are displaced on the very next
+fill, regardless of set pressure. This is the most aggressive point on the
+insertion spectrum: a milder alternative (inserting partway up the stack)
+carries less misprediction risk but was outperformed by this aggressive
+placement on every suite tested, so it is not used by default.
 
 This is the \lru-Live analogue of inserting at $\text{RRPV}=\text{maxRRPV}$ in
-\srrip-Live and for \ipv-Live discussed below, and carries the same trade-off 
-between freeing capacity and risking a re-fetch on misclassification.
+\srrip-Live and the tail-locked floor for \ipv-Live discussed below.
 \begin{table}[h!]
 \centering
 \renewcommand{\arraystretch}{1.15}
 \footnotesize
 \caption{Insertion and promotion per liveness class. $N = \text{NUM\_WAY}$;
-  maxRRPV $=3$. Values shown are each policy's default (non-dueling) configuration.}
+  maxRRPV $=3$. Values shown are each policy's default configuration.}
 \label{tab:policy_actions}
 \begin{tabular}{ll cc}
 \toprule
 Policy & Class & Insert & Hit \\
 \midrule
 \multirow{3}{*}{\lru-Live}
-  & \doa  & $N{-}1{-}\lfloor 2N/3\rfloor$ & $N{-}1$ \\
+  & \doa  & $0$                           & $N{-}1$ \\
   & Alive & $N{-}1$                       & $N{-}1$ \\
   & \multicolumn{3}{l}{Victim: lowest rank} \\
 \midrule
 \multirow{3}{*}{\srrip-Live}
-  & \doa  & 2 & 2 \\
+  & \doa  & 3 & 0 \\
   & Alive & 2 & 0 \\
   & \multicolumn{3}{l}{Victim: first way at maxRRPV} \\
 \midrule
@@ -268,19 +270,13 @@ Policy & Class & Insert & Hit \\
 \srrip-Live maps the liveness classes onto.
 
 A \doa-classified block has a maximum predicted distance, so inserting it
-at $\text{RRPV}=\text{maxRRPV}$ expresses that prediction in the policy's 
+at $\text{RRPV}=\text{maxRRPV}$ expresses that prediction in the policy's
 language and ensures it is among the first blocks to be evicted when a miss occurs.
-Hit promotion is only partial for \doa blocks for the same reasons as \lru-Live;
-the block gains slightly more residency but remains vulnerable to eviction if
-the set comes under pressure again.
-
-Two insertion positions are considered for \doa blocks:
-Inserting at $\text{RRPV}=\text{maxRRPV}$ is only beneficial when the
-classifier is reliable as it also risks a re-fetch penalty as when \lru-Live
-is more aggressive.
-However, inserting at $\text{RRPV}=\text{maxRRPV}-1$ (the default behavior)
-makes no insertion-level distinction, so a misclassification at fill time
-causes no extra miss, which is desireable for unreliable DoA patterns.
+A re-referenced \doa block is promoted all the way to $\text{RRPV}=0$ on a
+hit, the same full promotion an alive block receives --- a milder,
+partial-promotion alternative carries less misprediction risk but was
+outperformed by full promotion on every suite tested, so it is not used by
+default.
 
 \subsection{IPV-Live}
 
@@ -299,59 +295,13 @@ $\text{ipv}_{\doa}$ is the same vector with every entry floor-clamped to a
 minimum depth, so a \doa-classified block can never be promoted past that
 floor no matter how many hits it accumulates.
 
-Two floor depths are evaluated, applying the same trade-off described for
-\srrip-Live: a conservative floor at $\lfloor 2N/3\rfloor$ (retains some
-promotion headroom) and an aggressive floor at $N{-}1$ (locked at the tail
-regardless of hits). The next section describes how we choose between them
-at runtime for each policy.
+The floor is fixed at $N{-}1$: a \doa-classified block is locked at the
+tail regardless of hits. A milder floor at $\lfloor 2N/3\rfloor$ (retaining
+some promotion headroom) carries less misprediction risk but was
+outperformed by the tail-locked floor on every suite tested, so it is not
+used by default.
 
 \input{liveness_workflow_figures}
-
-\subsection{Set Dueling}
-\label{sec:setduelingsection}
-
-Because classifier accuracy varies by workload and is not known statically,
-neither insertion option is likely to always win. \emph{Set dueling} is a common 
-method to resolve this issue. Here, it is done by running both configs on small sampler 
-subsets of  the \llc and steering the remaining follower sets toward whichever is 
-currently performing better.
-
-\paragraph{Hit-count signal.}
-A saturating \emph{policy selector} counter (\textsc{PSEL}) increments on a
-miss in the conservative-insertion sampler sets and decrements on a miss in the
-aggressive-insertion sets; follower sets switch to the aggressive insertion when
-the counter exceeds the midpoint, i.e., the aggressive insertion has sustained fewer misses.
-
-A bias can arise from mispredicted \doa blocks --- blocks classified as DoA 
-that are in fact reused. In the conservative sampler such a block is still 
-present when the reuse arrives, so it registers as a hit and contributes no miss.
-In the aggressive sampler the same block has already been evicted, so the
-reuse is a cache miss and decrements \textsc{PSEL}.
-
-The result is that \textsc{PSEL} can settle on the conservative insertion even
-in workloads where the aggressive insertion would improve overall performance
-by evicting correctly-classified \doa blocks and making room for live ones.
-
-\paragraph{Miss-latency signal.}
-Each sampler set accumulates total fill latency per insertion strategy; follower
-sets adopt the option with lower accumulated total. This captures both miss count 
-and miss cost.
-
-Ways occupied by retained \doa blocks are unavailable for live blocks; when a
-live block misses because those ways are taken, its fill adds directly to the
-conservative sampler's accumulated latency.
-The aggressive insertion evicts \doa blocks first, keeping those ways free and
-reducing live-block misses.
-The latency signal therefore penalises conservative \doa retention where the
-hit-count signal rewarded it.
-
-\textsc{PSEL} is reliable when both options retain \doa blocks for similar
-durations: miss counts then faithfully reflect which option serves live blocks
-better.
-When the options differ substantially in \doa retention depth, miss-latency is
-the more robust choice, since it is sensitive to the downstream cost imposed on
-live blocks rather than to which option avoids re-fetching a mispredicted \doa
-block.
 
 \subsection{Bypass}
 \label{sec:bypassstate_policy}
@@ -360,20 +310,18 @@ Each policy can insert \doa blocks progressively closer to the eviction end,
 so the logical extreme of this spectrum is to skip insertion entirely:
 a \doa-classified block is never placed in the \llc, so it cannot displace any
 live block regardless of set pressure.
-This applies to all three policies --- in each case, the difference is that we 
-go from inserting the block with high priority to be evicted, to avoiding to 
+This applies to all three policies --- in each case, the difference is that we
+go from inserting the block with high priority to be evicted, to avoiding to
 insert the block entirely, which means that it ends up being absent from the cache altogether.
 
-The misprediction cost is the same as for conservative insertion (a re-fetch from
+The misprediction cost is the same as for aggressive insertion (a re-fetch from
 memory if the block is later referenced) but amplified, since there is no
 opportunity for the block to receive a hit while it waits near the eviction
-point.
-
-We use set dueling to decide between the default insertion position and bypass, 
-using the miss-latency signal to arbitrate per-workload.
-The expectation is that elevated fill latency in the bypass-sampler sets
-reflects frequent re-fetches of mispredicted blocks, and that the duel will
-avoid bypassing in those cases while applying it where fill latency remains low.
+point. Bypass fires at a fixed, higher threshold ($\theta_{\mathrm{bypass}}$)
+than the insertion/promotion rule ($\theta_{\mathrm{doa}}$), independent of it:
+a \textsc{PC} must accumulate stronger evidence of being dead-on-arrival before
+its blocks are skipped entirely, rather than merely inserted with reduced
+protection.
 
 \subsection{History Table Replacement}
 \label{sec:histrep}
@@ -519,7 +467,7 @@ dominates per-workload, motivating the suite-level threshold optimisation.
 \begin{minipage}[t]{0.48\textwidth}
   \centering
   \includegraphics[width=\linewidth]{../plots/lru_live_threshold_normalized_duel.png}
-  \caption{DoA threshold sensitivity for \lru-Live with set dueling: geomean
+  \caption{DoA threshold sensitivity for \lru-Live: geomean
     IPC speedup vs.\ \lru per suite, normalised to each suite's own peak
     across the sweep. Y-axis is broken (dashed = crosses the break) to show
     Google's and SPEC's low-$\theta$ values without compressing the rest. GMS
@@ -541,55 +489,6 @@ dominates per-workload, motivating the suite-level threshold optimisation.
 \end{minipage}
 \end{figure*}
 
-\subsection{Set dueling}
-\label{sec:setdueling}
-
-% TODO: add figure showing per-suite speedup for conservative/aggressive fixed configs
-% vs hit-count duel vs latency duel, for both SRRIP-Live and IPV-Live.
-
-Without set dueling, a fixed-config policy must choose a single insertion depth
-for all workloads. For \ipv-Live the tradeoff is stark: the aggressive configuration
-improves GAP by $+6.1\%$ but regresses Ligra by $-1.8\%$, while the conservative
-configuration is near-neutral everywhere. No fixed config achieves a positive pooled
-result across all seven suites.
-
-Set dueling resolves this by selecting the insertion depth per workload at runtime.
-The hit-count duel works well for \srrip-Live ($+1.5\%$ pooled) but fails on QMM
-for \ipv-Live: the conservative configuration retains \doa blocks longer and
-accumulates enough sampler hits to always be preferred, even though the aggressive
-configuration would produce better \textsc{IPC}. Switching to the miss-latency
-signal fixes this ($+0.2\% \to +1.5\%$ on QMM for \ipv-Live) and raises the
-\ipv-Live pooled speedup from $+0.9\%$ (hit-count) to $+1.5\%$ (latency).
-For \srrip-Live both signals are reliable; the hit-count duel is marginally better
-pooled ($+1.5\%$ vs.\ $+1.4\%$ latency) because \srrip-Live's reduced block
-retention does not bias the hit-count signal.
-
-\subsection{Bypass as a liveness state}
-\label{sec:bypassstate}
-
-% TODO: add figure comparing fixed-bypass vs bypass-duel vs no-bypass baseline
-% across QMM, Ligra, SPEC.
-
-Liveness guidance naturally extends to \emph{bypass}: instead of inserting a
-\doa-predicted block at any \rrpv, the block is not inserted at all, preserving
-full cache capacity for live blocks.
-We evaluate this for \lru-Live, where the insertion-position continuum already
-makes the tradeoff explicit.
-With a fixed bypass policy QMM improves by $+2.9\%$ and SPEC by $+2.9\%$, but Ligra
-regresses $-1.3\%$ because Ligra's irregular access pattern generates frequent
-\doa mispredictions: blocks classified dead are later re-referenced, and bypassing
-them turns those re-accesses into expensive \textsc{DRAM} misses.
-
-The latency-based duel resolves this per-workload: sampler sets using bypass
-accumulate lower fill latency on QMM and SPEC (fewer misses, better row-buffer
-locality), so followers adopt bypass; on Ligra the bypass sampler sets incur
-higher fill latency from the mispredicted-dead re-fetches, so followers stay with
-the conservative insertion.
-The pooled result is $+2.8\%$ vs.\ \lru --- higher than fixed bypass ($+2.6\%$)
-and substantially higher than no-bypass guidance ($+2.3\%$) --- confirming that the
-duel captures the workload-conditional value of bypass rather than applying it
-uniformly.
-
 \subsection{Threshold sensitivity}
 \label{sec:thd_sens}
 
@@ -597,7 +496,7 @@ uniformly.
 \label{sec:llcsize}
 
 Figure~\ref{fig:doa_thd} sweeps the DoA threshold $\theta_{\mathrm{doa}}$ for
-\lru-Live \emph{with set dueling} on every suite, each curve normalised to
+\lru-Live on every suite, each curve normalised to
 that suite's own peak speedup across the sweep. GAP, Ligra, and QMM peak at
 a low threshold ($\theta_{\mathrm{doa}}=2$, $4$, and $6$ respectively) and
 decline as the threshold rises, reaching $61.9\%$, $74.9\%$, and $78.1\%$ of
@@ -610,7 +509,7 @@ GMS is omitted from the figure (see caption) and is negative throughout the
 tested range, improving from $-1.74\%$ at $\theta_{\mathrm{doa}}=2$ to
 $-0.40\%$ at $\theta_{\mathrm{doa}}=30$ without crossing to positive.
 $\theta_{\mathrm{doa}}=6$ --- the value used elsewhere in this paper --- is
-no longer the best universal compromise under dueling: SPEC and Google sit
+not the best universal compromise: SPEC and Google sit
 at only $34.5\%$ and $27.3\%$ of their peak there, while
 $\theta_{\mathrm{doa}}=16$ keeps every suite at $66\%$ of peak or higher
 (GAP $66.1\%$, Ligra $81.4\%$, QMM $89.8\%$, SPEC $72.4\%$, Google $92.9\%$,
