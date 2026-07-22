@@ -37,7 +37,8 @@ struct InsertionDecision { bool bypass; uint32_t rank; };
 
 uint32_t graduated_position(uint32_t N, uint16_t num_doa)
 {
-    return N / (1u << (num_doa + 1));
+    const uint32_t denom = 1u << (num_doa + 1);
+    return (N + denom - 1) / denom; // ceiling
 }
 
 InsertionDecision decide_insertion(const PCState& st, uint32_t N)
