@@ -108,6 +108,20 @@ bool CACHE::handle_fill(const PACKET& fill_mshr)
 
       way->pf_metadata = metadata_thru;
     }
+  } else if (fill_bypassed && fill_mshr.type == WRITE) {
+    // A bypassed WRITE holds the only up-to-date copy of the line, so declining
+    // to allocate it obliges us to send it down rather than drop it.
+    PACKET writeback_packet;
+
+    writeback_packet.cpu = fill_mshr.cpu;
+    writeback_packet.address = fill_mshr.address;
+    writeback_packet.data = fill_mshr.data;
+    writeback_packet.instr_id = fill_mshr.instr_id;
+    writeback_packet.ip = 0;
+    writeback_packet.type = WRITE;
+    writeback_packet.pf_metadata = fill_mshr.pf_metadata;
+
+    success = lower_level->add_wq(writeback_packet);
   } else if (!fill_bypassed) {
     assert(fill_mshr.type != WRITE);
 
