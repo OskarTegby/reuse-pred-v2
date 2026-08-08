@@ -40,6 +40,7 @@
 enum class liveness_class { doa, alive };
 
 constexpr unsigned PRED_COUNTERS = 256;
+bool write_hit_counts_as_access();
 
 struct cache_stats {
   std::string name;
@@ -97,6 +98,8 @@ class CACHE : public champsim::operable, public MemoryRequestConsumer, public Me
     bool prefetch = false;
     bool dirty = false;
     bool accessed = false;
+    bool write_hit = false;
+    bool read_hit = false;
 
     uint64_t address = 0;
     uint64_t v_address = 0;
@@ -104,6 +107,9 @@ class CACHE : public champsim::operable, public MemoryRequestConsumer, public Me
     uint64_t ip = 0;
 
     uint32_t pf_metadata = 0;
+    uint64_t ctr_at_fill = 0;
+    uint64_t xctr_at_fill = 0;
+    unsigned xmask_at_fill = 0;
 
     uint64_t install_cycle   = 0;
   };
@@ -120,19 +126,53 @@ class CACHE : public champsim::operable, public MemoryRequestConsumer, public Me
 
   unsigned pc_counters[PRED_COUNTERS] = {};
 
-  bool use_addr_key   = false;
-  bool bypass_enabled = false;
+  bool use_addr_key      = false;
+  bool bypass_enabled    = false;
+  bool bypass_hardcoded  = false;
+
+  bool cross_level_bypass_enabled = false;
+  uint64_t cross_level_bypass_thd = 3;
+  mutable CACHE* cross_level_source_cache = nullptr;
+  mutable bool cross_level_source_resolved = false;
+  bool cross_level_guidance_enabled = false;
 
   liveness_class classify_block_liveness(uint64_t block_address, uint64_t pc) const;
 
   void load_predictor_settings();
+  void configure_counter_init();
   void configure_guidance_thd();
   void configure_repl_hist_table();
   void configure_bypass_llc();
+  void configure_cross_level_bypass();
+  bool cross_level_says_doa(uint64_t key) const;
   bool should_bypass(uint64_t key, uint64_t bypass_threshold, bool bypass_allowed);
   void update_eviction_counters(const BLOCK& victim, liveness_class lv);
   void print_pc_counter_stats(const char* prefix) const;
   bool resolve_fill_bypass(const PACKET& fill_mshr, set_type::iterator& way, set_type::iterator set_end);
+
+  struct DoaStreakHistory {
+    uint64_t total_evictions = 0, total_doa = 0, total_alive = 0;
+    bool     ever_doa = false;
+    uint64_t events_since_first_doa = 0, doa_since_first_doa = 0, alive_since_first_doa = 0;
+    uint64_t cur_streak = 0, streak_sum = 0, streak_count = 0;
+  };
+  std::unordered_map<uint64_t, DoaStreakHistory> doa_streak_history;
+  std::array<uint64_t, 24> streak_hist{};
+  std::array<uint64_t, 24> insert_hist{};
+  std::array<uint64_t, 24> acc_bin_doa{};
+  std::array<uint64_t, 24> acc_bin_live{};
+  std::array<uint64_t, 24> xacc_bin_doa{};
+  std::array<uint64_t, 24> xacc_bin_live{};
+  CACHE* xacc_source = nullptr;
+  bool xacc_resolved = false;
+  uint64_t counter_from_source(uint64_t block_address, uint64_t pc);
+  unsigned source_agreement_mask(uint64_t block_address, uint64_t pc);
+  static CACHE* lookup_cache(const char* name);
+  uint64_t ev_untouched = 0, ev_write_only = 0, ev_read = 0;
+  std::array<uint64_t, 16> mask_bin_doa{};
+  std::array<uint64_t, 16> mask_bin_live{};
+  uint64_t counter_for_fill(uint64_t block_address, uint64_t pc) const;
+  void record_doa_streak_eviction(uint64_t ip, bool accessed);
 
 public:
   struct NonTranslatingQueues : public champsim::operable {
@@ -244,6 +284,7 @@ public:
   bool should_activate_prefetcher(const PACKET& pkt) const;
 
   void print_deadlock() override;
+  void print_doa_streak_stats() const;
 
 #include "cache_modules.inc"
 

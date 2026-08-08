@@ -13,26 +13,27 @@ namespace
 
 constexpr int maxRRPV = 3;
 
-// SRRIP_LIVE_TARGET=none explicitly disables liveness guidance while still
-// on the LLC (used by the "bypass" condition: raw DoA bypass stays active in
-// cache.cc, but insertion/promotion here falls back to plain SRRIP). Liveness
-// guidance never applies anywhere but the LLC.
 bool liveness_enabled_for(const CACHE& c)
 {
   const char* target_env = std::getenv("SRRIP_LIVE_TARGET");
-  const bool disabled = target_env && target_env[0] != '\0' && std::string(target_env) != "llc";
-  return (c.NAME == "LLC") && !disabled;
+  if (!target_env || target_env[0] == '\0' || std::string(target_env) == "llc")
+    return c.NAME == "LLC";
+  if (std::string(target_env) == "none")
+    return false;
+  std::string want = target_env;
+  for (auto& ch : want) ch = static_cast<char>(std::toupper(static_cast<unsigned char>(ch)));
+  return c.NAME == want || c.NAME == ("cpu0_" + want);
 }
 
-std::unordered_map<CACHE*, std::vector<int>>    rrpv_values;
-std::unordered_map<CACHE*, std::vector<int8_t>> slot_class; // 0=unguided 1=doa 2=alive
+std::unordered_map<CACHE*, std::vector<int>>      rrpv_values;
+std::unordered_map<CACHE*, std::vector<int8_t>>   slot_class;
+std::unordered_map<CACHE*, std::vector<uint64_t>> install_cycle;
 
 struct Stats {
   uint64_t ins_unguided = 0, ins_doa = 0, ins_alive = 0;
   uint64_t hit_unguided = 0, hit_doa = 0, hit_alive = 0;
   std::array<uint64_t, 4> evict_rrpv_doa = {}, evict_rrpv_alive = {}, evict_rrpv_unguided = {};
   uint64_t aging_loops = 0;
-  // Cycles ins->evict per insertion class; [0]=unguided [1]=doa [2]=alive
   std::array<uint64_t, 3> lifespan_sum = {}, lifespan_count = {};
 };
 std::unordered_map<CACHE*, Stats> stats;
@@ -46,11 +47,6 @@ int parse_env_rrpv(const char* var, int dflt)
   return (e && *e) ? std::atoi(e) : dflt;
 }
 
-// Aggressive DoA insertion/promotion (RRPV=maxRRPV, no promotion credit on
-// hit) won outright against the conservative alternative (RRPV=2/2) on every
-// suite tested, and set dueling between them only ever won by a small
-// margin overall -- so this is now the sole default, still overridable via
-// env var for experimentation.
 int doa_ins_rrpv() { if (g_doa_ins_rrpv < 0) g_doa_ins_rrpv = parse_env_rrpv("SRRIP_DOA_INS_RRPV", 3); return g_doa_ins_rrpv; }
 int doa_hit_rrpv() { if (g_doa_hit_rrpv < 0) g_doa_hit_rrpv = parse_env_rrpv("SRRIP_DOA_HIT_RRPV", 0); return g_doa_hit_rrpv; }
 
@@ -116,9 +112,10 @@ void handle_unguided(int& rrpv, int8_t& cls, bool hit, uint32_t type, Stats& st)
 void CACHE::initialize_replacement()
 {
   const std::size_t n = NUM_SET * NUM_WAY;
-  ::rrpv_values[this] = std::vector<int>(n, ::maxRRPV);
-  ::slot_class[this]  = std::vector<int8_t>(n, 0);
-  ::stats[this]       = Stats{};
+  ::rrpv_values[this]    = std::vector<int>(n, ::maxRRPV);
+  ::slot_class[this]     = std::vector<int8_t>(n, 0);
+  ::install_cycle[this]  = std::vector<uint64_t>(n, 0);
+  ::stats[this]          = Stats{};
   (void)doa_ins_rrpv(); (void)doa_hit_rrpv();
 }
 
@@ -132,40 +129,40 @@ uint32_t CACHE::find_victim(uint32_t triggering_cpu, uint64_t instr_id, uint32_t
   assert(begin <= victim);
   assert(victim < end);
 
-  const uint32_t way = static_cast<uint32_t>(std::distance(begin, victim));
-  const std::size_t idx = set * NUM_WAY + way;
-  const int8_t cls  = ::slot_class[this][idx];
-  const int    rrpv = ::rrpv_values[this][idx];
-
-  ::record_eviction(st, cls, rrpv);
-  ::record_lifespan(st, cls, current_set[way].install_cycle, current_cycle);
-  return way;
+  return static_cast<uint32_t>(std::distance(begin, victim));
 }
 
 void CACHE::update_replacement_state(uint32_t triggering_cpu, uint32_t set, uint32_t way, uint64_t full_addr, uint64_t ip, uint64_t victim_addr,
                                       uint32_t type, uint8_t hit)
 {
-  // NOTE: plain SRRIP promotes every hit (including write hits) to RRPV 0. We
-  // deliberately do NOT special-case write hits here, so that when liveness
-  // provides no signal (block defaults to alive), this policy behaves
-  // identically to baseline SRRIP -- any speedup is then attributable to
-  // liveness guidance alone.
   const std::size_t idx = set * NUM_WAY + way;
   auto& rrpv = ::rrpv_values[this][idx];
   auto& cls  = ::slot_class[this][idx];
+  auto& inst = ::install_cycle[this][idx];
   auto& st   = ::stats[this];
 
   if (!::liveness_enabled_for(*this)) {
+    if (!hit && inst != 0) {
+      ::record_eviction(st, cls, rrpv);
+      ::record_lifespan(st, cls, inst, current_cycle);
+    }
     ::handle_unguided(rrpv, cls, hit, type, st);
+    if (!hit) inst = current_cycle;
     return;
   }
 
   if (hit) {
     ::handle_hit(rrpv, cls, type, st);
-  } else {
-    const liveness_class lc = classify_block_liveness(full_addr, ip);
-    cls = ::handle_fill(rrpv, lc, st);
+    return;
   }
+
+  if (inst != 0) {
+    ::record_eviction(st, cls, rrpv);
+    ::record_lifespan(st, cls, inst, current_cycle);
+  }
+  const liveness_class lc = classify_block_liveness(full_addr, ip);
+  cls = ::handle_fill(rrpv, lc, st);
+  inst = current_cycle;
 }
 
 void CACHE::replacement_final_stats()

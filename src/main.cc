@@ -202,6 +202,9 @@ int main(int argc, char** argv)
   for (CACHE& cache : gen_environment.cache_view())
     cache.impl_replacement_final_stats();
 
+  for (CACHE& cache : gen_environment.cache_view())
+    cache.print_doa_streak_stats();
+
   if (knob_json_out) {
     if (json_file.is_open()) {
       champsim::json_printer printer{json_file};

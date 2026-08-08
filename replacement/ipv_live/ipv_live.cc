@@ -20,10 +20,6 @@ std::vector<int> clamp_ipv(const std::vector<int>& base, std::size_t k, int floo
   return v;
 }
 
-// SRRIP_LIVE_TARGET=none explicitly disables liveness guidance while still
-// on the LLC (used by the "bypass" condition: raw DoA bypass stays active
-// in cache.cc, but insertion/promotion here falls back to plain IPV).
-// Liveness guidance never applies anywhere but the LLC.
 bool is_targeted(const CACHE& c)
 {
   if (c.NAME != "LLC") return false;
@@ -31,12 +27,11 @@ bool is_targeted(const CACHE& c)
   return !(target_env && target_env[0] != '\0' && std::string(target_env) != "llc");
 }
 
-// per-CACHE* state (NUM_WAY, hence vector length, varies by cache -- LLC vs STLB)
 std::unordered_map<CACHE*, std::vector<int>>      g_ipv_alive;
 std::unordered_map<CACHE*, std::vector<int>>      g_ipv_doa;
 std::unordered_map<CACHE*, std::vector<uint16_t>> g_order;
 std::unordered_map<CACHE*, std::vector<uint16_t>> g_rank;
-std::unordered_map<CACHE*, std::vector<int8_t>>   g_slot_class; // 0=unguided 1=doa 2=alive
+std::unordered_map<CACHE*, std::vector<int8_t>>   g_slot_class;
 
 struct Stats {
   uint64_t ins_unguided = 0, ins_doa = 0, ins_alive = 0;
@@ -58,11 +53,6 @@ void init_ipv_vectors(CACHE* c, std::size_t k)
   const std::vector<int> alive = parse_ipv_env("IPV_ALIVE", k, default_ipv(k));
   g_ipv_alive[c] = alive;
 
-  // Floor-clamped at N-1 (locked at the tail regardless of hits): the
-  // aggressive configuration won outright against a floor(2N/3) conservative
-  // alternative on every suite tested, and set dueling between them only
-  // ever won by a small margin overall -- so this is now the sole default,
-  // still overridable via IPV_DOA for experimentation.
   const int floor = static_cast<int>(k) - 1;
   g_ipv_doa[c] = parse_ipv_env("IPV_DOA", k, clamp_ipv(alive, k, floor));
 }
@@ -161,7 +151,7 @@ void CACHE::update_replacement_state(uint32_t triggering_cpu, uint32_t set, uint
   const ::SlotContext ctx = ::make_slot_context(this, set, NUM_WAY);
 
   if (hit) {
-    if (type == WRITE) return; // store hits don't trigger promotion
+    if (type == WRITE) return;
     ::handle_hit(this, ctx, way, cls, st);
     return;
   }

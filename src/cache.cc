@@ -17,6 +17,8 @@
 #include "cache.h"
 
 #include <algorithm>
+#include <cstdio>
+#include <cstdlib>
 #include <iomanip>
 #include <iterator>
 #include <numeric>
@@ -25,6 +27,18 @@
 #include "champsim_constants.h"
 #include "instruction.h"
 #include "util.h"
+
+namespace
+{
+bool doa_streak_probe_enabled()
+{
+  static const bool enabled = [] {
+    const char* v = std::getenv("DOA_STREAK_PROBE");
+    return v && v[0] != '\0' && v[0] != '0';
+  }();
+  return enabled;
+}
+} // namespace
 
 bool CACHE::handle_fill(const PACKET& fill_mshr)
 {
@@ -35,10 +49,6 @@ bool CACHE::handle_fill(const PACKET& fill_mshr)
   auto way = std::find_if_not(set_begin, set_end, [](auto x) { return x.valid; });
   bool policy_skipped_fill = false;
   if (way == set_end) {
-    // A replacement policy may return NUM_WAY (never a real way index) to mean
-    // "no victim -- bypass this fill entirely," independent of the shared
-    // LIVENESS_BYPASS/resolve_fill_bypass mechanism below (every existing
-    // policy always returns 0..NUM_WAY-1, so this is inert for all of them).
     const auto victim_idx = impl_find_victim(fill_mshr.cpu, fill_mshr.instr_id, get_set_index(fill_mshr.address), &*set_begin, fill_mshr.ip,
                                                 fill_mshr.address, fill_mshr.type);
     if (victim_idx < NUM_WAY)
@@ -97,16 +107,35 @@ bool CACHE::handle_fill(const PACKET& fill_mshr)
         sim_stats.back().evictions++;
         if (!way->accessed)
           sim_stats.back().doa++;
+        record_doa_streak_eviction(way->ip, way->accessed);
+        if (way->read_hit)        ++ev_read;
+        else if (way->write_hit)  ++ev_write_only;
+        else                      ++ev_untouched;
+        if (doa_streak_probe_enabled()) {
+          unsigned b = 0;
+          for (uint64_t v = way->ctr_at_fill; v > 1; v >>= 1) ++b;
+          b = std::min<unsigned>(b, 23);
+          (way->accessed ? acc_bin_live : acc_bin_doa)[b]++;
+          unsigned xb = 0;
+          for (uint64_t v = way->xctr_at_fill; v > 1; v >>= 1) ++xb;
+          (way->accessed ? xacc_bin_live : xacc_bin_doa)[std::min<unsigned>(xb, 23)]++;
+          (way->accessed ? mask_bin_live : mask_bin_doa)[way->xmask_at_fill & 0xF]++;
+        }
       }
 
       way->valid = true;
       way->prefetch = fill_mshr.prefetch_from_this;
       way->dirty = (fill_mshr.type == WRITE);
       way->accessed = false;
+      way->write_hit = false;
+      way->read_hit = false;
       way->address = fill_mshr.address;
       way->v_address = fill_mshr.v_address;
       way->data = fill_mshr.data;
       way->ip = fill_mshr.ip;
+      way->ctr_at_fill = counter_for_fill(fill_mshr.address, fill_mshr.ip);
+      way->xctr_at_fill = counter_from_source(fill_mshr.address, fill_mshr.ip);
+      way->xmask_at_fill = source_agreement_mask(fill_mshr.address, fill_mshr.ip);
       way->install_cycle  = current_cycle;
 
       last_fill_latency = fill_latency;
@@ -195,10 +224,15 @@ bool CACHE::try_hit(const PACKET& handle_pkt)
       ret->return_data(copy);
 
     way->dirty = (handle_pkt.type == WRITE);
-    if (handle_pkt.type != WRITE) {
-      if (NAME == "cpu0_STLB" || NAME == "LLC")
-        way->accessed = true;
-    }
+    // A writeback absorbed from the level above is a hit that saves a memory write, so
+    // whether it counts as "used" is a definitional choice. Mazumdar et al. (HPCA'21)
+    // count any hit; we default to reads only. DOA_WRITE_COUNTS=1 selects their definition.
+    if (handle_pkt.type == WRITE)
+      way->write_hit = true;
+    else
+      way->read_hit = true;
+    if (handle_pkt.type != WRITE || write_hit_counts_as_access())
+      way->accessed = true;
 
     // update prefetch stats and reset prefetch bit
     if (way->prefetch && !handle_pkt.prefetch_from_this) {
@@ -613,4 +647,209 @@ void CACHE::print_deadlock()
   } else {
     std::cout << NAME << " PQ empty" << std::endl;
   }
+}
+
+void CACHE::record_doa_streak_eviction(uint64_t ip, bool accessed)
+{
+  if (!doa_streak_probe_enabled())
+    return;
+
+  auto& h = doa_streak_history[ip];
+  h.total_evictions++;
+  if (accessed) h.total_alive++; else h.total_doa++;
+
+  if (!h.ever_doa) {
+    if (!accessed) {
+      h.ever_doa = true;
+      h.cur_streak = 1;
+    }
+    return;
+  }
+  h.events_since_first_doa++;
+  if (!accessed) {
+    h.doa_since_first_doa++;
+    h.cur_streak++;
+  } else {
+    h.alive_since_first_doa++;
+    if (h.cur_streak > 0) {
+      h.streak_sum += h.cur_streak;
+      h.streak_count++;
+      unsigned b = 0;
+      for (uint64_t v = h.cur_streak; v > 1; v >>= 1) ++b;
+      streak_hist[std::min<unsigned>(b, 23)]++;
+    }
+    h.cur_streak = 0;
+  }
+}
+
+void CACHE::print_doa_streak_stats() const
+{
+  if (!doa_streak_probe_enabled())
+    return;
+
+  uint64_t distinct_pcs = doa_streak_history.size();
+  uint64_t pcs_ever_doa = 0;
+  uint64_t tot_events_after = 0, tot_doa_after = 0, tot_alive_after = 0;
+  double   pc_avg_streak_sum = 0.0;
+  uint64_t pc_avg_streak_count = 0;
+  uint64_t event_streak_sum = 0, event_streak_count = 0;
+
+  for (const auto& [pc, h] : doa_streak_history) {
+    if (!h.ever_doa) continue;
+    ++pcs_ever_doa;
+    tot_events_after += h.events_since_first_doa;
+    tot_doa_after += h.doa_since_first_doa;
+    tot_alive_after += h.alive_since_first_doa;
+
+    uint64_t ssum = h.streak_sum, scount = h.streak_count;
+    if (h.cur_streak > 0) { ssum += h.cur_streak; scount += 1; }
+
+    event_streak_sum += ssum;
+    event_streak_count += scount;
+    if (scount > 0) {
+      pc_avg_streak_sum += static_cast<double>(ssum) / scount;
+      pc_avg_streak_count += 1;
+    }
+  }
+
+  auto pct = [](uint64_t n, uint64_t d) -> double { return d ? 100.0 * n / d : 0.0; };
+
+  printf("%s DOA-STREAK-PROBE STATS:\n", NAME.c_str());
+  {
+    uint64_t tot = 0;
+    for (auto v : streak_hist) tot += v;
+    if (tot > 0) {
+      printf("  streak-length histogram (reset values), %lu resets:\n", (unsigned long)tot);
+      for (unsigned b = 0; b < streak_hist.size(); ++b) {
+        if (streak_hist[b] == 0) continue;
+        printf("    STREAKBIN %lu-%lu : %lu (%.2f%%)\n",
+               (unsigned long)(1ull << b), (unsigned long)((1ull << (b + 1)) - 1),
+               (unsigned long)streak_hist[b], 100.0 * streak_hist[b] / tot);
+      }
+    }
+  }
+  {
+    uint64_t tot = 0;
+    for (auto v : insert_hist) tot += v;
+    if (tot > 0) {
+      printf("  counter-at-insertion histogram, %lu insertions:\n", (unsigned long)tot);
+      for (unsigned b = 0; b < insert_hist.size(); ++b) {
+        if (insert_hist[b] == 0) continue;
+        printf("    INSBIN %lu-%lu : %lu (%.2f%%)\n",
+               (unsigned long)(1ull << b), (unsigned long)((1ull << (b + 1)) - 1),
+               (unsigned long)insert_hist[b], 100.0 * insert_hist[b] / tot);
+      }
+    }
+  }
+  {
+    std::array<uint64_t, 24> pc_bin{}, ev_bin{};
+    uint64_t tot_pc = 0, tot_ev = 0;
+    for (const auto& [pc, h] : doa_streak_history) {
+      if (!h.ever_doa) continue;
+      uint64_t ssum = h.streak_sum, scount = h.streak_count;
+      if (h.cur_streak > 0) { ssum += h.cur_streak; scount += 1; }
+      if (scount == 0) continue;
+      unsigned b = 0;
+      for (uint64_t v = ssum / scount; v > 1; v >>= 1) ++b;
+      b = std::min<unsigned>(b, 23);
+      pc_bin[b]++; ev_bin[b] += h.total_doa;
+      tot_pc++; tot_ev += h.total_doa;
+    }
+    if (tot_pc > 0) {
+      printf("  per-PC mean streak histogram, %lu PCs, %lu DoA evictions:\n",
+             (unsigned long)tot_pc, (unsigned long)tot_ev);
+      for (unsigned b = 0; b < pc_bin.size(); ++b) {
+        if (pc_bin[b] == 0) continue;
+        printf("    PCBIN %lu-%lu : %lu PCs (%.2f%%), %lu DoA evictions (%.2f%%)\n",
+               (unsigned long)(1ull << b), (unsigned long)((1ull << (b + 1)) - 1),
+               (unsigned long)pc_bin[b], 100.0 * pc_bin[b] / tot_pc,
+               (unsigned long)ev_bin[b], tot_ev ? 100.0 * ev_bin[b] / tot_ev : 0.0);
+      }
+    }
+  }
+  {
+    uint64_t td = 0, tl = 0;
+    for (unsigned b = 0; b < acc_bin_doa.size(); ++b) { td += acc_bin_doa[b]; tl += acc_bin_live[b]; }
+    if (td + tl > 0) {
+      printf("  outcome by counter-at-fill, %lu DoA / %lu live evictions:\n",
+             (unsigned long)td, (unsigned long)tl);
+      for (unsigned b = 0; b < acc_bin_doa.size(); ++b) {
+        uint64_t n = acc_bin_doa[b] + acc_bin_live[b];
+        if (n == 0) continue;
+        printf("    ACCBIN %lu-%lu : %lu evictions, %lu DoA (P(DoA)=%.2f%%)\n",
+               (unsigned long)(1ull << b), (unsigned long)((1ull << (b + 1)) - 1),
+               (unsigned long)n, (unsigned long)acc_bin_doa[b], 100.0 * acc_bin_doa[b] / n);
+      }
+    }
+  }
+  {
+    uint64_t td = 0, tl = 0;
+    for (unsigned b = 0; b < xacc_bin_doa.size(); ++b) { td += xacc_bin_doa[b]; tl += xacc_bin_live[b]; }
+    if (td + tl > 0) {
+      printf("  outcome by SOURCE-level counter-at-fill, %lu DoA / %lu live evictions:\n",
+             (unsigned long)td, (unsigned long)tl);
+      for (unsigned b = 0; b < xacc_bin_doa.size(); ++b) {
+        uint64_t n = xacc_bin_doa[b] + xacc_bin_live[b];
+        if (n == 0) continue;
+        printf("    XACCBIN %lu-%lu : %lu evictions, %lu DoA (P(DoA)=%.2f%%)\n",
+               (unsigned long)(1ull << b), (unsigned long)((1ull << (b + 1)) - 1),
+               (unsigned long)n, (unsigned long)xacc_bin_doa[b], 100.0 * xacc_bin_doa[b] / n);
+      }
+    }
+  }
+  {
+    uint64_t td = 0, tl = 0;
+    for (unsigned m = 0; m < 16; ++m) { td += mask_bin_doa[m]; tl += mask_bin_live[m]; }
+    if (td + tl > 0) {
+      printf("  outcome by source-agreement mask (bit0=L1D bit1=L2C bit2=DTLB bit3=STLB), "
+             "%lu DoA / %lu live:\n", (unsigned long)td, (unsigned long)tl);
+      for (unsigned m = 0; m < 16; ++m) {
+        uint64_t n = mask_bin_doa[m] + mask_bin_live[m];
+        if (n == 0) continue;
+        printf("    MASKBIN %u%u%u%u : %lu evictions, %lu DoA (P(DoA)=%.2f%%)\n",
+               (m >> 3) & 1, (m >> 2) & 1, (m >> 1) & 1, m & 1,
+               (unsigned long)n, (unsigned long)mask_bin_doa[m], 100.0 * mask_bin_doa[m] / n);
+      }
+    }
+  }
+  // Per-PC behaviour across the hierarchy: for every PC that produced a DoA eviction
+  // here, report how the same PC behaved at each other level. One line per PC.
+  if (std::getenv("PC_XLEVEL_DUMP")) {
+    static const char* kLv[5] = {"cpu0_L1D", "cpu0_L2C", "cpu0_DTLB", "cpu0_STLB", "LLC"};
+    printf("%s PC-XLEVEL BEGIN (pc, then per level: evictions/doa for L1D L2C DTLB STLB LLC)\n", NAME.c_str());
+    for (const auto& [pc, h] : doa_streak_history) {
+      if (h.total_doa == 0) continue;
+      printf("    PCXL %lx", (unsigned long)pc);
+      for (unsigned i = 0; i < 5; ++i) {
+        uint64_t ev = 0, dd = 0;
+        if (CACHE* c = lookup_cache(kLv[i])) {
+          auto it = c->doa_streak_history.find(pc);
+          if (it != c->doa_streak_history.end()) { ev = it->second.total_evictions; dd = it->second.total_doa; }
+        }
+        printf(" %lu/%lu", (unsigned long)ev, (unsigned long)dd);
+      }
+      printf("\n");
+    }
+    printf("%s PC-XLEVEL END\n", NAME.c_str());
+  }
+  {
+    const uint64_t tot3 = ev_untouched + ev_write_only + ev_read;
+    if (tot3 > 0)
+      printf("  EVICT3 untouched %lu (%.2f%%)  write-only %lu (%.2f%%)  read %lu (%.2f%%)\n",
+             (unsigned long)ev_untouched, 100.0 * ev_untouched / tot3,
+             (unsigned long)ev_write_only, 100.0 * ev_write_only / tot3,
+             (unsigned long)ev_read, 100.0 * ev_read / tot3);
+  }
+  printf("  Distinct PCs (evicted at least once): %lu\n", distinct_pcs);
+  printf("  PCs ever DoA-evicted: %lu (%.1f%% of distinct PCs)\n",
+         pcs_ever_doa, pct(pcs_ever_doa, distinct_pcs));
+  printf("  Post-first-DoA stickiness: of %lu evictions after a PC's first DoA eviction, "
+         "%lu (%.1f%%) were also DoA, %lu (%.1f%%) were alive\n",
+         tot_events_after, tot_doa_after, pct(tot_doa_after, tot_events_after),
+         tot_alive_after, pct(tot_alive_after, tot_events_after));
+  printf("  Avg DoA streak length -- event-weighted: %.2f (n=%lu streaks)  "
+         "PC-weighted (mean of each PC's own avg): %.2f (n=%lu PCs)\n",
+         event_streak_count ? static_cast<double>(event_streak_sum) / event_streak_count : 0.0, event_streak_count,
+         pc_avg_streak_count ? pc_avg_streak_sum / pc_avg_streak_count : 0.0, pc_avg_streak_count);
+  printf("\n");
 }

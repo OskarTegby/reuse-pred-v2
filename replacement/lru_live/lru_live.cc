@@ -1,28 +1,5 @@
-// lru_live — LRU with liveness-informed insertion position.
-//
-// Policy rules (two liveness classes: was the block ever touched before
-// eviction? "mostly-dead" — an intermediate, wall-clock-halflife-based third
-// class — was tried and removed: no configuration tested showed it
-// contributing a real, reproducible IPC benefit, and it was actively costing
-// IPC on some suites. Set dueling between conservative (2N/3) and aggressive
-// (rank 0) DoA insertion was tried too and removed: aggressive won outright
-// on every suite tested.)
-// --------------------------------------
-//   DoA fill:   position 0 (LRU end) — immediate eviction candidate
-//   Alive fill: position N-1 (MRU)   — standard LRU
-//   All hits:   full promotion to MRU
-//
-// Capped-promotion variant (env LRU_LIVE_HIT_INIT=1)
-// ---------------------------------------------------
-//   On a (read) hit, instead of promoting every block to MRU, a DoA-classified
-//   block is instead moved to its class's initial insertion position (rank 0)
-//   rather than earning full credit. Default off (=0): full MRU promotion on
-//   every hit.
-//
-// Internal representation: per-slot rank, 0=LRU, N-1=MRU.
-// All N ranks in a set are always a permutation of [0, N-1].
-
 #include <cassert>
+#include <cctype>
 #include <cstdint>
 #include <optional>
 #include <string>
@@ -30,12 +7,6 @@
 #include <vector>
 
 #include "cache.h"
-
-// DoA insertion mode (LRU_LIVE_DOA_INS env var):
-//   "lru"    (default): insert DoA at rank 0 (LRU position, evicted on next fill)
-//   "2n3"            : insert DoA at 2N/3 from MRU
-//   "bypass"         : insert DoA at rank 0 AND mark as bypass-priority, so
-//                      find_victim always returns bypass slots before any other
 
 namespace
 {
@@ -45,7 +16,6 @@ enum class DoAIns { Pos2N3, LRUpos, Bypass };
 bool bypass_allowed()
 {
     const char* e = std::getenv("LRU_LIVE_ALLOW_BYPASS");
-    // Default: bypass allowed. Set LRU_LIVE_ALLOW_BYPASS=0 to disable globally.
     return !(e && e[0] == '0');
 }
 
@@ -66,23 +36,18 @@ bool hit_init_enabled()
     return e && e[0] != '\0' && e[0] != '0';
 }
 
-// SRRIP_LIVE_TARGET=none explicitly disables liveness guidance while still
-// on the LLC (used by the "bypass" condition: raw DoA bypass stays active in
-// cache.cc, but insertion/promotion here falls back to plain LRU). Liveness
-// guidance never applies anywhere but the LLC.
 bool liveness_enabled_for(const CACHE& c)
 {
     const char* target_env = std::getenv("SRRIP_LIVE_TARGET");
-    const bool disabled = target_env && target_env[0] != '\0' && std::string(target_env) != "llc";
-    return (c.NAME == "LLC") && !disabled;
+    if (!target_env || target_env[0] == '\0' || std::string(target_env) == "llc")
+        return c.NAME == "LLC";
+    if (std::string(target_env) == "none")
+        return false;
+    std::string want = target_env;
+    for (auto& ch : want) ch = static_cast<char>(std::toupper(static_cast<unsigned char>(ch)));
+    return c.NAME == want || c.NAME == ("cpu0_" + want);
 }
 
-// --- Rank permutation --------------------------------------------------------
-// rank[way] in [0, N-1]; 0 = LRU (next victim), N-1 = MRU. Always a
-// permutation of [0, N-1] across all ways in a set.
-
-// Moves `way` from `old_rank` to `new_rank`, shifting every way in between
-// by one to keep the set a valid permutation.
 void shift_rank(uint32_t* ranks, uint32_t N, uint32_t way, uint32_t old_rank, uint32_t new_rank)
 {
     if (new_rank > old_rank) {
@@ -97,8 +62,6 @@ void shift_rank(uint32_t* ranks, uint32_t N, uint32_t way, uint32_t old_rank, ui
     ranks[way] = new_rank;
 }
 
-// --- DoA insertion/promotion rules --------------------------------------------
-
 struct DoAInsertion { uint32_t rank; bool bypass; };
 
 DoAInsertion doa_insertion(uint32_t N)
@@ -106,25 +69,20 @@ DoAInsertion doa_insertion(uint32_t N)
     switch (g_ins) {
         case DoAIns::LRUpos: return {0, false};
         case DoAIns::Bypass: return {0, true};
-        default:             return {N - 1 - (2 * N / 3), false}; // Pos2N3
+        default:             return {N - 1 - (2 * N / 3), false};
     }
 }
 
 uint32_t hit_promotion_target(int8_t cls, uint32_t N)
 {
-    if (hit_init_enabled() && cls == 1) return 0; // DoA: capped to initial position
-    return N - 1;                                  // full promotion to MRU
+    if (hit_init_enabled() && cls == 1) return 0;
+    return N - 1;
 }
 
-// --- Per-CACHE* state ---------------------------------------------------------
-
 std::unordered_map<CACHE*, std::vector<uint32_t>> lru_rank;
-std::unordered_map<CACHE*, std::vector<int8_t>>   slot_class; // 0=unguided 1=doa 2=alive
-std::unordered_map<CACHE*, std::vector<bool>>     bypassed;   // true = evict-first
+std::unordered_map<CACHE*, std::vector<int8_t>>   slot_class;
+std::unordered_map<CACHE*, std::vector<bool>>     bypassed;
 
-// Residency instrumentation. Time is measured in per-set "ticks": one tick per
-// update_replacement_state call for that set (every access touching the set).
-// Residency of a block = ticks survived between its fill and its eviction.
 std::unordered_map<CACHE*, std::vector<uint64_t>> fill_time;
 std::unordered_map<CACHE*, std::vector<uint64_t>> last_hit_time;
 std::unordered_map<CACHE*, std::vector<uint32_t>> hit_cnt;
@@ -141,8 +99,6 @@ struct Stats {
     uint64_t afterhit_cnt[3] = {};
 };
 std::unordered_map<CACHE*, Stats> stats;
-
-// --- Victim selection ----------------------------------------------------------
 
 uint32_t find_lru_victim(const uint32_t* ranks, uint32_t N)
 {
@@ -162,8 +118,6 @@ void record_eviction(Stats& st, int8_t cls)
     }
 }
 
-// Residency: ticks the victim survived. `now` is the count of set accesses so
-// far; the imminent fill (a hit=false update) will advance it.
 void record_residency(Stats& st, int8_t cls, uint64_t now, uint64_t fill_t, uint64_t last_hit_t, uint32_t hits)
 {
     const int c  = (cls >= 0 && cls < 3) ? cls : 0;
@@ -176,8 +130,6 @@ void record_residency(Stats& st, int8_t cls, uint64_t now, uint64_t fill_t, uint
     }
 }
 
-// --- Hit handling ----------------------------------------------------------
-
 void record_hit_class(Stats& st, int8_t cls)
 {
     switch (cls) {
@@ -187,8 +139,6 @@ void record_hit_class(Stats& st, int8_t cls)
     }
 }
 
-// Promotes the hit way to its class's target rank; a DoA hit only earns full
-// MRU credit unless capped by LRU_LIVE_HIT_INIT.
 void promote_on_hit(uint32_t* ranks, uint32_t N, uint32_t way, int8_t cls, Stats& st)
 {
     const uint32_t target = hit_promotion_target(cls, N);
@@ -197,11 +147,6 @@ void promote_on_hit(uint32_t* ranks, uint32_t N, uint32_t way, int8_t cls, Stats
     shift_rank(ranks, N, way, ranks[way], target);
 }
 
-// No write-hit special-case: keep the no-liveness default path identical to
-// baseline LRU so any speedup is attributable to liveness alone (matches the
-// fix applied to srrip_live/ipv_live). Returns the slot's bypass flag after
-// this hit (std::vector<bool> doesn't support real references, so the
-// caller assigns the result back rather than passing one in).
 bool handle_hit(uint32_t* ranks, uint32_t N, uint32_t way, int8_t cls, uint32_t type, bool use_liveness,
                  Stats& st, bool was_bypassed, uint64_t& last_hit_t, uint32_t& hits, uint64_t clk)
 {
@@ -214,8 +159,6 @@ bool handle_hit(uint32_t* ranks, uint32_t N, uint32_t way, int8_t cls, uint32_t 
         st.hit_unguided++;
         return was_bypassed;
     }
-    // A bypass-flagged DoA slot that gets a hit proved itself: demote the
-    // bypass flag so it is no longer eviction-priority and can age normally.
     if (cls == 1 && was_bypassed) {
         st.hit_doa_bypass++;
         record_hit_class(st, cls);
@@ -224,8 +167,6 @@ bool handle_hit(uint32_t* ranks, uint32_t N, uint32_t way, int8_t cls, uint32_t 
     record_hit_class(st, cls);
     return was_bypassed;
 }
-
-// --- Fill handling ---------------------------------------------------------
 
 struct FillDecision { int8_t cls; uint32_t rank; bool bypass; };
 
@@ -247,7 +188,7 @@ FillDecision handle_fill(uint32_t* ranks, uint32_t N, uint32_t way, bool use_liv
         ? decide_fill(lc, N, st)
         : FillDecision{0, N - 1, false};
     if (!use_liveness) st.ins_unguided++;
-    shift_rank(ranks, N, way, /*old_rank=*/0, d.rank); // evicted way just vacated rank 0
+    shift_rank(ranks, N, way, 0, d.rank);
     return d;
 }
 
@@ -276,24 +217,15 @@ uint32_t CACHE::find_victim(uint32_t triggering_cpu, uint64_t instr_id, uint32_t
                              uint32_t type)
 {
     const auto* ranks = ::lru_rank[this].data() + set * NUM_WAY;
-    auto& st = ::stats[this];
 
     const std::vector<bool>& bypass_vec = ::bypassed[this];
     std::optional<uint32_t> bypass_victim;
     for (uint32_t w = 0; w < NUM_WAY; ++w)
         if (bypass_vec[set * NUM_WAY + w] && (!bypass_victim || ranks[w] < ranks[*bypass_victim]))
             bypass_victim = w;
-    if (bypass_victim) {
-        st.evict_doa_bypass++;
-        return *bypass_victim;
-    }
+    if (bypass_victim) return *bypass_victim;
 
-    const uint32_t victim = ::find_lru_victim(ranks, NUM_WAY);
-    const std::size_t vi = set * NUM_WAY + victim;
-    const int8_t cls = ::slot_class[this][vi];
-    ::record_eviction(st, cls);
-    ::record_residency(st, cls, ::set_clock[this][set], ::fill_time[this][vi], ::last_hit_time[this][vi], ::hit_cnt[this][vi]);
-    return victim;
+    return ::find_lru_victim(ranks, NUM_WAY);
 }
 
 void CACHE::update_replacement_state(uint32_t triggering_cpu, uint32_t set, uint32_t way,
@@ -306,7 +238,6 @@ void CACHE::update_replacement_state(uint32_t triggering_cpu, uint32_t set, uint
     auto& cls   = ::slot_class[this][slot];
     auto& st    = ::stats[this];
 
-    // One tick per set access (hit or fill) — the residency clock.
     const uint64_t clk = ++::set_clock[this][set];
     const bool use_liveness = ::liveness_enabled_for(*this);
 
@@ -315,6 +246,12 @@ void CACHE::update_replacement_state(uint32_t triggering_cpu, uint32_t set, uint
                                                ::bypassed[this][slot], ::last_hit_time[this][slot],
                                                ::hit_cnt[this][slot], clk);
         return;
+    }
+
+    if (::fill_time[this][slot] != 0) {
+        ::record_eviction(st, cls);
+        if (::bypassed[this][slot]) st.evict_doa_bypass++;
+        ::record_residency(st, cls, clk, ::fill_time[this][slot], ::last_hit_time[this][slot], ::hit_cnt[this][slot]);
     }
 
     const liveness_class lc = use_liveness ? classify_block_liveness(full_addr, ip) : liveness_class::alive;
@@ -369,9 +306,6 @@ void CACHE::replacement_final_stats()
     printf("  Evict class mix  : DoA=%.1f%%  Alive=%.1f%%  Unguided=%.1f%%\n",
            pct(st.evict_doa,total_evict), pct(st.evict_alive,total_evict), pct(st.evict_unguided,total_evict));
 
-    // Residency (mean ticks survived) by class x reuse. Ticks = per-set accesses.
-    //   Check 1: among 0-hit blocks, DoA < Alive/Unguided (insertion logic).
-    //   Check 2: after-last-hit for DoA should SHRINK under LRU_LIVE_HIT_INIT.
     const char* cn[3] = {"Unguided", "DoA", "Alive"};
     auto mean = [](double s, uint64_t n) -> double { return n ? s / n : 0.0; };
     printf("  Residency (ticks) by class x reuse:\n");

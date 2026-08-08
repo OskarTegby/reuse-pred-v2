@@ -1,16 +1,3 @@
-// graduated_live — per-PC graduated insertion-position scheme, isolated
-// from cache_liveness.cc's THD_DOA/pc_counters system.
-//
-// Fresh PC -> inserted at N/2 (middle). Hit -> promote to MRU. Eviction
-// judges the outgoing PC by its own accessed bit: accessed -> PC goes on
-// the safe list (next fill inserts at MRU, num_doa cleared); !accessed ->
-// off the safe list, num_doa += 1. A PC's num_doa sets its next insertion
-// position (LRU end = 1, 1-indexed): N / 2^(num_doa+1). Once that would be
-// <=1, the PC bypasses instead: literal skip, no cache line used.
-//
-// Per-PC state keyed by full PC, not hashed -- hashing would conflate
-// unrelated PCs' history. A hashed variant is a separate later change.
-
 #include <cassert>
 #include <cstdint>
 #include <optional>
@@ -38,7 +25,7 @@ struct InsertionDecision { bool bypass; uint32_t rank; };
 uint32_t graduated_position(uint32_t N, uint16_t num_doa)
 {
     const uint32_t denom = 1u << (num_doa + 1);
-    return (N + denom - 1) / denom; // ceiling
+    return (N + denom - 1) / denom;
 }
 
 InsertionDecision decide_insertion(const PCState& st, uint32_t N)
@@ -85,9 +72,6 @@ struct Stats {
 };
 std::unordered_map<CACHE*, Stats> stats;
 
-// Decision computed once in find_victim; update_replacement_state consumes
-// it instead of recomputing. Empty means a free-slot fill (find_victim
-// never ran), which computes fresh.
 std::unordered_map<CACHE*, std::optional<InsertionDecision>> pending_decision;
 
 bool applies_to(const CACHE& c) { return c.NAME == "LLC"; }
@@ -117,6 +101,16 @@ uint32_t CACHE::find_victim(uint32_t triggering_cpu, uint64_t instr_id, uint32_t
     auto& st = ::stats[this];
     const uint32_t* ranks = ::ranks_by_cache[this].data() + set * NUM_WAY;
     const uint32_t victim = ::find_lru_victim(ranks, NUM_WAY);
+
+    const ::PCState& incoming = ::state_for(this, ip);
+    const ::InsertionDecision d = ::decide_insertion(incoming, NUM_WAY);
+    st.fills_seen++;
+    if (d.bypass) {
+        st.ins_bypass++;
+        ::pending_decision[this] = std::nullopt;
+        return NUM_WAY;
+    }
+
     const BLOCK& outgoing = current_set[victim];
     if (outgoing.valid) {
         st.evictions_seen++;
@@ -132,14 +126,6 @@ uint32_t CACHE::find_victim(uint32_t triggering_cpu, uint64_t instr_id, uint32_t
         }
     }
 
-    const ::PCState& incoming = ::state_for(this, ip);
-    const ::InsertionDecision d = ::decide_insertion(incoming, NUM_WAY);
-    st.fills_seen++;
-    if (d.bypass) {
-        st.ins_bypass++;
-        ::pending_decision[this] = std::nullopt;
-        return NUM_WAY;
-    }
     if (incoming.is_safe) st.ins_mru_safe++;
     else if (incoming.num_doa == 0) st.ins_middle++;
     else st.ins_graduated++;
@@ -172,17 +158,15 @@ void CACHE::update_replacement_state(uint32_t triggering_cpu, uint32_t set, uint
         d = *pending;
         pending = std::nullopt;
     } else {
-        // Free-slot fill: find_victim never ran, compute fresh.
         const ::PCState& incoming = ::state_for(this, ip);
         d = ::decide_insertion(incoming, NUM_WAY);
         st.fills_seen++;
-        if (incoming.is_safe) st.ins_mru_safe++;
+        if (d.bypass) st.ins_bypass++;
+        else if (incoming.is_safe) st.ins_mru_safe++;
         else if (incoming.num_doa == 0) st.ins_middle++;
         else st.ins_graduated++;
     }
-    // A free-slot d.bypass can't actually skip (nothing to evict); its
-    // rank=0 fallback still lands it at the LRU end.
-    ::shift_rank(ranks, NUM_WAY, way, /*old_rank=*/0, d.rank);
+    ::shift_rank(ranks, NUM_WAY, way, 0, d.rank);
 }
 
 void CACHE::replacement_final_stats()
