@@ -21,3 +21,26 @@ inc/git_version.h
 # black-box test scratch (cluster download staging + logs)
 test/blackbox/test_outputs_cluster/
 test/blackbox/logs_cluster/
+
+# Execution data - raw simulator output, never tracked
+results/
+
+# LaTeX build output - scoped to paper/ and report/ so it cannot swallow
+# test/reference/outputs/*.out, which are tracked reference files.
+paper/build/
+report/build/
+paper/**/*.aux
+paper/**/*.log
+paper/**/*.out
+paper/**/*.toc
+paper/**/*.bbl
+paper/**/*.blg
+paper/**/*.fls
+paper/**/*.fdb_latexmk
+paper/**/*.synctex.gz
+report/**/*.aux
+report/**/*.log
+report/**/*.out
+report/**/*.toc
+report/**/*.bbl
+report/**/*.blg
